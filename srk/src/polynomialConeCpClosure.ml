@@ -237,6 +237,5 @@ let regular_cutting_plane_closure polynomial_cone lattice_polys =
   L.logf "regular_cutting_plane_closure: concluded, closure is:@;  @[%a@]@;"
     (PolynomialCone.pp pp_dim)
     final_cone;
-  let ideal = Rewrite.generators (PolynomialCone.get_ideal final_cone)
-              |> Ideal.make in
-  (final_cone, PolynomialLattice.make ideal final_lattice.basis)
+  (final_cone, PolynomialLattice.make_lattice (PolynomialCone.get_ideal final_cone)
+                 final_lattice.basis)

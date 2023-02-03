@@ -227,11 +227,13 @@ let project_lower n t =
     let generators = List.filter keep_vector generators in
     let dimensions = SrkUtil.Int.Set.filter (fun dim -> dim <= n) dimensions in
     Lattice {
-      generators
-    ; denominator
-    ; dimensions
-    ; inverse = ref None
-    }
+        generators
+      ; denominator
+      ; dimensions
+      ; inverse = ref None
+      }
+
+let bottom = ZeroLattice
 
 let sum t1 t2 =
   match t1, t2 with

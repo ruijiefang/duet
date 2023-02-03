@@ -27,6 +27,9 @@ val project : (Linear.QQVector.dim -> bool) -> t -> t
 *)
 val project_lower : int -> t -> t
 
+(** The zero lattice *)
+val bottom : t
+
 val sum : t -> t -> t
 
 val intersect : t -> t -> t

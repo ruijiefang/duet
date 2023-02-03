@@ -132,6 +132,7 @@ let of_implicant ?(admit=false) cs conjuncts =
       in
       let p = match p with `Eq -> `Zero | `Leq -> `Nonneg | `Lt -> `Pos in
       P.singleton (p, t)
+    | `IsInt _ -> top
     | `Literal (_, _) -> top
     | `ArrEq _ -> top
   in

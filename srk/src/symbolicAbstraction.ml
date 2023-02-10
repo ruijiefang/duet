@@ -5,16 +5,23 @@ module V = Linear.QQVector
 
 module IntSet = SrkUtil.Int.Set
 
+include Log.Make(struct let name = "symbolicAbstraction" end)
+
+let () = my_verbosity_level := `debug
+
 module Util = struct
 
   let codimensions dimensions vector =
     let dims =
       BatEnum.fold
-        (fun s (_, dim) -> IntSet.add dim s)
+        (fun s (_, dim) ->
+          if dim <> Linear.const_dim then
+            IntSet.add dim s
+          else s)
         IntSet.empty
         (V.enum vector)
     in
-    IntSet.diff dimensions dims
+    IntSet.diff dims dimensions
 
   let map_of m =
     BatEnum.fold
@@ -64,6 +71,13 @@ module Util = struct
          ([], [])
          atoms
 
+  let pp_pconstraint fmt (kind, v) =
+    Format.fprintf fmt "%a %s"
+      V.pp v
+      (match kind with | `Zero -> " = 0"
+                       | `Nonneg -> " >= 0"
+                       | `Pos -> " > 0")
+
 end
 
 module IntegerMbp : sig
@@ -84,7 +98,7 @@ end = struct
   let normalize a dim =
     let c = V.coeff dim a in
     if QQ.equal c QQ.zero then a
-    else V.scalar_mul (QQ.inverse c) a
+    else V.scalar_mul (QQ.inverse (QQ.abs c)) a
 
   let get_bound dim v =
     let drop_dim v = V.pivot dim v |> snd in
@@ -118,6 +132,25 @@ end = struct
     ; others : (P.constraint_kind * V.t) BatEnum.t
     ; independent : (P.constraint_kind * V.t) BatEnum.t
     }
+
+  let pp_bounding_row fmt = function
+    | Some (q, kind, v) ->
+       Format.fprintf fmt "(%a, %a %s)"
+         QQ.pp q V.pp v
+         (match kind with | `Zero -> " = 0"
+                          | `Nonneg -> " >= 0"
+                          | `Pos -> " > 0")
+    | None -> Format.fprintf fmt ""
+
+  let pp_classified fmt classified =
+    Format.fprintf fmt
+      "@[<v 0>{ lub_row : %a ;@. glb_row : %a ;@. others : %a ;@. independent : %a }@]"
+      pp_bounding_row classified.lub_row
+      pp_bounding_row classified.glb_row
+      (Format.pp_print_list ~pp_sep:Format.pp_print_cut Util.pp_pconstraint)
+      (BatList.of_enum classified.others)
+      (Format.pp_print_list ~pp_sep:Format.pp_print_cut Util.pp_pconstraint)
+      (BatList.of_enum classified.independent)
 
   let lub_row classified = classified.lub_row
   let glb_row classified = classified.glb_row
@@ -196,18 +229,36 @@ end = struct
        `Finite (lub_term, glb_term)
 
   let local_project_recession m ~eliminate:dims p =
+    logf "local_projection_recession: dims to eliminate: %a@."
+      IntSet.pp dims;
     IntSet.fold
       (fun dim p ->
         let cone = recession_cone_at m p in
         let classified = classify_constraints m dim cone in
+        logf "local_project_recession: classified: @.@[%a@]@."
+          pp_classified
+          classified;
         match get_solution dim classified with
         | `Infinite -> P.of_constraints classified.independent
         | `Finite (lub_term, _) ->
-           classified.others
-           /@ (fun (kind, a) ->
-            (kind, substitute_term lub_term dim a))
-           |> BatEnum.append classified.independent
-           |> P.of_constraints)
+           logf "solution: %a@." V.pp lub_term;
+           let solution = lub_term in
+           let () = match classified.glb_row with
+             | None -> ()
+             | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
+           in
+           let constraints =
+             classified.others
+             /@ (fun (kind, a) ->
+               (kind, substitute_term solution dim a))
+             |> BatEnum.append classified.independent
+           in
+           let l = BatList.of_enum constraints in
+           logf "new constraints: %a@."
+             (Format.pp_print_list ~pp_sep:Format.pp_print_space
+                Util.pp_pconstraint)
+             l;
+           P.of_constraints (BatList.enum l))
       dims p
 
   let local_project_cooper m ~eliminate:dims (p, l) =
@@ -220,6 +271,10 @@ end = struct
         | `Finite (lub_term, _) ->
            let difference = QQ.sub (Linear.evaluate_affine m lub_term) (m dim) in
            let solution = V.add_term difference Linear.const_dim lub_term in
+           let () = match classified.glb_row with
+             | None -> ()
+             | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
+           in
            let new_p =
              classified.others
              /@ (fun (kind, a) ->
@@ -250,6 +305,8 @@ module type AbstractDomain = sig
   val concretize : t -> context Syntax.formula
   val abstract : context Syntax.formula -> context Interpretation.interpretation -> t
 
+  val pp : Format.formatter -> t -> unit
+
 end
 
 module type Context = sig type t val context : t Syntax.context end
@@ -268,8 +325,9 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
     List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
       IntSet.empty symbols
 
-  let num_dims = List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
-                   Linear.const_dim symbols + 1
+  let num_dims =
+    List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
+      Linear.const_dim symbols + 1
 
   let bottom = ( P.dd_of num_dims P.bottom
                , IntLattice.hermitize [V.add_term QQ.one Linear.const_dim V.zero]
@@ -315,6 +373,11 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
         ~eliminate:integer_codims (p, l) in
     (P.dd_of num_dims projected_p, projected_l)
 
+  let pp fmt (p, l) =
+    Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
+      (DD.pp (fun fmt d -> Format.fprintf fmt "%d" d)) p
+      IntLattice.pp l
+
 end
 
 module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
@@ -330,8 +393,9 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
     List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
       IntSet.empty symbols
 
-  let num_dims = List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
-                   Linear.const_dim symbols + 1
+  let num_dims =
+    List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
+      Linear.const_dim symbols + 1
 
   let bottom = P.dd_of num_dims P.bottom
 
@@ -352,6 +416,7 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
                    IntSet.empty inequalities in
     let (integer_codims, real_codims) =
       IntSet.partition (fun dim ->
+          logf "abstract: dim: %d@." dim;
           Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt)
         codims in
     let () = if not (IntSet.is_empty real_codims) then
@@ -364,6 +429,10 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
     let projected_p =
       IntegerMbp.local_project_recession m ~eliminate:integer_codims p in
     P.dd_of num_dims projected_p
+
+  let pp fmt p =
+    Format.fprintf fmt "{ polyhedron : %a }"
+      (DD.pp (fun fmt d -> Format.fprintf fmt "%d" d)) p
 
 end
 
@@ -386,15 +455,21 @@ end = struct
 
   let abstract formula =
     let state = init formula in
-    let rec go state =
-      match Smt.Solver.get_model state.solver with
-      | `Sat interp ->
-         let rho = A.abstract formula interp in
-         Smt.Solver.add state.solver [A.concretize rho];
-         go { state with value = A.join state.value rho }
-      | `Unsat -> state
-      | `Unknown -> failwith "Can't get model"
-    in (go state).value
+    let rec go bound n state =
+      if n >= bound then state
+      else
+        begin
+          logf "Iteration %d@." n;
+          match Smt.Solver.get_model state.solver with
+          | `Sat interp ->
+             let rho = A.abstract formula interp in
+             logf "rho: %a" A.pp rho;
+             Smt.Solver.add state.solver [A.concretize rho];
+             go bound (n + 1) { state with value = A.join state.value rho }
+          | `Unsat -> state
+          | `Unknown -> failwith "Can't get model"
+        end
+    in (go 3 1 state).value
 
 end
 

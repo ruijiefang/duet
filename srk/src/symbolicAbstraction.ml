@@ -274,16 +274,18 @@ end = struct
              |> (fun q -> QQ.numerator q, QQ.denominator q)
            in
            let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
-           let multiple = Z.lcm (V.common_denominator glb_term) coefficient in
-           let modulo = ZZ.mul multiple divisor in
-           let residue = QQ.modulo (QQ.mul (QQ.of_zz multiple) difference)
-                           (QQ.of_zz modulo)
-           in
-           let solution =
-             V.scalar_mul (QQ.of_zz multiple) glb_term
-             |> V.add_term residue Linear.const_dim
-           in
-           let () = match classified.glb_row with
+           let multiple = ZZ.lcm (V.common_denominator glb_term) coefficient in
+           assert (ZZ.lt ZZ.zero multiple);
+           let divisor2 = ZZ.mul multiple divisor in
+           let difference = match QQ.to_zz difference with
+             | Some difference -> difference
+             | None -> failwith "Impossible" in
+           let residue = ZZ.modulo (ZZ.mul multiple difference) divisor2 in
+           let normalized_residue =
+             QQ.mul (QQ.inverse (QQ.of_zz multiple))
+               (QQ.of_zz residue) in
+           let solution = V.add_term normalized_residue Linear.const_dim glb_term in
+           let () = match classified.lub_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
            in

@@ -11,17 +11,14 @@ let () = my_verbosity_level := `debug
 
 module Util = struct
 
-  let codimensions dimensions vector =
-    let dims =
-      BatEnum.fold
-        (fun s (_, dim) ->
-          if dim <> Linear.const_dim then
-            IntSet.add dim s
-          else s)
-        IntSet.empty
-        (V.enum vector)
-    in
-    IntSet.diff dims dimensions
+  let non_constant_dimensions vector =
+    BatEnum.fold
+      (fun s (_, dim) ->
+        if dim <> Linear.const_dim then
+          IntSet.add dim s
+        else s)
+      IntSet.empty
+      (V.enum vector)
 
   let map_of m =
     BatEnum.fold
@@ -55,8 +52,8 @@ module Util = struct
     | `Literal _
       | `ArrEq _ -> failwith "Cannot handle atoms"
 
-  let codimensions dimensions vector_of s cnstrnt =
-    IntSet.union s (codimensions dimensions (vector_of cnstrnt))
+  let non_constant_dimensions vector_of s cnstrnt =
+    IntSet.union s (non_constant_dimensions (vector_of cnstrnt))
 
   let constraints_of_implicant context = function
     | None -> failwith "No implicant found"
@@ -224,9 +221,9 @@ end = struct
     | None, _
       | _, None ->
        `Infinite
-    | Some (_, _, lub_row), Some (_, _, glb_row) ->
-       let lub_term, glb_term = get_bound dim lub_row, get_bound dim glb_row in
-       `Finite (lub_term, glb_term)
+    | Some (_, _, _), Some (_, _, glb_row) ->
+       let glb_term = get_bound dim glb_row in
+       `Finite glb_term
 
   let local_project_recession m ~eliminate:dims p =
     logf "local_projection_recession: dims to eliminate: %a@."
@@ -240,10 +237,10 @@ end = struct
           classified;
         match get_solution dim classified with
         | `Infinite -> P.of_constraints classified.independent
-        | `Finite (lub_term, _) ->
-           logf "solution: %a@." V.pp lub_term;
-           let solution = lub_term in
-           let () = match classified.glb_row with
+        | `Finite glb_term ->
+           logf "solution: %a@." V.pp glb_term;
+           let solution = glb_term in
+           let () = match classified.lub_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
            in
@@ -268,9 +265,24 @@ end = struct
         | `Infinite ->
            ( P.of_constraints classified.independent
            , IntLattice.project (fun dim -> not (IntSet.mem dim dims)) l )
-        | `Finite (lub_term, _) ->
-           let difference = QQ.sub (Linear.evaluate_affine m lub_term) (m dim) in
-           let solution = V.add_term difference Linear.const_dim lub_term in
+        | `Finite glb_term ->
+           let (coefficient, divisor) =
+             IntLattice.project (fun x -> x = dim) l
+             |> IntLattice.basis
+             |> (fun l -> assert (List.length l = 1); List.hd l)
+             |> V.coeff dim
+             |> (fun q -> QQ.numerator q, QQ.denominator q)
+           in
+           let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
+           let multiple = Z.lcm (V.common_denominator glb_term) coefficient in
+           let modulo = ZZ.mul multiple divisor in
+           let residue = QQ.modulo (QQ.mul (QQ.of_zz multiple) difference)
+                           (QQ.of_zz modulo)
+           in
+           let solution =
+             V.scalar_mul (QQ.of_zz multiple) glb_term
+             |> V.add_term residue Linear.const_dim
+           in
            let () = match classified.glb_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
@@ -330,7 +342,7 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
       Linear.const_dim symbols + 1
 
   let bottom = ( P.dd_of num_dims P.bottom
-               , IntLattice.hermitize [V.add_term QQ.one Linear.const_dim V.zero]
+               , IntLattice.hermitize [V.of_term QQ.one Linear.const_dim]
                )
 
   let join (p1, l1) (p2, l2) = (DD.join p1 p2, IntLattice.intersect l1 l2)
@@ -349,12 +361,13 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
         (Interpretation.select_implicant interp formula)
     in
     let p = P.of_constraints (BatList.enum inequalities) in
-    let codims =
-      let p_codims = BatList.fold_left (Util.codimensions dimensions snd)
+    let (all_dims, codims) =
+      let p_dims = BatList.fold_left (Util.non_constant_dimensions snd)
                        IntSet.empty inequalities in
-      let l_codims = BatList.fold_left (Util.codimensions dimensions (fun x -> x))
-                       IntSet.empty lattice_constraints in
-      IntSet.union p_codims l_codims
+      let l_dims = BatList.fold_left (Util.non_constant_dimensions (fun x -> x))
+                     IntSet.empty lattice_constraints in
+      let all_nonconstant_dims = IntSet.union p_dims l_dims in
+      (all_nonconstant_dims, IntSet.diff all_nonconstant_dims dimensions)
     in
     let (integer_codims, real_codims) =
       IntSet.partition (fun dim ->
@@ -367,7 +380,15 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
                failwith "Cannot do local projection with real variable yet"
              else () in
     let m = Util.map_of interp in
-    let l = IntLattice.hermitize lattice_constraints in
+    let l =
+      let symbol_dimensions =
+        IntSet.fold
+          (fun dim l ->
+            if Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt
+            then V.of_term QQ.one dim :: l
+            else l)
+          all_dims [] in
+      IntLattice.hermitize (lattice_constraints @ symbol_dimensions) in
     let (projected_p, projected_l) =
       IntegerMbp.local_project_cooper m
         ~eliminate:integer_codims (p, l) in
@@ -412,8 +433,10 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
     let p = P.of_constraints (BatList.enum inequalities) in
-    let codims = BatList.fold_left (Util.codimensions dimensions snd)
-                   IntSet.empty inequalities in
+    let codims = BatList.fold_left (Util.non_constant_dimensions snd)
+                   IntSet.empty inequalities
+                 |> (fun s -> IntSet.diff s dimensions)
+    in
     let (integer_codims, real_codims) =
       IntSet.partition (fun dim ->
           logf "abstract: dim: %d@." dim;

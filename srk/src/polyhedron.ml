@@ -613,7 +613,7 @@ module NormalizCone = struct
             |> BatList.enum
            )
 
-  let elementary_gc polyhedron ambient_dim =
+  let elementary_gc ambient_dim polyhedron =
     logf ~level:`trace "elementary_gc: Computing minimal faces...@;";
     let faces = DD.minimal_faces polyhedron in
     logf ~level:`trace "elementary_gc: Computed minimal faces: found %d@;"
@@ -666,27 +666,31 @@ module NormalizCone = struct
       in
       if !changed then `Changed polyhedron else `Fixed polyhedron
 
+  let gomory_chvatal_dd ambient_dim polyhedron =
+    let rec iter polyhedron i =
+      let elem_closure =  elementary_gc ambient_dim polyhedron in
+      match elem_closure with
+      | `Fixed poly ->
+         logf ~level:`info "@[Polyhedron: Gomory-Chvatal finished in round %d@]@;" i;
+         poly
+      | `Changed poly ->
+         logf ~level:`trace "elementary_gc: entering round %d@;" (i + 1);
+         iter poly (i + 1)
+    in
+    iter polyhedron 0
+
   let gomory_chvatal polyhedron =
     let dim = 1 + max_constrained_dim polyhedron in
     let man = Polka.manager_alloc_loose () in
-    let rec iter polyhedron i =
-      let elem_closure =  elementary_gc polyhedron dim in
-      match elem_closure with
-      | `Fixed poly ->
-        logf ~level:`info "@[Polyhedron: Gomory-Chvatal finished in round %d@]@;" i;
-        poly
-      | `Changed poly ->
-        logf ~level:`trace "elementary_gc: entering round %d@;" (i + 1);
-        iter poly (i + 1)
-    in
-    iter (dd_of ~man dim polyhedron) 0
-    |> of_dd
+    of_dd (gomory_chvatal_dd dim (dd_of ~man dim polyhedron))
 
 end
 
 let integer_hull = function
   | `GomoryChvatal -> NormalizCone.gomory_chvatal
   | `Normaliz -> NormalizCone.integer_hull
+
+let integer_hull_dd = NormalizCone.gomory_chvatal_dd
 
 module IntDS = DisjointSet.Make(struct
     include Int

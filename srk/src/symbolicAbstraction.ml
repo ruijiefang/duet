@@ -354,14 +354,22 @@ end = struct
              |> V.coeff dim
              |> (fun q -> QQ.numerator q, QQ.denominator q)
            in
-           let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
            let multiple = ZZ.lcm (V.common_denominator glb_term) coefficient in
            assert (ZZ.lt ZZ.zero multiple);
            let divisor2 = ZZ.mul multiple divisor in
-           let difference = match QQ.to_zz difference with
+           let scaled_difference =
+             let diff = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
+             let scaled = QQ.mul (QQ.of_zz multiple) diff in
+             match QQ.to_zz scaled with
              | Some difference -> difference
-             | None -> failwith "Impossible" in
-           let residue = ZZ.modulo (ZZ.mul multiple difference) divisor2 in
+             | None ->
+                logf "Cooper projection: height of point = %a, height of glb = %a, glb = %a"
+                  QQ.pp (m dim)
+                  QQ.pp (Linear.evaluate_affine m glb_term)
+                  V.pp glb_term;
+                failwith "Impossible"
+           in
+           let residue = ZZ.modulo scaled_difference divisor2 in
            let normalized_residue =
              QQ.mul (QQ.inverse (QQ.of_zz multiple))
                (QQ.of_zz residue) in

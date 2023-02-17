@@ -11,6 +11,23 @@ let () = my_verbosity_level := `debug
 
 module Util = struct
 
+  let dims_of_symbols symbols =
+    List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
+      IntSet.empty symbols
+
+  let max_dim_in_symbols symbols =
+    List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
+      (-1) symbols + 1
+
+  let max_dim_in_constraints proj cnstrnts =
+    BatEnum.fold
+      (fun max_dim cnstrnt ->
+        BatEnum.fold (fun m (_, dim) -> Int.max m dim)
+          max_dim
+          (V.enum (proj cnstrnt)))
+      (-1)
+      (BatList.enum cnstrnts)
+
   let non_constant_dimensions vector =
     BatEnum.fold
       (fun s (_, dim) ->
@@ -75,6 +92,65 @@ module Util = struct
                        | `Nonneg -> " >= 0"
                        | `Pos -> " > 0")
 
+  let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
+
+end
+
+module LatticePolytope : sig
+
+  val lattice_polytope_of : ambient:int -> DD.closed DD.t -> IntLattice.t -> DD.closed DD.t
+
+end = struct
+
+  module T = Linear.MakeLinearMap(QQ)(Int)(V)(V)
+
+  let force_transform (forward, inverse, num_dimensions) p =
+    let q = BatEnum.empty () in
+    let (forward, inverse, num_dimensions) =
+      BatEnum.fold
+        (fun (forward, inverse, num_dimensions) (kind, v) ->
+          match T.apply forward v with
+          | None ->
+             let image = V.of_term QQ.one num_dimensions in
+             BatEnum.push q (kind, image);
+             ( T.add_exn v image forward
+             , T.add_exn image v inverse
+             , num_dimensions + 1)
+          | Some image ->
+             BatEnum.push q (kind, image);
+             (forward, inverse, num_dimensions)
+        )
+        (forward, inverse, num_dimensions)
+        (DD.enum_generators p)
+    in
+    (forward, inverse, num_dimensions, DD.of_generators num_dimensions q)
+
+  let transform map ambient_dim p =
+    let q = BatEnum.empty () in
+    BatEnum.iter
+      (fun (kind, v) ->
+        match T.apply map v with
+        | None -> failwith "transformation is malformed"
+        | Some image -> BatEnum.push q (kind, image))
+      (DD.enum_generators p);
+    DD.of_generators ambient_dim q
+
+  let lattice_polytope_of ~ambient p l =
+    let basis = IntLattice.basis l in
+    let (forward_l, inverse_l, num_dimensions_l) =
+      List.fold_left (fun (forward, inverse, index) v ->
+          let f = T.add_exn v (V.of_term QQ.one index) forward in
+          let b = T.add_exn (V.of_term QQ.one index) v inverse in
+          (f, b, index + 1))
+        (T.empty, T.empty, 0)
+        basis
+    in
+    let (_forward, inverse, num_dimensions, q) =
+      force_transform (forward_l, inverse_l, num_dimensions_l) p
+    in
+    Polyhedron.integer_hull_dd num_dimensions q
+    |> transform inverse ambient
+
 end
 
 module IntegerMbp : sig
@@ -83,8 +159,8 @@ module IntegerMbp : sig
     (int -> QQ.t) -> eliminate:IntSet.t -> Polyhedron.t -> Polyhedron.t
 
   val local_project_cooper :
-    (int -> QQ.t) -> eliminate:IntSet.t ->
-    Polyhedron.t * IntLattice.t -> Polyhedron.t * IntLattice.t
+    (int -> QQ.t) -> eliminate:IntSet.t -> ambient:int ->
+    DD.closed DD.t * IntLattice.t -> DD.closed DD.t * IntLattice.t
 
 end = struct
 
@@ -140,14 +216,16 @@ end = struct
     | None -> Format.fprintf fmt ""
 
   let pp_classified fmt classified =
+    let others = BatEnum.clone classified.others in
+    let independent = BatEnum.clone classified.independent in
     Format.fprintf fmt
       "@[<v 0>{ lub_row : %a ;@. glb_row : %a ;@. others : %a ;@. independent : %a }@]"
       pp_bounding_row classified.lub_row
       pp_bounding_row classified.glb_row
       (Format.pp_print_list ~pp_sep:Format.pp_print_cut Util.pp_pconstraint)
-      (BatList.of_enum classified.others)
+      (BatList.of_enum others)
       (Format.pp_print_list ~pp_sep:Format.pp_print_cut Util.pp_pconstraint)
-      (BatList.of_enum classified.independent)
+      (BatList.of_enum independent)
 
   let lub_row classified = classified.lub_row
   let glb_row classified = classified.glb_row
@@ -173,7 +251,7 @@ end = struct
   let update_lub_if = update_row_if lub_row update_lub
   let update_glb_if = update_row_if glb_row update_glb
 
-  let classify_constraints m dim p =
+  let classify_constraints m dim constraints =
     BatEnum.fold (fun classified (kind, v) ->
         if QQ.equal (V.coeff dim v) QQ.zero then
           begin
@@ -201,7 +279,7 @@ end = struct
       ; others = BatEnum.empty ()
       ; independent = BatEnum.empty ()
       }
-      (P.enum_constraints p)
+      constraints
 
   let recession_cone_at m p =
     P.enum_constraints p
@@ -231,14 +309,15 @@ end = struct
     IntSet.fold
       (fun dim p ->
         let cone = recession_cone_at m p in
-        let classified = classify_constraints m dim cone in
+        logf "recession cone is: %a@." (P.pp Util.pp_dim) cone;
+        let classified = classify_constraints m dim (P.enum_constraints cone) in
         logf "local_project_recession: classified: @.@[%a@]@."
           pp_classified
           classified;
         match get_solution dim classified with
         | `Infinite -> P.of_constraints classified.independent
         | `Finite glb_term ->
-           logf "solution: %a@." V.pp glb_term;
+           logf "substituting solution: %a@." V.pp glb_term;
            let solution = glb_term in
            let () = match classified.lub_row with
              | None -> ()
@@ -258,12 +337,14 @@ end = struct
            P.of_constraints (BatList.enum l))
       dims p
 
-  let local_project_cooper m ~eliminate:dims (p, l) =
+
+  let local_project_cooper m ~eliminate:dims ~ambient:ambient_dim (p, l) =
     IntSet.fold (fun dim (p, l) ->
-        let classified = classify_constraints m dim p in
+        let classified = classify_constraints m dim
+                           (DD.enum_constraints p) in
         match get_solution dim classified with
         | `Infinite ->
-           ( P.of_constraints classified.independent
+           ( DD.of_constraints_closed ambient_dim classified.independent
            , IntLattice.project (fun dim -> not (IntSet.mem dim dims)) l )
         | `Finite glb_term ->
            let (coefficient, divisor) =
@@ -294,13 +375,15 @@ end = struct
              /@ (fun (kind, a) ->
                (kind, substitute_term solution dim a))
              |> BatEnum.append classified.independent
-             |> P.of_constraints in
+             |> DD.of_constraints_closed ambient_dim in
            let new_l =
              List.map (substitute_term solution dim)
                (solution :: IntLattice.basis l)
              |> IntLattice.hermitize
            in
-           (new_p, new_l)
+           let hull = LatticePolytope.lattice_polytope_of ~ambient:ambient_dim
+                        new_p new_l in
+           (hull, new_l)
       ) dims (p, l)
 
 end
@@ -335,13 +418,10 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
   let context = C.context
 
   let symbols = S.symbols
-  let dimensions =
-    List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
-      IntSet.empty symbols
+  let dimensions = Util.dims_of_symbols symbols
 
-  let num_dims =
-    List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
-      Linear.const_dim symbols + 1
+  (* Symbols are 0-indexed *)
+  let num_dims = Util.max_dim_in_symbols symbols + 1
 
   let bottom = ( P.dd_of num_dims P.bottom
                , IntLattice.hermitize [V.of_term QQ.one Linear.const_dim]
@@ -357,12 +437,18 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
                        (IntLattice.basis l) in
     Syntax.mk_and context (p_formulas @ l_formulas)
 
+ 
   let abstract formula interp =
     let (inequalities, lattice_constraints) =
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula)
     in
-    let p = P.of_constraints (BatList.enum inequalities) in
+    let max_p_dim = Util.max_dim_in_constraints (fun (_kind, v) -> v)
+                      inequalities in
+    let max_l_dim = Util.max_dim_in_constraints (fun x -> x)
+                      lattice_constraints in
+    let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in
+    let p = DD.of_constraints_closed ambient_dim (BatList.enum inequalities) in
     let (all_dims, codims) =
       let p_dims = BatList.fold_left (Util.non_constant_dimensions snd)
                        IntSet.empty inequalities in
@@ -393,8 +479,8 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
       IntLattice.hermitize (lattice_constraints @ symbol_dimensions) in
     let (projected_p, projected_l) =
       IntegerMbp.local_project_cooper m
-        ~eliminate:integer_codims (p, l) in
-    (P.dd_of num_dims projected_p, projected_l)
+        ~eliminate:integer_codims ~ambient:ambient_dim (p, l) in
+    (projected_p, projected_l)
 
   let pp fmt (p, l) =
     Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
@@ -412,13 +498,9 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
   let context = C.context
 
   let symbols = S.symbols
-  let dimensions =
-    List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
-      IntSet.empty symbols
+  let dimensions = Util.dims_of_symbols symbols
 
-  let num_dims =
-    List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
-      Linear.const_dim symbols + 1
+  let num_dims = Util.max_dim_in_symbols symbols
 
   let bottom = P.dd_of num_dims P.bottom
 
@@ -481,20 +563,29 @@ end = struct
   let abstract formula =
     let state = init formula in
     let rec go bound n state =
-      if n >= bound then state
-      else
-        begin
-          logf "Iteration %d@." n;
-          match Smt.Solver.get_model state.solver with
-          | `Sat interp ->
-             let rho = A.abstract formula interp in
-             logf "rho: %a" A.pp rho;
-             Smt.Solver.add state.solver [A.concretize rho];
-             go bound (n + 1) { state with value = A.join state.value rho }
-          | `Unsat -> state
-          | `Unknown -> failwith "Can't get model"
-        end
-    in (go 3 1 state).value
+      logf "Iteration %d@." n;
+      match Smt.Solver.get_model state.solver with
+      | `Sat interp ->
+         let rho = A.abstract formula interp in
+         let joined = A.join state.value rho in
+         logf "abstract: joining rho %a with %a to get %a@."
+           A.pp rho
+           A.pp state.value
+           A.pp joined;
+         let formula = A.concretize joined in
+         logf "abstract: new constraint to negate: %a@." (Syntax.pp_smtlib2 A.context) formula;
+         Smt.Solver.add state.solver
+           [Syntax.mk_not A.context formula];
+         let next = { state with value = joined } in
+         begin match bound with
+         | Some b -> if n <= b then go (Some b) (n + 1) next
+                     else state
+         | None -> go bound (n + 1) next
+         end
+      | `Unsat ->
+         state
+      | `Unknown -> failwith "Can't get model"
+    in (go None 1 state).value
 
 end
 
@@ -503,5 +594,13 @@ let polyhedral_abs_by_mbp (type a) (context : a Syntax.context)
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
   let module Abstraction = MakePolyhedronDomain(C)(S) in
+  let module Compute = Abstract(Abstraction) in
+  Compute.abstract formula
+
+let polyhedral_lattice_abs_by_mbp (type a) (context : a Syntax.context)
+      (formula : a Syntax.formula) symbols =
+  let module C = struct type t = a let context = context end in
+  let module S = struct let symbols = symbols end in
+  let module Abstraction = MakePolyhedronLatticeDomain(C)(S) in
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula

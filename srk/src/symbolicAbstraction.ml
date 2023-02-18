@@ -356,33 +356,16 @@ end = struct
            ( DD.of_constraints_closed (DD.dimension p - 1) classified.independent
            , IntLattice.project (fun dim -> not (IntSet.mem dim dims)) l )
         | `Finite glb_term ->
-           let (coefficient, divisor) =
+           let (_coefficient, divisor) =
              IntLattice.project (fun x -> x = dim) l
              |> IntLattice.basis
              |> (fun l -> assert (List.length l = 1); List.hd l)
              |> V.coeff dim
              |> (fun q -> QQ.numerator q, QQ.denominator q)
            in
-           let multiple = ZZ.lcm (V.common_denominator glb_term) coefficient in
-           assert (ZZ.lt ZZ.zero multiple);
-           let divisor2 = ZZ.mul multiple divisor in
-           let scaled_difference =
-             let diff = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
-             let scaled = QQ.mul (QQ.of_zz multiple) diff in
-             match QQ.to_zz scaled with
-             | Some difference -> difference
-             | None ->
-                logf "Cooper projection: height of point = %a, height of glb = %a, glb = %a"
-                  QQ.pp (m dim)
-                  QQ.pp (Linear.evaluate_affine m glb_term)
-                  V.pp glb_term;
-                failwith "Impossible"
-           in
-           let residue = ZZ.modulo scaled_difference divisor2 in
-           let normalized_residue =
-             QQ.mul (QQ.inverse (QQ.of_zz multiple))
-               (QQ.of_zz residue) in
-           let solution = V.add_term normalized_residue Linear.const_dim glb_term in
+           let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
+           let residue = QQ.modulo difference (QQ.of_zz divisor) in
+           let solution = V.add_term residue Linear.const_dim glb_term in
            let () = match classified.lub_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
@@ -394,8 +377,7 @@ end = struct
              |> BatEnum.append classified.independent
              |> DD.of_constraints_closed (DD.dimension p - 1) in
            let new_l =
-             List.map (substitute_term solution dim)
-               (solution :: IntLattice.basis l)
+             List.map (substitute_term solution dim) (IntLattice.basis l)
              |> IntLattice.hermitize
            in
            let hull = LatticePolyhedron.lattice_polyhedron_of new_p new_l in

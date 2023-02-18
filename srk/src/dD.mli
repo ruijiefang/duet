@@ -45,6 +45,9 @@ val enum_constraints : 'a t -> (constraint_kind * V.t) BatEnum.t
 (** Enumerate the constraints of a closed polyhedron. *)
 val enum_constraints_closed : closed t -> ([`Zero | `Nonneg] * V.t) BatEnum.t
 
+(** The ambient dimension of the polyhedron *)
+val dimension : 'a t -> int
+
 (** Convex hull of the union of two polyhedra. *)
 val join : 'a t -> 'a t -> 'a t
 

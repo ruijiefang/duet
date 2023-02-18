@@ -86,6 +86,9 @@ let enum_constraints_closed polyhedron =
       | (`Zero, v) -> `Zero, v
       | (`Nonneg, v) -> `Nonneg,v)
 
+let dimension polyhedron =
+  (Abstract0.dimension (Abstract0.manager polyhedron) polyhedron).reald
+
 let pp pp_dim formatter polyhedron =
   let pp_elt formatter = function
     | (`Zero, t) -> Format.fprintf formatter "%a = 0" (V.pp_term pp_dim) t

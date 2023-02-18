@@ -92,13 +92,19 @@ module Util = struct
                        | `Nonneg -> " >= 0"
                        | `Pos -> " > 0")
 
+  let _pp_generator fmt (kind, v) =
+    match kind with
+    | `Vertex -> Format.fprintf fmt "vertex (%a)" V.pp v
+    | `Ray -> Format.fprintf fmt "ray (%a)" V.pp v
+    | `Line -> Format.fprintf fmt "line (%a)" V.pp v
+
   let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
 
 end
 
-module LatticePolytope : sig
+module LatticePolyhedron : sig
 
-  val lattice_polytope_of : ambient:int -> DD.closed DD.t -> IntLattice.t -> DD.closed DD.t
+  val lattice_polyhedron_of : DD.closed DD.t -> IntLattice.t -> DD.closed DD.t
 
 end = struct
 
@@ -125,17 +131,21 @@ end = struct
     in
     (forward, inverse, num_dimensions, DD.of_generators num_dimensions q)
 
-  let transform map ambient_dim p =
+  let transform map p =
     let q = BatEnum.empty () in
-    BatEnum.iter
-      (fun (kind, v) ->
-        match T.apply map v with
-        | None -> failwith "transformation is malformed"
-        | Some image -> BatEnum.push q (kind, image))
-      (DD.enum_generators p);
-    DD.of_generators ambient_dim q
+    let dimensions =
+      BatEnum.fold
+        (fun dimensions (kind, v) ->
+          match T.apply map v with
+          | None -> failwith "transformation is malformed"
+          | Some image ->
+             BatEnum.push q (kind, image);
+             Util.non_constant_dimensions (fun x -> x) dimensions image)
+        IntSet.empty
+        (DD.enum_generators p) in
+    DD.of_generators (IntSet.max_elt dimensions + 1) q
 
-  let lattice_polytope_of ~ambient p l =
+  let lattice_polyhedron_of p l =
     let basis = IntLattice.basis l in
     let (forward_l, inverse_l, num_dimensions_l) =
       List.fold_left (fun (forward, inverse, index) v ->
@@ -148,8 +158,8 @@ end = struct
     let (_forward, inverse, num_dimensions, q) =
       force_transform (forward_l, inverse_l, num_dimensions_l) p
     in
-    Polyhedron.integer_hull_dd num_dimensions q
-    |> transform inverse ambient
+    let hull = Polyhedron.integer_hull_dd num_dimensions q in
+    transform inverse hull
 
 end
 
@@ -159,7 +169,7 @@ module IntegerMbp : sig
     (int -> QQ.t) -> eliminate:IntSet.t -> Polyhedron.t -> Polyhedron.t
 
   val local_project_cooper :
-    (int -> QQ.t) -> eliminate:IntSet.t -> ambient:int ->
+    (int -> QQ.t) -> eliminate:IntSet.t ->
     DD.closed DD.t * IntLattice.t -> DD.closed DD.t * IntLattice.t
 
 end = struct
@@ -337,14 +347,13 @@ end = struct
            P.of_constraints (BatList.enum l))
       dims p
 
-
-  let local_project_cooper m ~eliminate:dims ~ambient:ambient_dim (p, l) =
+  let local_project_cooper m ~eliminate:dims (p, l) =
     IntSet.fold (fun dim (p, l) ->
         let classified = classify_constraints m dim
                            (DD.enum_constraints p) in
         match get_solution dim classified with
         | `Infinite ->
-           ( DD.of_constraints_closed ambient_dim classified.independent
+           ( DD.of_constraints_closed (DD.dimension p - 1) classified.independent
            , IntLattice.project (fun dim -> not (IntSet.mem dim dims)) l )
         | `Finite glb_term ->
            let (coefficient, divisor) =
@@ -383,14 +392,13 @@ end = struct
              /@ (fun (kind, a) ->
                (kind, substitute_term solution dim a))
              |> BatEnum.append classified.independent
-             |> DD.of_constraints_closed ambient_dim in
+             |> DD.of_constraints_closed (DD.dimension p - 1) in
            let new_l =
              List.map (substitute_term solution dim)
                (solution :: IntLattice.basis l)
              |> IntLattice.hermitize
            in
-           let hull = LatticePolytope.lattice_polytope_of ~ambient:ambient_dim
-                        new_p new_l in
+           let hull = LatticePolyhedron.lattice_polyhedron_of new_p new_l in
            (hull, new_l)
       ) dims (p, l)
 
@@ -444,19 +452,17 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
     let l_formulas = List.map (fun v -> Syntax.mk_is_int context (Linear.of_linterm context v))
                        (IntLattice.basis l) in
     Syntax.mk_and context (p_formulas @ l_formulas)
-
  
   let abstract formula interp =
     let (inequalities, lattice_constraints) =
       Util.constraints_of_implicant context
-        (Interpretation.select_implicant interp formula)
-    in
+        (Interpretation.select_implicant interp formula) in
+    let p = P.of_constraints (BatList.enum inequalities) in
     let max_p_dim = Util.max_dim_in_constraints (fun (_kind, v) -> v)
                       inequalities in
     let max_l_dim = Util.max_dim_in_constraints (fun x -> x)
                       lattice_constraints in
     let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in
-    let p = DD.of_constraints_closed ambient_dim (BatList.enum inequalities) in
     let (all_dims, codims) =
       let p_dims = BatList.fold_left (Util.non_constant_dimensions snd)
                        IntSet.empty inequalities in
@@ -487,8 +493,10 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
       IntLattice.hermitize (lattice_constraints @ symbol_dimensions) in
     let (projected_p, projected_l) =
       IntegerMbp.local_project_cooper m
-        ~eliminate:integer_codims ~ambient:ambient_dim (p, l) in
-    (projected_p, projected_l)
+        ~eliminate:integer_codims (P.dd_of ambient_dim p, l) in
+    let projected_p' = DD.of_constraints_closed num_dims
+                         (DD.enum_constraints projected_p) in
+    (projected_p', projected_l)
 
   let pp fmt (p, l) =
     Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
@@ -575,6 +583,7 @@ end = struct
       match Smt.Solver.get_model state.solver with
       | `Sat interp ->
          let rho = A.abstract formula interp in
+         logf "abstract: abstracted, now joining";
          let joined = A.join state.value rho in
          logf "abstract: joining rho %a with %a to get %a@."
            A.pp rho

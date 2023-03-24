@@ -1,7 +1,7 @@
 
-val polyhedral_abs_by_mbp :
+val convex_hull_by_recession_cone :
   'a Syntax.context -> 'a Syntax.formula -> Syntax.symbol list -> DD.closed DD.t
 
-val polyhedral_lattice_abs_by_mbp :
+val convex_hull_by_cooper :
   'a Syntax.context -> 'a Syntax.formula -> Syntax.symbol list ->
   DD.closed DD.t * IntLattice.t

@@ -414,7 +414,7 @@ end
 module type Context = sig type t val context : t Syntax.context end
 module type PreservedSymbols = sig val symbols : Syntax.symbol list end
 
-module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
+module CooperProjection (C : Context) (S : PreservedSymbols)
        : (AbstractDomain with type t = DD.closed DD.t * IntLattice.t
                           and type context = C.t) = struct
 
@@ -494,7 +494,7 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
 
 end
 
-module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
+module RecessionConeProjection (C : Context) (S : PreservedSymbols)
        : (AbstractDomain with type t = DD.closed DD.t
                           and type context = C.t) = struct
 
@@ -595,18 +595,18 @@ end = struct
 
 end
 
-let polyhedral_abs_by_mbp (type a) (context : a Syntax.context)
+let convex_hull_by_recession_cone (type a) (context : a Syntax.context)
       (formula : a Syntax.formula) symbols =
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
-  let module Abstraction = MakePolyhedronDomain(C)(S) in
+  let module Abstraction = RecessionConeProjection(C)(S) in
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula
 
-let polyhedral_lattice_abs_by_mbp (type a) (context : a Syntax.context)
+let convex_hull_by_cooper (type a) (context : a Syntax.context)
       (formula : a Syntax.formula) symbols =
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
-  let module Abstraction = MakePolyhedronLatticeDomain(C)(S) in
+  let module Abstraction = CooperProjection(C)(S) in
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula

@@ -489,7 +489,7 @@ let implies polyhedron (p, v) =
   | `Pos -> invalid_arg "Polyhedron.implies does not currently support strict \
                          inequalities"
 
-module NormalizCone = struct
+module IntegerHull = struct
 
   open Normalizffi
 
@@ -558,7 +558,7 @@ module NormalizCone = struct
     BatList.enum (List.append equalities inequalities)
     |> of_constraints
 
-  let integer_hull polyhedron =
+  let hull_by_normaliz polyhedron =
     let (cone, bijection) = normaliz_cone_by_constraints polyhedron in
 
     logf ~level:`trace "polyhedron: integer_hull: computed Normaliz cone for polyhedron:@[%a@]@;"
@@ -666,7 +666,7 @@ module NormalizCone = struct
       in
       if !changed then `Changed polyhedron else `Fixed polyhedron
 
-  let gomory_chvatal_dd ambient_dim polyhedron =
+  let hull_dd_by_gomory_chvatal ambient_dim polyhedron =
     let rec iter polyhedron i =
       let elem_closure =  elementary_gc ambient_dim polyhedron in
       match elem_closure with
@@ -679,18 +679,18 @@ module NormalizCone = struct
     in
     iter polyhedron 0
 
-  let gomory_chvatal polyhedron =
+  let hull_by_gomory_chvatal polyhedron =
     let dim = 1 + max_constrained_dim polyhedron in
     let man = Polka.manager_alloc_loose () in
-    of_dd (gomory_chvatal_dd dim (dd_of ~man dim polyhedron))
+    of_dd (hull_dd_by_gomory_chvatal dim (dd_of ~man dim polyhedron))
 
 end
 
 let integer_hull = function
-  | `GomoryChvatal -> NormalizCone.gomory_chvatal
-  | `Normaliz -> NormalizCone.integer_hull
+  | `GomoryChvatal -> IntegerHull.hull_by_gomory_chvatal
+  | `Normaliz -> IntegerHull.hull_by_normaliz
 
-let integer_hull_dd = NormalizCone.gomory_chvatal_dd
+let integer_hull_dd = IntegerHull.hull_dd_by_gomory_chvatal
 
 module IntDS = DisjointSet.Make(struct
     include Int

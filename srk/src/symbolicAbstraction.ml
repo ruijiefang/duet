@@ -57,15 +57,22 @@ module Util = struct
     | `Nonneg -> mk_compare `Leq term
     | `Pos -> mk_compare `Lt term
 
+  let linearize context t =
+    try
+      Linear.linterm_of context t
+    with Linear.Nonlinear ->
+      let s = Format.asprintf "Term %a is not linear" (Syntax.ArithTerm.pp context) t in
+      failwith s
+
   let constraint_of_atom context = function
     | `ArithComparison (`Lt, t1, t2) ->
-       `Ineq (`Pos, V.sub (Linear.linterm_of context t2) (Linear.linterm_of context t1))
+       `Ineq (`Pos, V.sub (linearize context t2) (linearize context t1))
     | `ArithComparison (`Leq, t1, t2) ->
-       `Ineq (`Nonneg, V.sub (Linear.linterm_of context t2) (Linear.linterm_of context t1))
+       `Ineq (`Nonneg, V.sub (linearize context t2) (linearize context t1))
     | `ArithComparison (`Eq, t1, t2) ->
-       `Ineq (`Zero, V.sub (Linear.linterm_of context t2) (Linear.linterm_of context t1))
+       `Ineq (`Zero, V.sub (linearize context t2) (linearize context t1))
     | `IsInt s ->
-       `InLat (Linear.linterm_of context s)
+       `InLat (linearize context s)
     | `Literal _
       | `ArrEq _ -> failwith "Cannot handle atoms"
 
@@ -434,7 +441,7 @@ module MakePolyhedronLatticeDomain (C : Context) (S : PreservedSymbols)
     let l_formulas = List.map (fun v -> Syntax.mk_is_int context (Linear.of_linterm context v))
                        (IntLattice.basis l) in
     Syntax.mk_and context (p_formulas @ l_formulas)
- 
+
   let abstract formula interp =
     let (inequalities, lattice_constraints) =
       Util.constraints_of_implicant context
@@ -498,7 +505,7 @@ module MakePolyhedronDomain (C : Context) (S : PreservedSymbols)
   let symbols = S.symbols
   let dimensions = Util.dims_of_symbols symbols
 
-  let num_dims = Util.max_dim_in_symbols symbols
+  let num_dims = Util.max_dim_in_symbols symbols + 1
 
   let bottom = P.dd_of num_dims P.bottom
 

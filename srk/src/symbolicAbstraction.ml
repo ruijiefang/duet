@@ -76,7 +76,7 @@ module Util = struct
     | `Literal _
       | `ArrEq _ -> failwith "Cannot handle atoms"
 
-  let non_constant_dimensions vector_of s cnstrnt =
+  let collect_non_constant_dimensions vector_of s cnstrnt =
     IntSet.union s (non_constant_dimensions (vector_of cnstrnt))
 
   let constraints_of_implicant context = function
@@ -147,7 +147,7 @@ end = struct
           | None -> failwith "transformation is malformed"
           | Some image ->
              BatEnum.push q (kind, image);
-             Util.non_constant_dimensions (fun x -> x) dimensions image)
+             Util.collect_non_constant_dimensions (fun x -> x) dimensions image)
         IntSet.empty
         (DD.enum_generators p) in
     DD.of_generators (IntSet.max_elt dimensions + 1) q
@@ -453,9 +453,9 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
                       lattice_constraints in
     let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in
     let (all_dims, codims) =
-      let p_dims = BatList.fold_left (Util.non_constant_dimensions snd)
-                       IntSet.empty inequalities in
-      let l_dims = BatList.fold_left (Util.non_constant_dimensions (fun x -> x))
+      let p_dims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
+                     IntSet.empty inequalities in
+      let l_dims = BatList.fold_left (Util.collect_non_constant_dimensions (fun x -> x))
                      IntSet.empty lattice_constraints in
       let all_nonconstant_dims = IntSet.union p_dims l_dims in
       (all_nonconstant_dims, IntSet.diff all_nonconstant_dims dimensions)
@@ -522,7 +522,7 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
     let p = P.of_constraints (BatList.enum inequalities) in
-    let codims = BatList.fold_left (Util.non_constant_dimensions snd)
+    let codims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
                    IntSet.empty inequalities
                  |> (fun s -> IntSet.diff s dimensions)
     in
@@ -541,6 +541,49 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
     let projected_p =
       IntegerMbp.local_project_recession m ~eliminate:integer_codims p in
     P.dd_of num_dims projected_p
+
+  let pp fmt p =
+    Format.fprintf fmt "{ polyhedron : %a }"
+      (DD.pp (fun fmt d -> Format.fprintf fmt "%d" d)) p
+
+end
+
+module IntHullProjection (C : Context) (S : PreservedSymbols)
+       : (AbstractDomain with type t = DD.closed DD.t
+                          and type context = C.t) = struct
+
+  type t = DD.closed DD.t
+  type context = C.t
+  let context = C.context
+
+  let symbols = S.symbols
+
+  let dimensions = Util.dims_of_symbols symbols
+
+  let num_dims = Util.max_dim_in_symbols symbols + 1
+
+  let bottom = P.dd_of num_dims P.bottom
+
+  let join p1 p2 = DD.join p1 p2
+
+  let concretize p =
+    let p_formulas = DD.enum_constraints p
+                     /@ Util.formula_of_constraint context
+                     |> BatList.of_enum in
+    Syntax.mk_and context p_formulas
+
+  let abstract formula interp =
+    let (inequalities, _lattice_constraints) =
+      Util.constraints_of_implicant context
+        (Interpretation.select_implicant interp formula) in
+    let max_dim = Util.max_dim_in_constraints snd inequalities in
+    let p = DD.of_constraints_closed (max_dim + 1) (BatList.enum inequalities) in
+    let hull = P.integer_hull_dd (max_dim + 1) p in
+    let codims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
+                   IntSet.empty inequalities
+                 |> (fun s -> IntSet.diff s dimensions)
+    in
+    DD.project (IntSet.to_list codims) hull
 
   let pp fmt p =
     Format.fprintf fmt "{ polyhedron : %a }"
@@ -595,7 +638,7 @@ end = struct
 
 end
 
-let convex_hull_by_recession_cone (type a) (context : a Syntax.context)
+let integer_hull_by_recession_cone (type a) (context : a Syntax.context)
       (formula : a Syntax.formula) symbols =
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
@@ -603,10 +646,18 @@ let convex_hull_by_recession_cone (type a) (context : a Syntax.context)
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula
 
-let convex_hull_by_cooper (type a) (context : a Syntax.context)
+let integer_hull_by_cooper (type a) (context : a Syntax.context)
       (formula : a Syntax.formula) symbols =
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
   let module Abstraction = CooperProjection(C)(S) in
+  let module Compute = Abstract(Abstraction) in
+  Compute.abstract formula
+
+let integer_hull_standard (type a) (context : a Syntax.context)
+      (formula : a Syntax.formula) symbols =
+  let module C = struct type t = a let context = context end in
+  let module S = struct let symbols = symbols end in
+  let module Abstraction = IntHullProjection(C)(S) in
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula

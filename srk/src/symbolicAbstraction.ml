@@ -548,7 +548,7 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
 
 end
 
-module IntHullProjection (C : Context) (S : PreservedSymbols)
+module IntHullProjection (C : Context) (S : PreservedSymbols) (F : sig val max_dim : int end)
        : (AbstractDomain with type t = DD.closed DD.t
                           and type context = C.t) = struct
 
@@ -557,10 +557,9 @@ module IntHullProjection (C : Context) (S : PreservedSymbols)
   let context = C.context
 
   let symbols = S.symbols
-
   let dimensions = Util.dims_of_symbols symbols
 
-  let num_dims = Util.max_dim_in_symbols symbols + 1
+  let num_dims = F.max_dim + 1
 
   let bottom = P.dd_of num_dims P.bottom
 
@@ -576,9 +575,8 @@ module IntHullProjection (C : Context) (S : PreservedSymbols)
     let (inequalities, _lattice_constraints) =
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
-    let max_dim = Util.max_dim_in_constraints snd inequalities in
-    let p = DD.of_constraints_closed (max_dim + 1) (BatList.enum inequalities) in
-    let hull = P.integer_hull_dd (max_dim + 1) p in
+    let p = DD.of_constraints_closed num_dims (BatList.enum inequalities) in
+    let hull = P.integer_hull_dd num_dims p in
     let codims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
                    IntSet.empty inequalities
                  |> (fun s -> IntSet.diff s dimensions)
@@ -658,6 +656,9 @@ let integer_hull_standard (type a) (context : a Syntax.context)
       (formula : a Syntax.formula) symbols =
   let module C = struct type t = a let context = context end in
   let module S = struct let symbols = symbols end in
-  let module Abstraction = IntHullProjection(C)(S) in
+  let max_dim = Util.max_dim_in_symbols
+                  (Syntax.Symbol.Set.elements (Syntax.symbols formula)) in
+  let module F = struct let max_dim = max_dim end in
+  let module Abstraction = IntHullProjection(C)(S)(F) in
   let module Compute = Abstract(Abstraction) in
   Compute.abstract formula

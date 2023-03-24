@@ -71,6 +71,101 @@ let print_result = function
   | `Unsat -> Format.printf "unsat@\n"
   | `Unknown -> Format.printf "unknown@\n"
 
+let of_formula ctx phi =
+  let module P = Polyhedron in
+  let module V = Linear.QQVector in
+  let linearize = Linear.linterm_of ctx in
+  let alg = function
+    | `Tru -> P.top
+    | `Fls -> P.bottom
+    | `And xs -> List.fold_left P.meet P.top xs
+    | `Atom (`Arith (`Eq, x, y)) ->
+      P.of_constraints (BatList.enum [(`Zero, V.sub (linearize y) (linearize x))])
+    | `Atom (`Arith (`Leq, x, y)) ->
+      P.of_constraints (BatList.enum [(`Nonneg, V.sub (linearize y) (linearize x))])
+    | `Atom (`Arith (`Lt, x, y)) ->
+      P.of_constraints (BatList.enum [(`Pos, V.sub (linearize y) (linearize x))])
+    | `Or _ | `Not _ | `Quantify (_, _, _, _) | `Proposition _
+    | `Ite (_, _, _) | `Atom (`ArrEq _)
+    | `Atom (`IsInt _) -> invalid_arg "Polyhedron.of_formula"
+  in
+  Formula.eval ctx alg phi
+
+let free_vars_for_int_hull (qf, phi) =
+  if List.exists (fun (q, _) -> q = `Forall) qf then
+    failwith "universal quantification not supported";
+  let quantified_int =
+    BatList.filter_map (fun (_, sym) ->
+        match typ_symbol srk sym with
+        | `TyInt -> Some sym
+        | _ -> None) (* Drop existential quantifiers over real-typed variables *)
+      qf
+    |> Symbol.Set.of_list
+  in
+  let symbol_list = Symbol.Set.elements (symbols phi) in
+  let preserved_symbols =
+    List.filter (fun sym -> not (Symbol.Set.mem sym quantified_int))
+      symbol_list in
+  preserved_symbols
+
+let compare_convex_hull file =
+  let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+  if List.exists (fun (q, _) -> q = `Forall) qf then
+    failwith "universal quantification not supported";
+  let exists v =
+    not (List.exists (fun (_, x) -> x = v && typ_symbol srk x == `TyInt) qf)
+  in
+  let polka = Polka.manager_alloc_strict () in
+  let pp_hull formatter hull =
+    if !generator_rep then begin
+        let env = SrkApron.get_env hull in
+        let dim = SrkApron.Env.dimension env in
+        Format.printf "Symbols:   [%a]@\n@[<v 0>"
+          (SrkUtil.pp_print_enum (Syntax.pp_symbol srk)) (SrkApron.Env.vars env);
+        SrkApron.generators hull
+        |> List.iter (fun (generator, typ) ->
+               Format.printf "%s [@[<hov 1>"
+                 (match typ with
+                  | `Line    -> "line:     "
+                  | `Vertex  -> "vertex:   "
+                  | `Ray     -> "ray:      "
+                  | `LineMod -> "line mod: "
+                  | `RayMod  -> "ray mod:  ");
+               for i = 0 to dim - 2 do
+                 Format.printf "%a@;" QQ.pp (Linear.QQVector.coeff i generator)
+               done;
+               Format.printf "%a]@]@;" QQ.pp (Linear.QQVector.coeff (dim - 1) generator));
+        Format.printf "@]"
+      end else
+      SrkApron.pp formatter hull
+  in
+  let hull_abstract = Abstract.abstract ~exists srk polka phi in
+  Format.printf "Convex hull computed using abstract:@\n @[<v 0>%a@]@\n@."
+    pp_hull hull_abstract;
+  Format.printf "Now computing using local projection@\n";
+  let quantified_int =
+    BatList.filter_map (fun (_, sym) ->
+        match typ_symbol srk sym with
+        | `TyInt -> Some sym
+        | _ -> None) qf
+    |> Symbol.Set.of_list
+  in
+  let symbol_list = Symbol.Set.elements (symbols phi) in
+  let preserved_symbols =
+    List.filter (fun sym -> not (Symbol.Set.mem sym quantified_int))
+      symbol_list in
+  let hull_local = SymbolicAbstraction.integer_hull_by_recession_cone srk phi preserved_symbols in
+  Format.printf "Convex hull computed using local projection:@\n @[<v 0>%a@]@\n"
+    (DD.pp (fun fmt i ->
+         if i = Linear.const_dim then
+           Format.pp_print_int fmt i
+         else pp_symbol srk fmt (symbol_of_int i))) hull_local;
+  let hull_abstract = of_formula srk (SrkApron.formula_of_property hull_abstract) in
+  if (Polyhedron.equal (Polyhedron.of_dd hull_local) hull_abstract)
+  then Format.printf "equal@\n"
+  else Format.printf "unequal@\n";
+  ()
+
 let spec_list = [
   ("-simsat",
    Arg.String (fun file ->
@@ -97,6 +192,82 @@ let spec_list = [
   ("-generator",
    Arg.Set generator_rep,
    " Print generator representation of convex hull");
+
+  ("-compare-convex-hull",
+   Arg.String compare_convex_hull,
+   "Compare convex hulls computed by local projection and abstract");
+
+  ("-int-hull-by-cone",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let hull = SymbolicAbstraction.integer_hull_by_recession_cone srk phi preserved_symbols in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the integer hull of an existential formula by model-based projection of recession cones");
+
+  ("-int-hull-by-standard",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let hull = SymbolicAbstraction.integer_hull_standard srk phi preserved_symbols in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the integer hull of an existential formula by model-based projection of polyhedra directly");
+
+  ("-int-hull-by-cooper",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let (hull, _) = SymbolicAbstraction.integer_hull_by_cooper srk phi preserved_symbols in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the integer hull of an existential formula by model-based Cooper");
+
+  ("-int-hull-by-abstract",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       if List.exists (fun (q, _) -> q = `Forall) qf then
+         failwith "universal quantification not supported";
+       let exists v =
+         not (List.exists (fun (_, x) -> x = v && typ_symbol srk x == `TyInt) qf)
+       in
+       let polka = Polka.manager_alloc_strict () in
+       let pp_hull formatter hull =
+         if !generator_rep then begin
+           let env = SrkApron.get_env hull in
+           let dim = SrkApron.Env.dimension env in
+           Format.printf "Symbols:   [%a]@\n@[<v 0>"
+             (SrkUtil.pp_print_enum (Syntax.pp_symbol srk)) (SrkApron.Env.vars env);
+           SrkApron.generators hull
+           |> List.iter (fun (generator, typ) ->
+               Format.printf "%s [@[<hov 1>"
+                 (match typ with
+                  | `Line    -> "line:     "
+                  | `Vertex  -> "vertex:   "
+                  | `Ray     -> "ray:      "
+                  | `LineMod -> "line mod: "
+                  | `RayMod  -> "ray mod:  ");
+               for i = 0 to dim - 2 do
+                 Format.printf "%a@;" QQ.pp (Linear.QQVector.coeff i generator)
+               done;
+               Format.printf "%a]@]@;" QQ.pp (Linear.QQVector.coeff (dim - 1) generator));
+           Format.printf "@]"
+         end else
+           SrkApron.pp formatter hull
+       in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         pp_hull (Abstract.abstract ~exists srk polka phi)),
+   " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
 
   ("-convex-hull",
    Arg.String (fun file ->

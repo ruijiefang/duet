@@ -200,6 +200,10 @@ module IntegerMbp : sig
   val local_project_recession :
     (int -> QQ.t) -> eliminate:IntSet.t -> Polyhedron.t -> Polyhedron.t
 
+  (** All variables (dimensions) to be eliminated must be integer-valued.
+      TODO: Remove the [is_int] and just require that these variables
+      are in the lattice.
+   *)
   val local_project_cooper :
     (int -> bool) -> (int -> QQ.t) -> eliminate:IntSet.t ->
     Polyhedron.t * IntLattice.t -> Polyhedron.t * IntLattice.t
@@ -425,6 +429,12 @@ end = struct
              |> P.of_constraints in
            let new_l =
              List.map (substitute_term solution dim) (IntLattice.basis l)
+             |> List.cons solution
+             (* [F[soln/x] /\ Int(soln) |= exists x. Int(x) /\ F[x]].
+                while
+                [F[soln/x] |/= exists x. Int(x) /\ F[x]]; we lose the integrality
+                constraint.
+              *)
              |> IntLattice.hermitize
            in
            (new_p, new_l)

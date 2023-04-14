@@ -187,6 +187,15 @@ end = struct
 end
 
 module IntegerMbp : sig
+  (** All variables (dimensions) must be integer variables, i.e.,
+      the formula should entail that the variable is an integer,
+      whether enforced by its syntactic type or because of an
+      integer constraint. Otherwise we may diverge:
+      for recession cone, we have to make enough progress towards
+      boundaries, and for Cooper's, the number of residue classes
+      has to be finite.
+      Both are guaranteed when all variables are integer-valued.
+   *)
 
   val local_project_recession :
     (int -> QQ.t) -> eliminate:IntSet.t -> Polyhedron.t -> Polyhedron.t
@@ -388,13 +397,7 @@ end = struct
            then failwith "May diverge; lower bound term contains rational variable"
            else ();
            (* Integrality constraint from lattice can be stronger
-              than just [Int(dim)]. We only need the denominator of
-              the coefficient of [dim] that generates the projection
-              of the lattice onto [dim], because [Int(dim)] is morally in
-              the lattice. Since the lattice is ZZ-generated,
-              it suffices to take the lcm of all denominators.
-              Since the lcm is >= 1, this covers the usual case
-              without any integrality constraint.
+              than just [Int(dim)].
             *)
            let divisor =
              BatList.fold_left
@@ -405,33 +408,6 @@ end = struct
                ZZ.one
                (L.basis l)
            in
-           (*
-             Clear denominators to have the same coefficient for [dim] everywhere,
-             such that this coefficient is divisible by [divisor].
-             Disjunction over the cases modulo the coefficient relies on the
-             ring of integers modulo the coefficient.
-             If we work over the rationals with 1 for the coefficient of [dim],
-             even though the model we find guarantees it satisfies all
-             integrality constraints, the residue class can be with respect to
-             the wrong modulo (< lcm(divisor, coeffient)), and we may not
-             hit all the cases.
-           let lcm_denom_inequalities =
-             BatEnum.fold
-               (fun m (_, v) -> ZZ.lcm m (Linear.QQVector.common_denominator v))
-               ZZ.one
-               (P.enum_constraints p) in
-           let modk =
-             BatEnum.fold
-               (fun m (_, v) ->
-                 let coeff = Linear.QQVector.coeff dim v in
-                 if QQ.equal coeff QQ.zero then m
-                 else
-                   QQ.mul coeff (QQ.of_zz lcm_denom_inequalities)
-                   |> QQ.numerator
-                   |> ZZ.lcm m)
-               divisor
-               (P.enum_constraints p) in
-            *)
            let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
            let residue = QQ.modulo difference (QQ.of_zz divisor) in
            let solution = V.add_term residue Linear.const_dim glb_term in
@@ -510,12 +486,6 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
     let p = P.of_constraints (BatList.enum inequalities) in
-    (*
-    let max_p_dim = Util.max_dim_in_constraints (fun (_kind, v) -> v)
-                      inequalities in
-    let max_l_dim = Util.max_dim_in_constraints (fun x -> x)
-                      lattice_constraints in
-    let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in *)
     let (all_dims, codims) =
       let p_dims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
                      IntSet.empty inequalities in
@@ -526,10 +496,7 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
     in
     let (integer_codims, real_codims) = IntSet.partition (Util.is_int context) codims in
     let () = if not (IntSet.is_empty real_codims) then
-               (* let p_onto_integer =
-                  Polyhedron.local_project m (IntSet.to_list real_codims) p in
-                *)
-               failwith "Cannot do local projection with real variable yet"
+               failwith "Cannot eliminate real variable"
              else () in
     let m = Util.map_of interp in
     let l =
@@ -542,20 +509,9 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
     let (projected_p, projected_l) =
       IntegerMbp.local_project_cooper (Util.is_int context) m
         ~eliminate:integer_codims (p, l) in
-    (* let projected_p' = DD.of_constraints_closed num_dims
-                         (DD.enum_constraints projected_p) in
-       let projected_p' = DD.of_constraints_closed num_dims
-       (P.enum_constraints projected_p) in
-     *)
     logf "Computing lattice polyhedron after Cooper...@.";
-    (*
-    let hull = LatticePolyhedron.lattice_polyhedron_of
-                 (DD.of_constraints_closed num_dims (P.enum_constraints projected_p))
-                 projected_l in
-     *)
     let hull = LatticePolyhedron.lattice_polyhedron_of projected_p projected_l in
     logf "Computed lattice polyhedron after Cooper@.";
-    (* (hull, projected_l) *)
     ( DD.of_constraints_closed num_dims (P.enum_constraints hull)
     , projected_l)
 
@@ -604,10 +560,7 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
           Util.is_int context dim)
         codims in
     let () = if not (IntSet.is_empty real_codims) then
-               (* let p_onto_integer =
-                  Polyhedron.local_project m (IntSet.to_list real_codims) p in
-                *)
-               failwith "Cannot do local projection with real variable yet"
+               failwith "Cannot eliminate real variable"
              else () in
     let m = Util.map_of interp in
     let projected_p =

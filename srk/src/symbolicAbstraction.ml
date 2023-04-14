@@ -555,10 +555,7 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
                  |> (fun s -> IntSet.diff s dimensions)
     in
     let (integer_codims, real_codims) =
-      IntSet.partition (fun dim ->
-          logf "abstract: dim: %d@." dim;
-          Util.is_int context dim)
-        codims in
+      IntSet.partition (Util.is_int context) codims in
     let () = if not (IntSet.is_empty real_codims) then
                failwith "Cannot eliminate real variable"
              else () in

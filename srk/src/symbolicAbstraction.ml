@@ -11,6 +11,10 @@ let () = my_verbosity_level := `debug
 
 module Util = struct
 
+  let is_int context dim =
+    if dim = Linear.const_dim then true
+    else (Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt)
+
   let dims_of_symbols symbols =
     List.fold_left (fun s sym -> IntSet.add (Syntax.int_of_symbol sym) s)
       IntSet.empty symbols
@@ -18,15 +22,6 @@ module Util = struct
   let max_dim_in_symbols symbols =
     List.fold_left (fun n sym -> Int.max n (Syntax.int_of_symbol sym))
       (-1) symbols + 1
-
-  let max_dim_in_constraints proj cnstrnts =
-    BatEnum.fold
-      (fun max_dim cnstrnt ->
-        BatEnum.fold (fun m (_, dim) -> Int.max m dim)
-          max_dim
-          (V.enum (proj cnstrnt)))
-      (-1)
-      (BatList.enum cnstrnts)
 
   let non_constant_dimensions vector =
     BatEnum.fold
@@ -66,7 +61,10 @@ module Util = struct
 
   let constraint_of_atom context = function
     | `ArithComparison (`Lt, t1, t2) ->
-       `Ineq (`Pos, V.sub (linearize context t2) (linearize context t1))
+       (* `Ineq (`Pos, V.sub (linearize context t2) (linearize context t1)) *)
+       (* Silently convert to non-strict inequality *)
+       logf "Warning: Silently converting > to >= 0@.";
+       `Ineq (`Nonneg, V.sub (linearize context t2) (linearize context t1))
     | `ArithComparison (`Leq, t1, t2) ->
        `Ineq (`Nonneg, V.sub (linearize context t2) (linearize context t1))
     | `ArithComparison (`Eq, t1, t2) ->
@@ -111,11 +109,16 @@ end
 
 module LatticePolyhedron : sig
 
-  val lattice_polyhedron_of : DD.closed DD.t -> IntLattice.t -> DD.closed DD.t
+  val lattice_polyhedron_of : P.t -> IntLattice.t -> P.t
 
 end = struct
 
   module T = Linear.MakeLinearMap(QQ)(Int)(V)(V)
+
+  let pp_linear_map fmt linear_map =
+    BatEnum.iter (fun (s, t) ->
+        Format.fprintf fmt "(%a, %a); " Linear.QQVector.pp s Linear.QQVector.pp t)
+      (T.enum linear_map)
 
   let force_transform (forward, inverse, num_dimensions) p =
     let q = BatEnum.empty () in
@@ -126,31 +129,42 @@ end = struct
           | None ->
              let image = V.of_term QQ.one num_dimensions in
              BatEnum.push q (kind, image);
-             ( T.add_exn v image forward
-             , T.add_exn image v inverse
-             , num_dimensions + 1)
+             let new_forward =
+               match T.add v image forward with
+               | Some forward' -> forward'
+               | None ->
+                  logf "force_transform forward: %a is already in the domain of %a@."
+                    Linear.QQVector.pp v pp_linear_map forward;
+                 failwith "force_transform: forward extension conflict"
+             in
+             let new_backward =
+               match T.add image v inverse with
+               | Some backward' -> backward'
+               | None ->
+                  logf "force_transform inverse: %a is already in the domain of %a@."
+                    Linear.QQVector.pp image pp_linear_map inverse;
+                  failwith "force_transform: inverse extension conflict"
+             in
+             ( new_forward, new_backward, num_dimensions + 1)
           | Some image ->
              BatEnum.push q (kind, image);
              (forward, inverse, num_dimensions)
         )
         (forward, inverse, num_dimensions)
-        (DD.enum_generators p)
+        (P.enum_constraints p)
     in
-    (forward, inverse, num_dimensions, DD.of_generators num_dimensions q)
+    (forward, inverse, num_dimensions, P.of_constraints q)
 
   let transform map p =
     let q = BatEnum.empty () in
-    let dimensions =
-      BatEnum.fold
-        (fun dimensions (kind, v) ->
-          match T.apply map v with
-          | None -> failwith "transformation is malformed"
-          | Some image ->
-             BatEnum.push q (kind, image);
-             Util.collect_non_constant_dimensions (fun x -> x) dimensions image)
-        IntSet.empty
-        (DD.enum_generators p) in
-    DD.of_generators (IntSet.max_elt dimensions + 1) q
+    BatEnum.iter (fun (kind, v) ->
+        match T.apply map v with
+        | None -> failwith "transformation is malformed"
+        | Some image ->
+           BatEnum.push q (kind, image)
+      )
+      (P.enum_constraints p);
+    P.of_constraints q
 
   let lattice_polyhedron_of p l =
     let basis = IntLattice.basis l in
@@ -162,10 +176,12 @@ end = struct
         (T.empty, T.empty, 0)
         basis
     in
-    let (_forward, inverse, num_dimensions, q) =
+    logf "Forcing transform";
+    let (_forward, inverse, _num_dimensions, q) =
       force_transform (forward_l, inverse_l, num_dimensions_l) p
     in
-    let hull = Polyhedron.integer_hull_dd num_dimensions q in
+    logf "Forced transform";
+    let hull = Polyhedron.integer_hull `GomoryChvatal q in
     transform inverse hull
 
 end
@@ -176,8 +192,8 @@ module IntegerMbp : sig
     (int -> QQ.t) -> eliminate:IntSet.t -> Polyhedron.t -> Polyhedron.t
 
   val local_project_cooper :
-    (int -> QQ.t) -> eliminate:IntSet.t ->
-    DD.closed DD.t * IntLattice.t -> DD.closed DD.t * IntLattice.t
+    (int -> bool) -> (int -> QQ.t) -> eliminate:IntSet.t ->
+    Polyhedron.t * IntLattice.t -> Polyhedron.t * IntLattice.t
 
 end = struct
 
@@ -278,7 +294,10 @@ end = struct
         else
           let value = evaluate_bound dim v m in
           match kind with
-          | `Pos -> failwith "Recession cone should have eliminated > 0"
+          | `Pos ->
+             let tt = fun _ _ -> true in
+             update_lub_if tt value kind v classified
+             |> update_glb_if tt value `Zero v
           | `Zero ->
              let tt = fun _ _ -> true in
              update_lub_if tt value kind v classified
@@ -354,41 +373,85 @@ end = struct
            P.of_constraints (BatList.enum l))
       dims p
 
-  let local_project_cooper m ~eliminate:dims (p, l) =
+  let local_project_cooper is_int m ~eliminate:dims (p, l) =
     IntSet.fold (fun dim (p, l) ->
         let classified = classify_constraints m dim
-                           (DD.enum_constraints p) in
+                           (P.enum_constraints p) in
         match get_solution dim classified with
         | `Infinite ->
-           ( DD.of_constraints_closed (DD.dimension p - 1) classified.independent
+           ( P.of_constraints classified.independent
            , IntLattice.project (fun dim -> not (IntSet.mem dim dims)) l )
         | `Finite glb_term ->
-           let (_coefficient, divisor) =
-             IntLattice.project (fun x -> x = dim) l
-             |> IntLattice.basis
-             |> (fun l -> assert (List.length l = 1); List.hd l)
-             |> V.coeff dim
-             |> (fun q -> QQ.numerator q, QQ.denominator q)
+           logf "obtained lower bound: %a@." V.pp glb_term;
+           if BatEnum.exists (fun (_, dim) -> not (is_int dim))
+                (Linear.QQVector.enum glb_term)
+           then failwith "May diverge; lower bound term contains rational variable"
+           else ();
+           (* Integrality constraint from lattice can be stronger
+              than just [Int(dim)]. We only need the denominator of
+              the coefficient of [dim] that generates the projection
+              of the lattice onto [dim], because [Int(dim)] is morally in
+              the lattice. Since the lattice is ZZ-generated,
+              it suffices to take the lcm of all denominators.
+              Since the lcm is >= 1, this covers the usual case
+              without any integrality constraint.
+            *)
+           let divisor =
+             BatList.fold_left
+               (fun m v ->
+                 let coeff = Linear.QQVector.coeff dim v in
+                 if QQ.equal coeff QQ.zero then m
+                 else ZZ.lcm m (QQ.denominator coeff))
+               ZZ.one
+               (L.basis l)
            in
+           (*
+             Clear denominators to have the same coefficient for [dim] everywhere,
+             such that this coefficient is divisible by [divisor].
+             Disjunction over the cases modulo the coefficient relies on the
+             ring of integers modulo the coefficient.
+             If we work over the rationals with 1 for the coefficient of [dim],
+             even though the model we find guarantees it satisfies all
+             integrality constraints, the residue class can be with respect to
+             the wrong modulo (< lcm(divisor, coeffient)), and we may not
+             hit all the cases.
+           let lcm_denom_inequalities =
+             BatEnum.fold
+               (fun m (_, v) -> ZZ.lcm m (Linear.QQVector.common_denominator v))
+               ZZ.one
+               (P.enum_constraints p) in
+           let modk =
+             BatEnum.fold
+               (fun m (_, v) ->
+                 let coeff = Linear.QQVector.coeff dim v in
+                 if QQ.equal coeff QQ.zero then m
+                 else
+                   QQ.mul coeff (QQ.of_zz lcm_denom_inequalities)
+                   |> QQ.numerator
+                   |> ZZ.lcm m)
+               divisor
+               (P.enum_constraints p) in
+            *)
            let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
            let residue = QQ.modulo difference (QQ.of_zz divisor) in
            let solution = V.add_term residue Linear.const_dim glb_term in
+           logf "substituting solution: %a@." V.pp solution;
            let () = match classified.lub_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
            in
+           (* TODO: Do we need to substitute? *)
            let new_p =
              classified.others
              /@ (fun (kind, a) ->
                (kind, substitute_term solution dim a))
              |> BatEnum.append classified.independent
-             |> DD.of_constraints_closed (DD.dimension p - 1) in
+             |> P.of_constraints in
            let new_l =
              List.map (substitute_term solution dim) (IntLattice.basis l)
              |> IntLattice.hermitize
            in
-           let hull = LatticePolyhedron.lattice_polyhedron_of new_p new_l in
-           (hull, new_l)
+           (new_p, new_l)
       ) dims (p, l)
 
 end
@@ -447,11 +510,12 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
     let p = P.of_constraints (BatList.enum inequalities) in
+    (*
     let max_p_dim = Util.max_dim_in_constraints (fun (_kind, v) -> v)
                       inequalities in
     let max_l_dim = Util.max_dim_in_constraints (fun x -> x)
                       lattice_constraints in
-    let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in
+    let ambient_dim = (Int.max max_p_dim max_l_dim) + 1 in *)
     let (all_dims, codims) =
       let p_dims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
                      IntSet.empty inequalities in
@@ -460,10 +524,7 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
       let all_nonconstant_dims = IntSet.union p_dims l_dims in
       (all_nonconstant_dims, IntSet.diff all_nonconstant_dims dimensions)
     in
-    let (integer_codims, real_codims) =
-      IntSet.partition (fun dim ->
-          Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt)
-        codims in
+    let (integer_codims, real_codims) = IntSet.partition (Util.is_int context) codims in
     let () = if not (IntSet.is_empty real_codims) then
                (* let p_onto_integer =
                   Polyhedron.local_project m (IntSet.to_list real_codims) p in
@@ -475,17 +536,28 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
       let symbol_dimensions =
         IntSet.fold
           (fun dim l ->
-            if Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt
-            then V.of_term QQ.one dim :: l
-            else l)
+            if (Util.is_int context dim) then V.of_term QQ.one dim :: l else l)
           all_dims [] in
       IntLattice.hermitize (lattice_constraints @ symbol_dimensions) in
     let (projected_p, projected_l) =
-      IntegerMbp.local_project_cooper m
-        ~eliminate:integer_codims (P.dd_of ambient_dim p, l) in
-    let projected_p' = DD.of_constraints_closed num_dims
+      IntegerMbp.local_project_cooper (Util.is_int context) m
+        ~eliminate:integer_codims (p, l) in
+    (* let projected_p' = DD.of_constraints_closed num_dims
                          (DD.enum_constraints projected_p) in
-    (projected_p', projected_l)
+       let projected_p' = DD.of_constraints_closed num_dims
+       (P.enum_constraints projected_p) in
+     *)
+    logf "Computing lattice polyhedron after Cooper...@.";
+    (*
+    let hull = LatticePolyhedron.lattice_polyhedron_of
+                 (DD.of_constraints_closed num_dims (P.enum_constraints projected_p))
+                 projected_l in
+     *)
+    let hull = LatticePolyhedron.lattice_polyhedron_of projected_p projected_l in
+    logf "Computed lattice polyhedron after Cooper@.";
+    (* (hull, projected_l) *)
+    ( DD.of_constraints_closed num_dims (P.enum_constraints hull)
+    , projected_l)
 
   let pp fmt (p, l) =
     Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
@@ -529,7 +601,7 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
     let (integer_codims, real_codims) =
       IntSet.partition (fun dim ->
           logf "abstract: dim: %d@." dim;
-          Syntax.typ_symbol context (Syntax.symbol_of_int dim) = `TyInt)
+          Util.is_int context dim)
         codims in
     let () = if not (IntSet.is_empty real_codims) then
                (* let p_onto_integer =
@@ -548,7 +620,8 @@ module RecessionConeProjection (C : Context) (S : PreservedSymbols)
 
 end
 
-module IntHullProjection (C : Context) (S : PreservedSymbols) (F : sig val max_dim : int end)
+module IntHullProjection (C : Context) (S : PreservedSymbols)
+         (F : sig val max_dim : int end)
        : (AbstractDomain with type t = DD.closed DD.t
                           and type context = C.t) = struct
 

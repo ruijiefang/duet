@@ -293,14 +293,47 @@ and z3_of_formula srk z3 =
     | `Not phi -> Z3.Boolean.mk_not z3 phi
     | `Quantify (qt, name, typ, phi) ->
       mk_quantified z3 qt ~name typ phi
-    | `Atom (`Arith (`Eq, s, t)) -> Z3.Boolean.mk_eq z3 (of_arith_term s) (of_arith_term t)
+    | `Atom (`Arith (`Eq, s, t)) ->
+      begin
+        let default () =
+          Z3.Boolean.mk_eq z3 (of_arith_term s) (of_arith_term t)
+        in
+(*n        try
+          match s with
+          |
+        with Linear.Nonlinear -> default ()
+*)
+        default ()
+      end
     | `Atom (`Arith (`Leq, s, t)) -> Z3.Arithmetic.mk_le z3 (of_arith_term s) (of_arith_term t)
     | `Atom (`Arith (`Lt, s, t)) -> Z3.Arithmetic.mk_lt z3 (of_arith_term s) (of_arith_term t)
     | `Atom (`ArrEq (s, t)) -> Z3.Boolean.mk_eq z3 (of_arr_term s) (of_arr_term t)
     | `Proposition (`Var i) ->
-       Z3.Quantifier.mk_bound z3 i (sort_of_typ z3 `TyBool)
+      Z3.Quantifier.mk_bound z3 i (sort_of_typ z3 `TyBool)
     | `Atom (`IsInt s) ->
-       Z3.Arithmetic.Real.mk_is_integer z3 (z3_of_expr srk z3 (s :> ('a, typ_fo) expr))
+      begin
+        let default () =
+          Z3.Arithmetic.Real.mk_is_integer z3
+            (z3_of_expr srk z3 (s :> ('a, typ_fo) expr))
+        in
+        try
+          (* Z3 handles mod better than is_int, so translate to mod if
+             possible. *)
+          let lin = Linear.linterm_of srk s in
+          let denom = Linear.QQVector.common_denominator lin in
+          let t = Linear.QQVector.scalar_mul (QQ.of_zz denom) lin
+                  |> Linear.of_linterm srk
+          in
+          (match expr_typ srk t with
+           | `TyInt ->
+             let d = Z3.Arithmetic.Integer.mk_numeral_s z3 (ZZ.show denom) in
+             let t = z3_of_expr srk z3 (t :> ('a, typ_fo) expr) in
+             Z3.Boolean.mk_eq z3
+               (Z3.Arithmetic.Integer.mk_mod z3 t d)
+               (Z3.Arithmetic.Integer.mk_numeral_i z3 0)
+           | _ -> default ())
+        with Linear.Nonlinear -> default ()
+      end
     | `Proposition (`App (p, [])) ->
       let decl =
         Z3.FuncDecl.mk_const_decl z3
@@ -391,7 +424,17 @@ type 'a solver =
     formula_of : z3_expr -> 'a formula;
     of_formula : 'a formula -> z3_expr }
 
-let mk_solver ?(context=Z3.mk_context []) ?(theory="") srk =
+let get_default_context =
+  let default_context = ref None in
+  fun () ->
+    match !default_context with
+    | Some ctx -> ctx
+    | None ->
+      let ctx = Z3.mk_context [] in
+      default_context := Some ctx;
+      ctx
+
+let mk_solver ?(context=get_default_context ()) ?(theory="") srk =
   let s =
     if theory = "" then
       Z3.Solver.mk_simple_solver context
@@ -532,7 +575,7 @@ module Solver = struct
   let get_reason_unknown solver = Z3.Solver.get_reason_unknown solver.s
 end
 
-let optimize_box ?(context=Z3.mk_context []) srk phi objectives =
+let optimize_box ?(context=get_default_context ()) srk phi objectives =
   let open Z3.Optimize in
   let z3 = context in
   let opt = mk_opt z3 in
@@ -593,7 +636,7 @@ let optimize_box ?(context=Z3.mk_context []) srk phi objectives =
 let interpolate_seq ?context:_ _ _ =
   failwith "SrkZ3.interpolate_seq not implemented"
 
-let load_smtlib2 ?(context=Z3.mk_context []) srk str =
+let load_smtlib2 ?(context=get_default_context ()) srk str =
   let z3 = context in
   let ast = Z3.SMT.parse_smtlib2_string z3 str [] [] [] [] in
   let sym_of_decl =
@@ -629,7 +672,7 @@ let of_apply_result srk result =
   List.map (of_goal srk) (Z3.Tactic.ApplyResult.get_subgoals result)
   |> mk_and srk
 
-let qe ?(context=Z3.mk_context []) srk phi =
+let qe ?(context=get_default_context ()) srk phi =
   let open Z3 in
   let z3 = context in
   let solve = Tactic.mk_tactic z3 "qe" in
@@ -639,7 +682,7 @@ let qe ?(context=Z3.mk_context []) srk phi =
   Goal.add g [z3_of_formula srk z3 phi];
   of_apply_result srk (Tactic.apply qe g None)
 
-let simplify ?(context=Z3.mk_context []) srk phi =
+let simplify ?(context=get_default_context ()) srk phi =
   let open Z3 in
   let open Tactic in
   let z3 = context in
@@ -672,7 +715,7 @@ module CHC = struct
       mutable head_relations : Symbol.Set.t;
       fp : Z3.Fixedpoint.fixedpoint }
 
-  let mk_solver ?(context=Z3.mk_context []) srk =
+  let mk_solver ?(context=get_default_context ()) srk =
     let fp = Z3.Fixedpoint.mk_fixedpoint context in
     let error = mk_symbol srk ~name:"error" (`TyFun ([], `TyBool)) in
     let error_decl = decl_of_symbol context srk error in

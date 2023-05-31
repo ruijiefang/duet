@@ -406,7 +406,6 @@ let destruct_atom srk phi =
   match Formula.destruct srk phi with
   | `Atom (`Arith (op, s, t)) -> `ArithComparison (op, s, t)
   | `Atom (`ArrEq (a, b)) ->  `ArrEq (a, b)
-  | `Atom (`IsInt s) -> `IsInt s
   | `Proposition (`App (k, [])) ->
     `Literal (`Pos, `Const k)
   | `Proposition (`Var i) -> `Literal (`Pos, `Var i)

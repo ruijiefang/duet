@@ -50,7 +50,7 @@ module ImplicantConstraintConversion (Target : Target) : sig
 
   val ambient_dimension : int
 
-  val valuation : Target.context Interpretation.interpretation -> int -> Q.t
+  val _valuation : Target.context Interpretation.interpretation -> int -> Q.t
 
   val constraints_of_implicant :
     Target.context Syntax.formula list ->
@@ -90,14 +90,17 @@ end = struct
     let dim = Array.length Target.terms in
     BatList.of_enum (dim --^ ambient_dimension)
 
-  let valuation interp i =
+  let _valuation interp i =
     Linear.evaluate_linterm
       (Interpretation.real interp)
       (BatDynArray.get basis i)
 
   let atom_of_constraint (ckind, cnstrnt) =
     let zero = Syntax.mk_zero Target.context in
-    let term = Linear.term_of_vec Target.context (fun i -> Target.terms.(i)) cnstrnt in
+    let term =
+      Linear.term_of_vec Target.context
+        (fun i -> if i = Linear.const_dim then Syntax.mk_real Target.context QQ.one
+                  else Target.terms.(i)) cnstrnt in
     let mk_compare cmp term = Syntax.mk_compare cmp Target.context zero term in
     match ckind with
     | `Zero -> mk_compare `Eq term
@@ -198,18 +201,19 @@ end = struct
   let abstract formula =
     let state = init formula in
     let rec go bound n state =
-      logf "Iteration %d@." n;
+      logf ~level:`trace "Iteration %d@." n;
       match Smt.Solver.get_model state.solver with
       | `Sat interp ->
          let rho = A.abstract formula interp in
-         logf "abstract: abstracted, now joining";
+         logf ~level:`trace "abstract: abstracted, now joining";
          let joined = A.join state.value rho in
-         logf "abstract: joining rho %a with %a to get %a@."
+         logf ~level:`trace "abstract: joining rho %a with %a to get %a@."
            A.pp rho
            A.pp state.value
            A.pp joined;
          let formula = A.concretize joined in
-         logf "abstract: new constraint to negate: %a@." (Syntax.pp_smtlib2 A.context) formula;
+         logf ~level:`trace "abstract: new constraint to negate: %a@."
+           (Syntax.pp_smtlib2 A.context) formula;
          Smt.Solver.add state.solver
            [Syntax.mk_not A.context formula];
          let next = { state with value = joined } in
@@ -225,7 +229,7 @@ end = struct
 
 end
 
-let integer_hull (type a) (srk : a Syntax.context) how (phi : a Syntax.formula)
+let integer_hull (type a) (srk : a Syntax.context) ~how (phi : a Syntax.formula)
       terms =
   let module Target = struct
       type context = a

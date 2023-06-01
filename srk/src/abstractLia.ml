@@ -6,7 +6,7 @@ module LM = Linear.MakeLinearMap(QQ)(SrkUtil.Int)(V)(V)
 
 module IntSet = SrkUtil.Int.Set
 
-include Log.Make(struct let name = "symbolicAbstraction" end)
+include Log.Make(struct let name = "abstractLia" end)
 
 (** Abstract domain that supports symbolic abstraction *)
 module type AbstractDomain = sig
@@ -77,7 +77,7 @@ end = struct
         Target.terms
       |> Symbol.Set.fold (fun symbol map ->
              if (Syntax.typ_symbol Target.context symbol <> `TyInt) then
-               logf "Warning: Formula contains non-integer symbol %a; treating it as integer type"
+               logf ~level:`always "Warning: Formula contains non-integer symbol %a; treating it as integer type"
                  (Syntax.pp_symbol Target.context) symbol
              else ();
              let symbol_vec = V.of_term QQ.one (Linear.dim_of_sym symbol) in
@@ -136,7 +136,7 @@ end = struct
     | `ArithComparison (`Lt, t1, t2) ->
        (* `Ineq (`Pos, V.sub (linearize context t2) (linearize context t1)) *)
        (* Silently convert to non-strict inequality *)
-       logf "Warning: Silently converting > to >= 0@.";
+       logf ~level:`always "Warning: Silently converting > to >= 0@.";
        `Ineq (`Nonneg, image (V.sub (linearize t2) (linearize t1)))
     | `ArithComparison (`Leq, t1, t2) ->
        `Ineq (`Nonneg, image (V.sub (linearize t2) (linearize t1)))
@@ -374,11 +374,11 @@ end = struct
            let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
            let residue = QQ.modulo difference (QQ.of_zz divisor) in
            let solution = V.add_term residue Linear.const_dim glb_term in
-           logf "glb value %a <= point %a, difference %a, divisor %a, residue %a@."
+           logf ~level:`trace "glb value %a <= point %a, difference %a, divisor %a, residue %a@."
              QQ.pp (Linear.evaluate_affine m glb_term) QQ.pp (m dim)
              QQ.pp difference QQ.pp (QQ.of_zz divisor) QQ.pp residue;
-           logf "glb term %a@." V.pp glb_term;
-           logf "selected term %a, <= %a:1@." V.pp solution pp_dim dim;
+           logf ~level:`trace "glb term %a@." V.pp glb_term;
+           logf ~level:`trace "selected term %a, <= %a:1@." V.pp solution pp_dim dim;
            let () = match classified.lub_row with
              | None -> ()
              | Some (_, kind, row) -> BatEnum.push classified.others (kind, row)
@@ -425,7 +425,8 @@ end = struct
                match T.add v image forward with
                | Some forward' -> forward'
                | None ->
-                  logf "force_transform forward: %a is already in the domain of %a@."
+                  logf ~level:`always
+                    "force_transform forward: %a is already in the domain of %a@."
                     Linear.QQVector.pp v pp_linear_map forward;
                  failwith "force_transform: forward extension conflict"
              in
@@ -433,7 +434,8 @@ end = struct
                match T.add image v inverse with
                | Some backward' -> backward'
                | None ->
-                  logf "force_transform inverse: %a is already in the domain of %a@."
+                  logf ~level:`always
+                    "force_transform inverse: %a is already in the domain of %a@."
                     Linear.QQVector.pp image pp_linear_map inverse;
                   failwith "force_transform: inverse extension conflict"
              in
@@ -462,7 +464,6 @@ end = struct
 
   let lattice_polyhedron_of p l =
     let basis = IntLattice.basis l in
-    logf "Lattice basis: %a@." IntLattice.pp l;
     let (forward_l, inverse_l, num_dimensions_l) =
       List.fold_left (fun (forward, inverse, index) v ->
           let f = T.may_add v (V.of_term QQ.one index) forward in
@@ -475,7 +476,7 @@ end = struct
         , 0)
         basis
     in
-    logf "Transform computed so far is %a@."
+    logf ~level:`trace "Transform computed so far is %a@."
       (fun fmt map ->
         BatEnum.iter (fun (s, t) ->
             Format.fprintf fmt "%a --> %a" V.pp s V.pp t
@@ -483,13 +484,14 @@ end = struct
           (T.enum map)
       )
       forward_l;
-    logf "Forcing transform on polyhedron %a@." (Polyhedron.pp pp_dim) p;
+    logf ~level:`trace
+      "Forcing transform on polyhedron %a@." (Polyhedron.pp pp_dim) p;
     let (_forward, inverse, _num_dimensions, q) =
       force_transform (forward_l, inverse_l, num_dimensions_l) p
     in
-    logf "Forced transform, obtained %a@." (Polyhedron.pp pp_dim) q;
+    logf ~level:`trace "Forced transform, obtained %a@." (Polyhedron.pp pp_dim) q;
     let hull = Polyhedron.integer_hull `GomoryChvatal q in
-    logf "standard integer hull is %a@." (Polyhedron.pp pp_dim) hull;
+    logf ~level:`trace "standard integer hull is %a@." (Polyhedron.pp pp_dim) hull;
     transform inverse hull
 
 end
@@ -532,25 +534,25 @@ module CooperProjection (Target : Target)
       let symbol_dimensions = (0 --^ ambient_dimension)
                               /@ V.of_term QQ.one
                               |> BatList.of_enum in
-      logf ~level:`trace "symbol dimensions: %a ambient dimesion:%d@."
+      logf "symbol dimensions: %a ambient dimension:%d@."
         (Format.pp_print_list V.pp) symbol_dimensions
         ambient_dimension;
-      logf ~level:`trace "lattice constraints: %a@." (Format.pp_print_list V.pp)
+      logf "lattice constraints: %a@." (Format.pp_print_list V.pp)
         lattice_constraints;
       IntLattice.hermitize (lattice_constraints @ symbol_dimensions)
     in
-    logf ~level:`trace "Polyhedron to project: %a@." (Polyhedron.pp pp_dim) p;
-    logf ~level:`trace "Lattice: %a@." IntLattice.pp l;
-    logf ~level:`trace "Dimensions to eliminate: %a@."
+    logf "Polyhedron to project: %a@." (Polyhedron.pp pp_dim) p;
+    logf "Lattice: %a@." IntLattice.pp l;
+    logf "Dimensions to eliminate: %a@."
       (Format.pp_print_list Format.pp_print_int) dimensions_to_eliminate;
     let (projected_p, projected_l) =
       IntegerMbp.local_project_cooper (valuation interp)
         ~eliminate:dimensions_to_eliminate (p, l) in
-    logf ~level:`trace "Polyhedron after projection: %a@."
+    logf "Polyhedron after projection: %a@."
       (Polyhedron.pp pp_dim) projected_p;
-    logf ~level:`trace "Lattice after projection: %a@."
+    logf "Lattice after projection: %a@."
       IntLattice.pp projected_l;
-    logf ~level:`trace "Computing lattice polyhedron...@;";
+    logf "Computing lattice polyhedron...@;";
     let hull = LatticePolyhedron.lattice_polyhedron_of projected_p projected_l in
     logf "Computed lattice polyhedron: %a@." (P.pp pp_dim) hull;
     ( DD.of_constraints_closed ambient_dimension (P.enum_constraints hull)
@@ -583,18 +585,18 @@ end = struct
   let abstract formula =
     let state = init formula in
     let rec go bound n state =
-      logf ~level:`trace "Iteration %d@." n;
+      logf "Iteration %d@." n;
       match Smt.Solver.get_model state.solver with
       | `Sat interp ->
          let rho = A.abstract formula interp in
-         logf ~level:`trace "abstract: abstracted, now joining";
+         logf "abstract: abstracted, now joining";
          let joined = A.join state.value rho in
-         logf ~level:`trace "abstract: joining rho %a with %a to get %a@."
+         logf "abstract: joining rho %a with %a to get %a@."
            A.pp rho
            A.pp state.value
            A.pp joined;
          let formula = A.concretize joined in
-         logf ~level:`trace "abstract: new constraint to negate: %a@."
+         logf "abstract: new constraint to negate: %a@."
            (Syntax.pp_smtlib2 A.context) formula;
          Smt.Solver.add state.solver
            [Syntax.mk_not A.context formula];

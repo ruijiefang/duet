@@ -134,10 +134,10 @@ end = struct
     let image v = LM.apply map_to_fresh_dims v |> BatOption.get in
     match atom with
     | `ArithComparison (`Lt, t1, t2) ->
-       (* `Ineq (`Pos, V.sub (linearize context t2) (linearize context t1)) *)
-       (* Silently convert to non-strict inequality *)
-       logf ~level:`always "Warning: Silently converting > to >= 0@.";
-       `Ineq (`Nonneg, image (V.sub (linearize t2) (linearize t1)))
+       (* Assuming that all symbols are integer-valued *)
+       let v = V.sub (linearize t2) (linearize t1) in
+       let v' = V.sub v (V.of_term (QQ.of_zz (V.common_denominator v)) Linear.const_dim) in
+       `Ineq (`Nonneg, image v')
     | `ArithComparison (`Leq, t1, t2) ->
        `Ineq (`Nonneg, image (V.sub (linearize t2) (linearize t1)))
     | `ArithComparison (`Eq, t1, t2) ->

@@ -136,7 +136,8 @@ end = struct
     | `ArithComparison (`Lt, t1, t2) ->
        (* Assuming that all symbols are integer-valued *)
        let v = V.sub (linearize t2) (linearize t1) in
-       let v' = V.sub v (V.of_term (QQ.of_zz (V.common_denominator v)) Linear.const_dim) in
+       let offset = QQ.inverse (QQ.of_zz (V.common_denominator v)) in
+       let v' = V.sub v (V.of_term offset Linear.const_dim) in
        `Ineq (`Nonneg, image v')
     | `ArithComparison (`Leq, t1, t2) ->
        `Ineq (`Nonneg, image (V.sub (linearize t2) (linearize t1)))
@@ -476,14 +477,7 @@ end = struct
         , 0)
         basis
     in
-    logf ~level:`trace "Transform computed so far is %a@."
-      (fun fmt map ->
-        BatEnum.iter (fun (s, t) ->
-            Format.fprintf fmt "%a --> %a" V.pp s V.pp t
-          )
-          (T.enum map)
-      )
-      forward_l;
+    logf ~level:`trace "Transform computed so far is %a@." pp_linear_map forward_l;
     logf ~level:`trace
       "Forcing transform on polyhedron %a@." (Polyhedron.pp pp_dim) p;
     let (_forward, inverse, _num_dimensions, q) =

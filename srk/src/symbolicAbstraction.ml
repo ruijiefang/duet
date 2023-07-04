@@ -609,7 +609,7 @@ module IntHullProjection (C : Context) (S : PreservedSymbols)
       Util.constraints_of_implicant context
         (Interpretation.select_implicant interp formula) in
     let p = DD.of_constraints_closed num_dims (BatList.enum inequalities) in
-    let hull = P.integer_hull_dd num_dims p in
+    let hull = DD.integer_hull p in
     let codims = BatList.fold_left (Util.collect_non_constant_dimensions snd)
                    IntSet.empty inequalities
                  |> (fun s -> IntSet.diff s dimensions)

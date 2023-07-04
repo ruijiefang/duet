@@ -232,9 +232,8 @@ let lincons_of_atom srk cs env atom =
       (linexpr_of_vec
          (V.add (vec_of_term y) (V.negate (vec_of_term x))))
       Lincons0.EQ
-  | `Literal (_, _)
-    | `IsInt _
-    | `ArrEq _ -> assert false
+  | `Literal (_, _) 
+  | `ArrEq _ -> assert false
 
 let meet_atoms wedge atoms =
   (* Ensure that the coordinate system admits each atom *)
@@ -243,9 +242,8 @@ let meet_atoms wedge atoms =
       | `ArithComparison (_, x, y) ->
         CS.admit_term wedge.cs x;
         CS.admit_term wedge.cs y
-      | `Literal (_, _)
-        | `IsInt _
-        | `ArrEq _ -> assert false);
+      | `Literal (_, _) 
+      | `ArrEq _ -> assert false);
   update_env wedge;
   let abstract =
     atoms
@@ -1311,9 +1309,8 @@ let of_atoms srk atoms =
     | `ArithComparison (_, x, y) ->
       CS.admit_term cs x;
       CS.admit_term cs y
-    | `Literal (_, _)
-      | `IsInt _
-      | `ArrEq _ -> assert false
+    | `Literal (_, _) 
+    | `ArrEq _ -> assert false
   in
   List.iter register_terms atoms;
   let env = mk_env cs in
@@ -1354,9 +1351,8 @@ let common_cs wedge wedge' =
     | `ArithComparison (_, x, y) ->
       CS.admit_term cs x;
       CS.admit_term cs y
-    | `Literal (_, _)
-      | `IsInt _
-      | `ArrEq _ -> assert false
+    | `Literal (_, _) 
+    | `ArrEq _ -> assert false
   in
   let atoms = to_atoms wedge in
   let atoms' = to_atoms wedge' in

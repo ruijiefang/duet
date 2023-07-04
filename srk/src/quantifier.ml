@@ -191,7 +191,6 @@ let mbp_virtual_term srk interp x atoms =
   let get_vt atom =
     match Interpretation.destruct_atom srk atom with
     | `Literal (_, _) -> None
-    | `IsInt _ -> None
     | `ArrEq _ -> None
     | `ArithComparison (op, s, t) ->
       let t =
@@ -373,12 +372,11 @@ let simplify_atom srk op s t =
 let is_presburger_atom srk atom =
   try
     begin match Interpretation.destruct_atom srk atom with
-    | `Literal (_, _) -> true
-    | `IsInt _ -> false
-    | `ArrEq _ -> false
-    | `ArithComparison (op, s, t) ->
-       ignore (simplify_atom srk op s t);
-       true
+      | `Literal (_, _) -> true
+      | `ArrEq _ -> false
+      | `ArithComparison (op, s, t) ->
+        ignore (simplify_atom srk op s t);
+        true
     end
   with _ -> false
 
@@ -699,8 +697,7 @@ let select_real_term srk interp x atoms =
   let bound_of_atom atom =
     match Interpretation.destruct_atom srk atom with
     | `Literal (_, _)
-      | `IsInt _
-      | `ArrEq _ -> (None, None)
+    | `ArrEq _ -> (None, None)
     | `ArithComparison (op, s, t) ->
       let t = V.add (linterm_of srk s) (V.negate (linterm_of srk t)) in
 
@@ -790,7 +787,6 @@ let select_int_term srk interp x atoms =
       (fun delta atom ->
          match Interpretation.destruct_atom srk atom with
          | `Literal (_, _) -> delta
-         | `IsInt _ -> delta
          | `ArrEq _ -> delta
          | `ArithComparison (op, s, t) ->
            match simplify_atom srk op s t with
@@ -817,7 +813,6 @@ let select_int_term srk interp x atoms =
   let bound_of_atom atom =
     match Interpretation.destruct_atom srk atom with
     | `Literal (_, _) -> `None
-    | `IsInt _ -> `None
     | `ArrEq _ -> `None
     | `ArithComparison (op, s, t) ->
       match simplify_atom srk op s t with
@@ -2177,7 +2172,6 @@ let cover_virtual_term srk interp x atoms =
   let get_equal_term atom =
     match Interpretation.destruct_atom srk atom with
     | `Literal (_, _) -> None
-    | `IsInt _ -> None
     | `ArrEq _ -> None
     | `ArithComparison (`Lt, _, _) -> None
     | `ArithComparison (_, s, t) ->
@@ -2200,7 +2194,6 @@ let cover_virtual_term srk interp x atoms =
   let get_vt atom =
     match Interpretation.destruct_atom srk atom with
     | `Literal (_, _) -> None
-    | `IsInt _ -> None
     | `ArrEq _ -> None
     | `ArithComparison (_, s, t) ->
       match SrkSimplify.isolate_linear srk x (mk_sub srk s t) with

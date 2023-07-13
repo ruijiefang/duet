@@ -17,6 +17,11 @@ val basis : t -> Linear.QQVector.t list
 (** [member v t] = true iff v is a member of the lattice L. *)
 val member : Linear.QQVector.t -> t -> bool
 
+(** The highest dimension that appears in some generator, if the lattice is non-empty,
+    and [Linear.const_dim] otherwise.
+ *)
+val max_dim : t -> Linear.QQVector.dim
+
 (** [project p t] computes the projection of the lattice onto the dimensions
     marked true by [p].
 *)

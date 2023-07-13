@@ -37,6 +37,8 @@ val of_formula : ?admit:bool -> 'a CoordinateSystem.t -> 'a formula -> t
 
 val of_constraints : (constraint_kind * V.t) BatEnum.t -> t
 
+val max_constrained_dim : t -> Linear.QQVector.dim
+
 (** Inverse of [of_formula] *)
 val to_formula : 'a CoordinateSystem.t -> t -> 'a formula
 

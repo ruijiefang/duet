@@ -43,6 +43,10 @@ let zzify v =
     v
     Linear.ZZVector.zero
 
+let max_dim t = match t with
+  | ZeroLattice -> Linear.const_dim
+  | Lattice t -> SrkUtil.Int.Set.max_elt t.dimensions
+
 let fold_matrix
     (rowf : Linear.QQVector.dim -> QQ.t -> 'a -> 'a)
     (row_init : 'a)

@@ -18,7 +18,7 @@ let map_polyhedron map p =
 
 let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
 
-(* Compute the map [f] that sends [l] to a space where [f(l)] is the standard 
+(* Compute the map [f] that sends [l] to a space where [f(l)] is the standard
    lattice. *)
 let make_map l =
   let basis = IntLattice.basis l in
@@ -33,7 +33,7 @@ let make_map l =
   let (forward, inverse) = BatList.fold_lefti adjoin (map_one, map_one) basis in
   (forward, inverse)
 
-let lattice_polyhedron_of p l =
+let _lattice_hull_full_rank p l =
   let (forward, inverse) = make_map l in
   let q = map_polyhedron forward p in
   logf ~level:`trace "Polyhedron in %a@." (Polyhedron.pp pp_dim) q;
@@ -41,10 +41,58 @@ let lattice_polyhedron_of p l =
   logf ~level:`trace "standard integer hull is %a@." (Polyhedron.pp pp_dim) hull;
   map_polyhedron inverse hull
 
+let lattice_hull p l =
+  let active_polyhedral_dimensions =
+    BatEnum.fold (fun all_dims (_, v) ->
+        BatEnum.fold (fun dims (_, dim) ->
+            if dim <> Linear.const_dim then dim :: dims else dims)
+          all_dims
+          (V.enum v))
+      []
+      (Polyhedron.enum_constraints p)
+  in
+  let lattice_basis = IntLattice.basis l in
+  let rank = List.length lattice_basis in
+  let max_dim = Int.max (Polyhedron.max_constrained_dim p)
+                  (IntLattice.max_dim l) in
+  let (preimage_constraints, forward_map) =
+    let map = Array.make rank V.zero in
+    let cnstrs = BatEnum.empty () in
+    BatList.iteri (fun idx v ->
+        let fresh = max_dim + idx + 1 in
+        map.(idx) <- v;
+        BatEnum.push cnstrs
+          ( `Zero
+          , Linear.QQVector.add_term (QQ.of_int (-1)) fresh v )
+      )
+      (IntLattice.basis l);
+    let forward_map v =
+      BatEnum.fold
+        (fun image (r, dim) ->
+          let v = map.(dim - max_dim - 1) in
+          V.add image (V.scalar_mul r v)
+        )
+        V.zero
+        (V.enum v)
+    in
+    (Polyhedron.of_constraints cnstrs, forward_map)
+  in
+  let preimage = Polyhedron.meet p preimage_constraints
+                 |> Polyhedron.project active_polyhedral_dimensions in
+  let std_hull = Polyhedron.integer_hull `GomoryChvatal preimage in
+  let hull =
+    let image = BatEnum.empty () in
+    BatEnum.iter (fun (ckind, v) ->
+        BatEnum.push image (ckind, forward_map v))
+      (Polyhedron.enum_constraints std_hull);
+    Polyhedron.of_constraints image
+  in
+  hull
+
 module ModelBasedProjection : sig
 
   val local_project_cooper :
-    (int -> QQ.t) -> eliminate:(int list) ->
+    (int -> [`Int | `Frac]) -> (int -> QQ.t) -> eliminate:(int list) ->
     Polyhedron.t * IntLattice.t -> Polyhedron.t * IntLattice.t
 
 end = struct
@@ -120,7 +168,11 @@ end = struct
 
   let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
 
-  let local_project_cooper m ~eliminate (p, l) =
+  (* Local projection under the assumption that all variables are 
+     integer-valued. If the assumption doesn't hold, local projection may not 
+     be image-finite.
+   *)
+  let _pure_local_project_cooper m ~eliminate (p, l) =
     BatList.fold_left (fun (p, l) dim ->
         let (classified, has_upper_bound) =
           classify_constraints m dim (P.enum_constraints p) in
@@ -163,6 +215,53 @@ end = struct
           (new_p, new_l)
       ) (p, l) eliminate
 
+  let local_project_cooper typ_of m ~eliminate (p, l) =
+    BatList.fold_left (fun (p, l) dim ->
+        let (classified, has_upper_bound) =
+          classify_constraints m dim (P.enum_constraints p) in
+        if not (has_upper_bound) || classified.glb_row = None then
+          ( P.of_constraints classified.irrelevant
+          , IntLattice.project (fun dim' -> dim <> dim') l )
+        else
+          let (_, ckind, glb_row) = Option.get classified.glb_row in
+          let ((_ckind, cut), others, (pconds, lconds)) =
+            LiraVector.cutting_plane typ_of dim (ckind, glb_row) m
+          in
+          let glb_term = get_bound dim cut in
+          let divisor =
+            BatList.fold_left
+              (fun m v ->
+                let coeff = Linear.QQVector.coeff dim v in
+                if QQ.equal coeff QQ.zero then m
+                else ZZ.lcm m (QQ.denominator coeff))
+              ZZ.one
+              (L.basis l)
+          in
+          let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
+          let residue = QQ.modulo difference (QQ.of_zz divisor) in
+          let solution = V.add_term residue Linear.const_dim glb_term in
+          logf ~level:`trace "glb value %a <= point %a, difference %a, divisor %a, residue %a@."
+            QQ.pp (Linear.evaluate_affine m glb_term) QQ.pp (m dim)
+            QQ.pp difference QQ.pp (QQ.of_zz divisor) QQ.pp residue;
+          logf ~level:`trace "glb term %a@." V.pp glb_term;
+          logf ~level:`trace "selected term %a, <= %a:1@." V.pp solution pp_dim dim;
+          let open BatEnum in
+          let new_p =
+            classified.relevant
+            /@ (fun (kind, a) ->
+              (kind, substitute_term solution dim a))
+            |> BatEnum.append (BatList.enum (others @ pconds))
+            |> BatEnum.append classified.irrelevant
+            |> P.of_constraints in
+          let new_l =
+            List.map (substitute_term solution dim) (IntLattice.basis l)
+            |> List.rev_append lconds
+            |> IntLattice.hermitize
+          in
+          (new_p, new_l)
+      ) (p, l) eliminate
+
+
 end
 
-let local_project_cooper = ModelBasedProjection.local_project_cooper
+let local_project = ModelBasedProjection.local_project_cooper

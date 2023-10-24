@@ -5,263 +5,297 @@ module T = Linear.MakeLinearMap(QQ)(Int)(V)(V)
 
 include Log.Make(struct let name = "srk.latticePolyhedron" end)
 
-let map_polyhedron map p =
-  let q = BatEnum.empty () in
-  BatEnum.iter (fun (kind, v) ->
-      match T.apply map v with
-      | None -> failwith "lattice is not full-dimensional"
-      | Some image ->
-         BatEnum.push q (kind, image)
-    )
-    (P.enum_constraints p);
-  P.of_constraints q
+module MixedHull: sig
 
-let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
+  val mixed_lattice_hull:
+    'a Syntax.context -> Polyhedron.t -> IntLattice.t -> DD.closed DD.t
+  
+end = struct
 
-(* Compute the map [f] that sends [l] to a space where [f(l)] is the standard
-   lattice. *)
-let make_map l =
-  let basis = IntLattice.basis l in
-  let map_one =
-    let one = V.of_term QQ.one Linear.const_dim in
-    T.may_add one one T.empty in
-  let adjoin (f, b) fresh_dim v =
-    let f' = T.may_add v (V.of_term QQ.one fresh_dim) f in
-    let b' = T.may_add (V.of_term QQ.one fresh_dim) v b in
-    (f', b')
-  in
-  let (forward, inverse) = BatList.fold_lefti adjoin (map_one, map_one) basis in
-  (forward, inverse)
+  let to_inequality srk (ckind, v) =
+    let zero = Syntax.mk_zero srk in
+    let op = match ckind with
+      | `Zero -> Syntax.mk_eq srk zero
+      | `Nonneg -> Syntax.mk_leq srk zero
+      | `Pos -> Syntax.mk_lt srk zero
+    in op (Linear.of_linterm srk v)
+     
+  let translate_constraint var_to_ray_var v =
+    BatEnum.fold (fun v (coeff, dim) ->
+        if dim <> Linear.const_dim then
+          Linear.QQVector.add_term
+            coeff
+            (SrkUtil.Int.Map.find dim var_to_ray_var)
+            v
+        else
+          v
+      )
+      Linear.QQVector.zero
+      (Linear.QQVector.enum v)
 
-let _lattice_hull_full_rank p l =
-  let (forward, inverse) = make_map l in
-  let q = map_polyhedron forward p in
-  logf ~level:`trace "Polyhedron in %a@." (Polyhedron.pp pp_dim) q;
-  let hull = Polyhedron.integer_hull `GomoryChvatal q in
-  logf ~level:`trace "standard integer hull is %a@." (Polyhedron.pp pp_dim) hull;
-  map_polyhedron inverse hull
-
-let lattice_hull p l =
-  let active_polyhedral_dimensions =
-    BatEnum.fold (fun all_dims (_, v) ->
-        BatEnum.fold (fun dims (_, dim) ->
-            if dim <> Linear.const_dim then dim :: dims else dims)
-          all_dims
-          (V.enum v))
-      []
-      (Polyhedron.enum_constraints p)
-  in
-  let lattice_basis = IntLattice.basis l in
-  let rank = List.length lattice_basis in
-  let max_dim = Int.max (Polyhedron.max_constrained_dim p)
-                  (IntLattice.max_dim l) in
-  let (preimage_constraints, forward_map) =
-    let map = Array.make rank V.zero in
-    let cnstrs = BatEnum.empty () in
-    BatList.iteri (fun idx v ->
-        let fresh = max_dim + idx + 1 in
-        map.(idx) <- v;
-        BatEnum.push cnstrs
-          ( `Zero
-          , Linear.QQVector.add_term (QQ.of_int (-1)) fresh v )
+  let recession_extension var_to_ray_var p =
+    let system = Polyhedron.enum_constraints p in
+    BatEnum.iter (fun (ckind, v) ->
+        let recession_ineq = match ckind with
+          | `Pos -> `Nonneg
+          | _ -> ckind in
+        let ray_constraint = translate_constraint var_to_ray_var v in
+        let subspace_point_constraint = Linear.QQVector.sub v ray_constraint in
+        BatEnum.push system (recession_ineq, ray_constraint);
+        BatEnum.push system (ckind, subspace_point_constraint))
+      (Polyhedron.enum_constraints p);
+    Polyhedron.of_constraints system
+    
+  let subspace_restriction srk var_to_ray_var l m =
+    let constraints = BatEnum.empty () in
+    BatList.iter
+      (fun v ->
+        let lhs =
+          Linear.QQVector.sub v (translate_constraint var_to_ray_var v) in
+        let rhs =
+          Interpretation.evaluate_term m (Linear.of_linterm srk v) in
+        let subspace_constraint =
+          Linear.QQVector.add_term (QQ.negate rhs) Linear.const_dim lhs
+        in
+        BatEnum.push constraints (`Zero, subspace_constraint)
       )
       (IntLattice.basis l);
-    let forward_map v =
-      BatEnum.fold
-        (fun image (r, dim) ->
-          let v = map.(dim - max_dim - 1) in
-          V.add image (V.scalar_mul r v)
-        )
-        V.zero
-        (V.enum v)
+    Polyhedron.of_constraints constraints
+
+  let non_constant_dimensions p =
+    let dimensions =
+      BatEnum.fold (fun dims (_kind, v) ->
+          BatEnum.fold (fun dims (_, dim) ->
+              SrkUtil.Int.Set.add dim dims)
+            dims
+            (Linear.QQVector.enum v))
+        SrkUtil.Int.Set.empty
+        (Polyhedron.enum_constraints p)
     in
-    (Polyhedron.of_constraints cnstrs, forward_map)
-  in
-  let preimage = Polyhedron.meet p preimage_constraints
-                 |> Polyhedron.project active_polyhedral_dimensions in
-  let std_hull = Polyhedron.integer_hull `GomoryChvatal preimage in
-  let hull =
-    let image = BatEnum.empty () in
-    BatEnum.iter (fun (ckind, v) ->
-        BatEnum.push image (ckind, forward_map v))
-      (Polyhedron.enum_constraints std_hull);
-    Polyhedron.of_constraints image
-  in
-  hull
+    SrkUtil.Int.Set.remove Linear.const_dim dimensions
+    
+  let mixed_lattice_hull srk p l =
+    let p_variables = non_constant_dimensions p in
+    let var_to_ray_var =
+      BatEnum.fold
+        (fun ray_dims dim ->
+          (SrkUtil.Int.Map.add
+             dim
+             (Syntax.int_of_symbol (Syntax.mk_symbol srk `TyReal))
+             ray_dims))
+        SrkUtil.Int.Map.empty
+        (SrkUtil.Int.Set.enum p_variables)
+    in
+    let pre_abstraction = recession_extension var_to_ray_var p in
+    let max_dim = Polyhedron.max_constrained_dim p in
+    let solver = Smt.mk_solver srk in
+    let lattice_constraints =
+      List.map (fun v -> Syntax.mk_is_int srk (Linear.of_linterm srk v))
+        (IntLattice.basis l) in
+    let polyhedron_constraints =
+      BatEnum.fold
+        (fun l (ckind, v) -> to_inequality srk (ckind, v) :: l)
+        []
+        (Polyhedron.enum_constraints p)
+    in
+    let () = Smt.Solver.add solver
+               (polyhedron_constraints @ lattice_constraints)
+    in
+    let rec go curr m =
+      let abstraction =
+        Polyhedron.meet pre_abstraction (subspace_restriction srk var_to_ray_var l m)
+        |> Polyhedron.local_project
+             (fun dim -> Interpretation.evaluate_term m
+                           (Syntax.mk_const srk (Syntax.symbol_of_int dim)))
+             (BatList.of_enum (SrkUtil.Int.Map.values var_to_ray_var))
+        |> Polyhedron.dd_of max_dim
+      in
+      let next = DD.join curr abstraction in
+      let atoms_of_abstraction =
+        BatEnum.fold
+          (fun l (ckind, v) -> to_inequality srk (ckind, v) :: l)
+          []
+          (DD.enum_constraints abstraction)
+      in
+      Smt.Solver.add solver
+        [Syntax.mk_not srk (Syntax.mk_and srk atoms_of_abstraction)];
+      match Smt.Solver.get_model solver with
+      | `Sat m -> go next m
+      | `Unsat -> curr
+      | `Unknown -> failwith "LatticePolyhedron: Solver cannot decide"
+    in
+    match Smt.Solver.get_model solver with
+    | `Sat m -> go (DD.of_constraints_closed max_dim (BatEnum.empty ())) m
+    | `Unsat -> DD.of_constraints_closed max_dim (BatEnum.empty ())
+    | `Unknown -> failwith "LatticePolyhedron: Solver cannot decide"
 
-module ModelBasedProjection : sig
+end
+      
+module CooperProjection : sig
 
-  val local_project_cooper :
-    (int -> [`Int | `Frac]) -> (int -> QQ.t) -> eliminate:(int list) ->
-    Polyhedron.t * IntLattice.t -> Polyhedron.t * IntLattice.t
+  val local_project_cooper:
+    (int -> QQ.t) -> eliminate: int list ->
+    ?round_lower_bound: ((int -> QQ.t) -> P.constraint_kind -> V.t ->
+                         V.t * (P.constraint_kind * V.t) list * V.t list) ->
+    Polyhedron.t -> IntLattice.t ->
+    Polyhedron.t * IntLattice.t
 
 end = struct
 
-  let normalize a dim =
-    let c = V.coeff dim a in
-    if QQ.equal c QQ.zero then a
-    else V.scalar_mul (QQ.inverse (QQ.abs c)) a
+  module V = Linear.QQVector
+  module P = Polyhedron
 
-  let get_bound dim v =
-    let drop_dim v = V.pivot dim v |> snd in
-    if QQ.lt (V.coeff dim v) Q.zero then
-      normalize v dim |> drop_dim
-    else if QQ.lt Q.zero (V.coeff dim v) then
-      normalize v dim |> drop_dim |> V.negate
-    else
-      failwith "Vector is 0 in the dimension"
-
-  let evaluate_bound dim v m =
-    Linear.evaluate_affine m (get_bound dim v)
+  let lower_bound dim v =
+    let (coeff, v') = V.pivot dim v in
+    assert (QQ.lt QQ.zero coeff);
+    V.scalar_mul (QQ.negate (QQ.inverse coeff)) v'
 
   let substitute_term t dim v =
     let (c, v') = V.pivot dim v in
     V.add v' (V.scalar_mul c t)
 
-  (* A classified system of constraints with respect to a chosen dimension x and
-   a model m contains:
-   - The row a^T Y + cx + b >= 0 (or = 0) that gives the glb, if one exists,
-     where c is positive
-   - All rows that involve x
-   - All rows that don't involve x
-   *)
-  type classified =
-    {
-      glb_row : (QQ.t * P.constraint_kind * V.t) option
-    ; relevant : (P.constraint_kind * V.t) BatEnum.t
-    ; irrelevant : (P.constraint_kind * V.t) BatEnum.t
-    }
-
   let classify_constraints m dim constraints =
-    BatEnum.fold (fun (classified, upper_bound_seen) (kind, v) ->
+    BatEnum.fold
+      (fun (glb, relevant, irrelevant, equality, has_upper_bound)
+           (cnstr_kind, v) ->
         if QQ.equal (V.coeff dim v) QQ.zero then
-          begin
-            BatEnum.push classified.irrelevant (kind, v);
-            (classified, upper_bound_seen)
-          end
+          (glb, relevant, (cnstr_kind, v) :: irrelevant,
+           equality, has_upper_bound)
         else if QQ.lt (V.coeff dim v) QQ.zero then
-          begin
-            BatEnum.push classified.relevant (kind, v);
-            (classified, true)
+          begin match cnstr_kind with
+          | `Zero ->
+             (glb, (cnstr_kind, v) :: relevant, irrelevant,
+              Some v, has_upper_bound)
+          | `Nonneg | `Pos ->
+             (glb, (cnstr_kind, v) :: relevant, irrelevant, equality, true)
           end
         else
-          begin
-            BatEnum.push classified.relevant (kind, v);
-            let value = evaluate_bound dim v m in
-            match classified.glb_row with
-            | None ->
-               ({ classified with glb_row = Some (value, kind, v) }, upper_bound_seen)
-            | Some (curr_best, curr_kind, _) ->
-               if QQ.lt curr_best value ||
-                    (QQ.equal curr_best value && curr_kind = `Nonneg && kind = `Pos) then
-                 ({ classified with glb_row = Some (value, kind, v) }, upper_bound_seen)
-               else
-                 (classified, upper_bound_seen)
+          begin match cnstr_kind with
+          | `Zero ->
+             (glb, (cnstr_kind, v) :: relevant, irrelevant, Some v, has_upper_bound)
+          | `Nonneg | `Pos ->
+             let rounded_value =
+               let value = Linear.evaluate_affine m (lower_bound dim v) in
+               match cnstr_kind with
+               | `Nonneg ->
+                  QQ.ceiling value
+               | `Pos ->
+                  ZZ.add (QQ.floor value) ZZ.one
+               | `Zero ->
+                  assert false
+             in
+             begin match glb with
+             | None ->
+                (Some (rounded_value, cnstr_kind, v),
+                 (cnstr_kind, v) :: relevant, irrelevant,
+                 equality, has_upper_bound)
+             | Some (curr_rounded_value, _, _) ->
+                if ZZ.lt curr_rounded_value rounded_value
+                then
+                  (Some (rounded_value, cnstr_kind, v),
+                   (cnstr_kind, v) :: relevant, irrelevant,
+                   equality, has_upper_bound)
+                else
+                  (glb, (cnstr_kind, v) :: relevant, irrelevant, equality,
+                   has_upper_bound)
+             end
           end
       )
-      ({
-          glb_row = None
-        ; relevant = BatEnum.empty ()
-        ; irrelevant = BatEnum.empty ()
-        }, false)
+      (None, [], [], None, false)
       constraints
 
-  let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
+  let local_project_one m dim_to_elim ~round_lower_bound polyhedron lattice =
+    let (glb, relevant, irrelevant, equality, has_upper_bound) =
+      classify_constraints m dim_to_elim (P.enum_constraints polyhedron) in
+    if Option.is_some equality then
+      let v = Option.get equality in
+      let (coeff, v') = V.pivot dim_to_elim v in
+      let solution = V.scalar_mul (QQ.negate (QQ.inverse coeff)) v' in
+      let new_p =
+        let cnstrs = BatList.enum irrelevant in
+        List.iter (fun (cnstr_kind, v) ->
+            BatEnum.push cnstrs (cnstr_kind, substitute_term solution dim_to_elim v))
+          relevant;
+        P.of_constraints cnstrs
+      in
+      let new_l =
+        List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
+        |> IntLattice.hermitize
+      in
+      (new_p, new_l)
+    else if not has_upper_bound || glb = None then
+      ( P.of_constraints (BatList.enum irrelevant)
+      , IntLattice.project (fun dim' -> dim' <> dim_to_elim) lattice)
+    else
+      let (rounded_value, cnstr_kind, glb_v) = Option.get glb in
+      let modulus = BatList.fold_left
+                      (fun m v ->
+                        let coeff = Linear.QQVector.coeff dim_to_elim v in
+                        if QQ.equal coeff QQ.zero then m
+                        else QQ.lcm m (QQ.inverse coeff))
+                      QQ.one
+                      (IntLattice.basis lattice)
+      in
+      let (rounded_term, inequalities, integrality) =
+        round_lower_bound m cnstr_kind (lower_bound dim_to_elim glb_v) in
+      let delta = QQ.modulo (QQ.sub (m dim_to_elim) (QQ.of_zz rounded_value)) modulus in
+      let solution = Linear.QQVector.add_term delta Linear.const_dim rounded_term in
+      let new_p =
+        let cnstrs = BatList.enum irrelevant in
+        List.iter (fun (kind, v) -> BatEnum.push cnstrs (kind, v))
+          inequalities;
+        List.iter (fun (cnstr_kind, v) ->
+            BatEnum.push cnstrs
+              (cnstr_kind, substitute_term solution dim_to_elim v))
+          relevant;
+        P.of_constraints cnstrs
+      in
+      let new_l =
+        List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
+        |> List.rev_append integrality
+        |> IntLattice.hermitize
+      in
+      (new_p, new_l)
 
-  (* Local projection under the assumption that all variables are 
-     integer-valued. If the assumption doesn't hold, local projection may not 
-     be image-finite.
-   *)
-  let _pure_local_project_cooper m ~eliminate (p, l) =
-    BatList.fold_left (fun (p, l) dim ->
-        let (classified, has_upper_bound) =
-          classify_constraints m dim (P.enum_constraints p) in
-        if not (has_upper_bound) || classified.glb_row = None then
-          ( P.of_constraints classified.irrelevant
-          , IntLattice.project (fun dim' -> dim <> dim') l )
-        else
-          let glb_term =
-            let (_, _, glb_row) = Option.get classified.glb_row in
-            get_bound dim glb_row
-          in
-          let divisor =
-            BatList.fold_left
-              (fun m v ->
-                let coeff = Linear.QQVector.coeff dim v in
-                if QQ.equal coeff QQ.zero then m
-                else ZZ.lcm m (QQ.denominator coeff))
-              ZZ.one
-              (L.basis l)
-          in
-          let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
-          let residue = QQ.modulo difference (QQ.of_zz divisor) in
-          let solution = V.add_term residue Linear.const_dim glb_term in
-          logf ~level:`trace "glb value %a <= point %a, difference %a, divisor %a, residue %a@."
-            QQ.pp (Linear.evaluate_affine m glb_term) QQ.pp (m dim)
-            QQ.pp difference QQ.pp (QQ.of_zz divisor) QQ.pp residue;
-          logf ~level:`trace "glb term %a@." V.pp glb_term;
-          logf ~level:`trace "selected term %a, <= %a:1@." V.pp solution pp_dim dim;
-          let open BatEnum in
-          let new_p =
-            classified.relevant
-            /@ (fun (kind, a) ->
-              (kind, substitute_term solution dim a))
-            |> BatEnum.append classified.irrelevant
-            |> P.of_constraints in
-          let new_l =
-            List.map (substitute_term solution dim) (IntLattice.basis l)
-            |> IntLattice.hermitize
-          in
-          (new_p, new_l)
-      ) (p, l) eliminate
-
-  let local_project_cooper typ_of m ~eliminate (p, l) =
-    BatList.fold_left (fun (p, l) dim ->
-        let (classified, has_upper_bound) =
-          classify_constraints m dim (P.enum_constraints p) in
-        if not (has_upper_bound) || classified.glb_row = None then
-          ( P.of_constraints classified.irrelevant
-          , IntLattice.project (fun dim' -> dim <> dim') l )
-        else
-          let (_, ckind, glb_row) = Option.get classified.glb_row in
-          let ((_ckind, cut), others, (pconds, lconds)) =
-            LiraVector.cutting_plane typ_of dim (ckind, glb_row) m
-          in
-          let glb_term = get_bound dim cut in
-          let divisor =
-            BatList.fold_left
-              (fun m v ->
-                let coeff = Linear.QQVector.coeff dim v in
-                if QQ.equal coeff QQ.zero then m
-                else ZZ.lcm m (QQ.denominator coeff))
-              ZZ.one
-              (L.basis l)
-          in
-          let difference = QQ.sub (m dim) (Linear.evaluate_affine m glb_term) in
-          let residue = QQ.modulo difference (QQ.of_zz divisor) in
-          let solution = V.add_term residue Linear.const_dim glb_term in
-          logf ~level:`trace "glb value %a <= point %a, difference %a, divisor %a, residue %a@."
-            QQ.pp (Linear.evaluate_affine m glb_term) QQ.pp (m dim)
-            QQ.pp difference QQ.pp (QQ.of_zz divisor) QQ.pp residue;
-          logf ~level:`trace "glb term %a@." V.pp glb_term;
-          logf ~level:`trace "selected term %a, <= %a:1@." V.pp solution pp_dim dim;
-          let open BatEnum in
-          let new_p =
-            classified.relevant
-            /@ (fun (kind, a) ->
-              (kind, substitute_term solution dim a))
-            |> BatEnum.append (BatList.enum (others @ pconds))
-            |> BatEnum.append classified.irrelevant
-            |> P.of_constraints in
-          let new_l =
-            List.map (substitute_term solution dim) (IntLattice.basis l)
-            |> List.rev_append lconds
-            |> IntLattice.hermitize
-          in
-          (new_p, new_l)
-      ) (p, l) eliminate
-
+  let local_project_cooper m ~eliminate
+        ?(round_lower_bound=(fun _ _ lower_bound -> (lower_bound, [], [])))
+        polyhedron lattice =
+    BatList.fold_left
+      (fun (p, l) dim_to_elim ->
+        local_project_one m dim_to_elim ~round_lower_bound  p l
+      )
+      (polyhedron, lattice)
+      eliminate
 
 end
 
-let local_project = ModelBasedProjection.local_project_cooper
+module DeprecatedPureHull = struct
+
+  let map_polyhedron map p =
+    let q = BatEnum.empty () in
+    BatEnum.iter (fun (kind, v) ->
+        match T.apply map v with
+        | None -> failwith "lattice is not full-dimensional"
+        | Some image ->
+           BatEnum.push q (kind, image)
+      )
+      (P.enum_constraints p);
+    P.of_constraints q
+
+  let pp_dim = fun fmt d -> Format.fprintf fmt "%d" d
+
+  (* Compute the map [f] that sends [l] to a space where [f(l)] is the standard
+   lattice. *)
+  let make_map l =
+    let basis = IntLattice.basis l in
+    let map_one =
+      let one = V.of_term QQ.one Linear.const_dim in
+      T.may_add one one T.empty in
+    let adjoin (f, b) fresh_dim v =
+      let f' = T.may_add v (V.of_term QQ.one fresh_dim) f in
+      let b' = T.may_add (V.of_term QQ.one fresh_dim) v b in
+      (f', b')
+    in
+    let (forward, inverse) = BatList.fold_lefti adjoin (map_one, map_one) basis in
+    (forward, inverse)
+end

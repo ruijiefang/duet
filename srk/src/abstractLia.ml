@@ -187,7 +187,8 @@ module IntHullProjection (Target : Target)
     let (inequalities, lattice_constraints) = constraints_of_implicant implicant in
     let p = P.of_constraints (BatList.enum inequalities) in
     let l = IntLattice.hermitize lattice_constraints in
-    let hull = LatticePolyhedron.lattice_polyhedron_of p l in
+    (* TODO: What should this hull be? *)
+    let hull = LatticePolyhedron.mixed_lattice_hull Target.context p l in
     let hull_dd = Polyhedron.dd_of ambient_dimension hull in
     DD.project dimensions_to_eliminate hull_dd
 
@@ -248,13 +249,15 @@ module CooperProjection (Target : Target)
       (Format.pp_print_list Format.pp_print_int) dimensions_to_eliminate;
     let (projected_p, projected_l) =
       LatticePolyhedron.local_project_cooper (valuation interp)
-        ~eliminate:dimensions_to_eliminate (p, l) in
+        ~eliminate:dimensions_to_eliminate p l in
     logf "Polyhedron after projection: %a@."
       (Polyhedron.pp pp_dim) projected_p;
     logf "Lattice after projection: %a@."
       IntLattice.pp projected_l;
     logf "Computing lattice polyhedron...@;";
-    let hull = LatticePolyhedron.lattice_polyhedron_of projected_p projected_l in
+    (* TODO: What should this hull be? *)
+    let hull = LatticePolyhedron.mixed_lattice_hull Target.context
+                 projected_p projected_l in
     logf "Computed lattice polyhedron: %a@." (P.pp pp_dim) hull;
     ( DD.of_constraints_closed ambient_dimension (P.enum_constraints hull)
     , projected_l)

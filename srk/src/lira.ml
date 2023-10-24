@@ -596,9 +596,28 @@ let local_project srk binding interp ~eliminate_original implicant =
       ~round_lower_bound:(round_lower_bound binding)
       (IntLattice.hermitize (BatList.of_enum all_ints))
   in
+  (* Convert constraints over LIRA vectors to constraints over LIRA terms
+     and drop bounds on fractions, so that we don't incur exponential
+     cost in DD conversion.
+
+     TODO: Use SMT solver to test validity of each atom to detect these
+     bounds?
+   *)
+  let poly_without_frac =
+    Polyhedron.enum_constraints poly_after_int
+    |> BatEnum.map (fun (ckind, v) ->
+           (ckind, VectorConversion.to_int_and_floor binding v))
+    |> Polyhedron.of_constraints
+  in
+  let lattice_without_frac =
+    List.map (VectorConversion.to_int_and_floor binding)
+      (IntLattice.basis lattice_after_int)
+    |> IntLattice.hermitize
+  in
   (* We have to take the L-hull here to preserve strongest consequences.
      Taking L-hull after completing local projection is not the same as
      taking the L-hull at the end of each iteration; the former can introduce
      more L-points than necessary, even when L is the standard lattice.
    *)
-  LatticePolyhedron.mixed_lattice_hull srk poly_after_int lattice_after_int
+  LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
+    lattice_without_frac

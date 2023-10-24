@@ -188,8 +188,8 @@ module IntHullProjection (Target : Target)
     let p = P.of_constraints (BatList.enum inequalities) in
     let l = IntLattice.hermitize lattice_constraints in
     (* TODO: What should this hull be? *)
-    let hull = LatticePolyhedron.mixed_lattice_hull Target.context p l in
-    let hull_dd = Polyhedron.dd_of ambient_dimension hull in
+    let hull_dd = LatticePolyhedron.mixed_lattice_hull Target.context p l in
+    (* let hull_dd = Polyhedron.dd_of ambient_dimension hull in *)
     DD.project dimensions_to_eliminate hull_dd
 
   let pp fmt p =
@@ -256,10 +256,11 @@ module CooperProjection (Target : Target)
       IntLattice.pp projected_l;
     logf "Computing lattice polyhedron...@;";
     (* TODO: What should this hull be? *)
-    let hull = LatticePolyhedron.mixed_lattice_hull Target.context
+    let hull_dd = LatticePolyhedron.mixed_lattice_hull Target.context
                  projected_p projected_l in
-    logf "Computed lattice polyhedron: %a@." (P.pp pp_dim) hull;
-    ( DD.of_constraints_closed ambient_dimension (P.enum_constraints hull)
+    (* logf "Computed lattice polyhedron: %a@." (P.pp pp_dim) hull; *)
+    ( (* DD.of_constraints_closed ambient_dimension (P.enum_constraints hull) *)
+      hull_dd
     , projected_l)
 
   let pp fmt (p, l) =

@@ -10,7 +10,8 @@
     The generators of [l] are the generators of the integrality
     constraints.
  *)
-val mixed_lattice_hull: 'a Syntax.context -> Polyhedron.t -> IntLattice.t -> Polyhedron.t
+val mixed_lattice_hull: 'a Syntax.context -> Polyhedron.t -> IntLattice.t ->
+                        DD.closed DD.t
 
 (** 
     Given (P, L) representing a linear arithmetic formula and [elim] a list of

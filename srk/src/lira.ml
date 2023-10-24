@@ -42,14 +42,15 @@ let to_inequality srk (ckind, v) =
     | `Pos -> Syntax.mk_lt srk zero
   in op (Linear.of_linterm srk v)
 
-let to_formula srk implicant =
-  let to_isint v =
-    Syntax.mk_is_int srk (Linear.of_linterm srk v)
-  in
-  List.rev_append (List.map (to_inequality srk) implicant.inequalities)
-    (List.map to_isint implicant.integral)
-
 let tru = {inequalities = []; integral = []}
+
+let bounds_for_frac_dim frac_dim =
+  let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
+  let upper_bound = (`Pos,
+                     Linear.QQVector.of_term (QQ.of_int (-1)) frac_dim
+                     |> Linear.QQVector.add_term QQ.one Linear.const_dim)
+  in
+  [lower_bound; upper_bound]
 
 module DimensionBinding : sig
 
@@ -70,9 +71,14 @@ module DimensionBinding : sig
 
   val fold: ('a -> original_dim:int -> int_dim:int -> frac_dim:int -> 'a) -> t -> 'a -> 'a
 
-  val integer_constraints: t -> Linear.QQVector.t list
+  val integer_constraints: t -> Linear.QQVector.t BatEnum.t
 
   val inequalities: t -> (Polyhedron.constraint_kind * Linear.QQVector.t) BatEnum.t
+
+  (** Produce an extended interpretation that also assigns integer and fractional
+      variables
+   *)
+  val extend_interp: t -> 'a Interpretation.interpretation -> (int -> QQ.t)
 
 end = struct
 
@@ -144,25 +150,49 @@ end = struct
         f curr ~original_dim:original_dim ~int_dim:int_dim ~frac_dim:frac_dim) t.to_int_frac initial
 
   let integer_constraints t =
-    fold (fun l ~original_dim:_ ~int_dim ~frac_dim:_ ->
-        (Linear.QQVector.of_term QQ.one int_dim) :: l)
-      t []
+    let cnstrs = BatEnum.empty () in
+    fold (fun () ~original_dim:_ ~int_dim ~frac_dim:_ ->
+        BatEnum.push cnstrs (Linear.QQVector.of_term QQ.one int_dim);
+        ()) t ();
+    cnstrs
 
   let inequalities t =
-    let bds = BatEnum.empty () in
-    fold (fun () ~original_dim:_ ~int_dim:_ ~frac_dim ->
-        let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
-        let upper_bound = (`Pos,
-                           Linear.QQVector.of_term (QQ.of_int (-1)) frac_dim
-                           |> Linear.QQVector.add_term QQ.one Linear.const_dim)
-        in
-        BatEnum.push bds lower_bound;
-        BatEnum.push bds upper_bound;
-        ())
-      t ();
-    bds
+    fold (fun bds ~original_dim:_ ~int_dim:_ ~frac_dim ->
+        BatEnum.append (BatList.enum (bounds_for_frac_dim frac_dim)) bds)
+      t (BatEnum.empty ())
+
+  let extend_interp binding interpretation x =
+    let extended_interp =
+      fold (fun curr ~original_dim ~int_dim ~frac_dim ->
+          let original_value = Interpretation.real interpretation
+                                 (Syntax.symbol_of_int original_dim) in
+          let intval = QQ.of_zz (QQ.floor original_value) in
+          Interpretation.add_real
+            (Syntax.symbol_of_int int_dim) intval curr
+          |> Interpretation.add_real (Syntax.symbol_of_int frac_dim)
+               (QQ.sub original_value intval)
+        )
+        binding
+        interpretation
+    in
+    Interpretation.real extended_interp (Syntax.symbol_of_int x)
 
 end
+
+let to_formula srk binding linear_phi =
+  let to_isint v =
+    Syntax.mk_is_int srk (Linear.of_linterm srk v)
+  in
+  let int_constraints =
+    BatEnum.append (DimensionBinding.integer_constraints binding)
+      (BatList.enum linear_phi.integral)
+    |> BatEnum.map to_isint
+  in
+  let inequalities =
+    BatEnum.append (DimensionBinding.inequalities binding)
+      (BatList.enum linear_phi.inequalities)
+    |> BatEnum.map (to_inequality srk) in
+  BatList.of_enum (BatEnum.append int_constraints inequalities)
 
 module VectorConversion : sig
 
@@ -406,20 +436,6 @@ end = struct
 
   open Syntax
 
-  let assignment_of binding interpretation x =
-    let extended_interp =
-      DimensionBinding.fold (fun curr ~original_dim ~int_dim ~frac_dim ->
-          let original_value = Interpretation.real interpretation (symbol_of_int original_dim) in
-          let intval = QQ.of_zz (QQ.floor original_value) in
-          Interpretation.add_real
-            (symbol_of_int int_dim) intval curr
-          |> Interpretation.add_real (symbol_of_int frac_dim) (QQ.sub original_value intval)
-        )
-        binding
-        interpretation
-    in
-    Interpretation.real extended_interp (symbol_of_int x)
-
   let linearize_inequality srk binding m (rel, t1, t2) =
     let (cond1, linear1) = LinearizeTerm.linearize srk binding t1 m in
     let (cond2, linear2) = LinearizeTerm.linearize srk binding t2 m in
@@ -433,7 +449,7 @@ end = struct
     (constrnt :: cond.inequalities, cond.integral)
 
   let purify_implicant srk binding interp implicant =
-    let m = assignment_of binding interp in
+    let m = DimensionBinding.extend_interp binding interp in
     let adjoin (pcons, lcons) (polyhedral_cnstrs, lattice_cnstrs) =
       ( BatList.rev_append pcons polyhedral_cnstrs
       , BatList.rev_append lcons lattice_cnstrs
@@ -512,11 +528,6 @@ let ceiling = LinearizeTerm.ceiling
 
 let lira_implicant_of_implicant = LinearizeFormula.purify_implicant
 
-let context_constraints binding =
-  { inequalities = BatList.of_enum (DimensionBinding.inequalities binding)
-  ; integral = DimensionBinding.integer_constraints binding
-  }
-
 (*
   lattice_hull P L =
   let F = { A1 x >= b1, A2 x > b2, A3 x = b3 } := P in
@@ -549,7 +560,7 @@ let round_lower_bound binding cnstr_kind lower_bound m =
   in
   (rounded_term, implicant.inequalities, implicant.integral)
 
-let local_project srk binding m ~eliminate_original p l =
+let local_project srk binding interp ~eliminate_original implicant =
   let eliminate_original = IntSet.of_list eliminate_original in
   let (ints_to_eliminate, fracs_to_eliminate) =
     fold (fun (ints_to_elim, fracs_to_elim) ~original_dim ~int_dim ~frac_dim ->
@@ -561,15 +572,17 @@ let local_project srk binding m ~eliminate_original p l =
       binding
       ([], [])
   in
-  let {inequalities = bounds; integral = ints} =
-    context_constraints binding in
+  let all_inequalities =
+    BatEnum.append
+      (DimensionBinding.inequalities binding) (BatList.enum implicant.inequalities)
+  in
+  let all_ints =
+    BatEnum.append (DimensionBinding.integer_constraints binding)
+      (BatList.enum implicant.integral) in
+  let m = DimensionBinding.extend_interp binding interp in
   let poly_after_real =
     Polyhedron.local_project m fracs_to_eliminate
-      (Polyhedron.of_constraints
-         (BatEnum.append
-            (BatList.enum bounds)
-            (Polyhedron.enum_constraints p))
-      )
+      (Polyhedron.of_constraints all_inequalities)
   in
   (* Local projection eliminating integer dimensions must use mixed Cooper
      because fractional dimensions for variables to keep still exist.
@@ -581,7 +594,7 @@ let local_project srk binding m ~eliminate_original p l =
     LatticePolyhedron.local_project_cooper m
       ~eliminate:ints_to_eliminate poly_after_real
       ~round_lower_bound:(round_lower_bound binding)
-      (IntLattice.hermitize (List.rev_append ints (IntLattice.basis l)))
+      (IntLattice.hermitize (BatList.of_enum all_ints))
   in
   (* We have to take the L-hull here to preserve strongest consequences.
      Taking L-hull after completing local projection is not the same as

@@ -135,7 +135,7 @@ module CooperProjection : sig
 
   val local_project_cooper:
     (int -> QQ.t) -> eliminate: int list ->
-    ?round_lower_bound: ((int -> QQ.t) -> P.constraint_kind -> V.t ->
+    ?round_lower_bound: (P.constraint_kind -> V.t -> (int -> QQ.t) ->
                          V.t * (P.constraint_kind * V.t) list * V.t list) ->
     Polyhedron.t -> IntLattice.t ->
     Polyhedron.t * IntLattice.t
@@ -237,7 +237,7 @@ end = struct
                       (IntLattice.basis lattice)
       in
       let (rounded_term, inequalities, integrality) =
-        round_lower_bound m cnstr_kind (lower_bound dim_to_elim glb_v) in
+        round_lower_bound cnstr_kind (lower_bound dim_to_elim glb_v) m in
       let delta = QQ.modulo (QQ.sub (m dim_to_elim) (QQ.of_zz rounded_value)) modulus in
       let solution = Linear.QQVector.add_term delta Linear.const_dim rounded_term in
       let new_p =
@@ -258,7 +258,7 @@ end = struct
       (new_p, new_l)
 
   let local_project_cooper m ~eliminate
-        ?(round_lower_bound=(fun _ _ lower_bound -> (lower_bound, [], [])))
+        ?(round_lower_bound=(fun _ lower_bound _ -> (lower_bound, [], [])))
         polyhedron lattice =
     BatList.fold_left
       (fun (p, l) dim_to_elim ->
@@ -269,6 +269,7 @@ end = struct
 
 end
 
+(*
 module DeprecatedPureHull = struct
 
   let map_polyhedron map p =
@@ -299,3 +300,7 @@ module DeprecatedPureHull = struct
     let (forward, inverse) = BatList.fold_lefti adjoin (map_one, map_one) basis in
     (forward, inverse)
 end
+ *)
+
+let mixed_lattice_hull = MixedHull.mixed_lattice_hull
+let local_project_cooper = CooperProjection.local_project_cooper

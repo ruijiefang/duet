@@ -272,22 +272,22 @@ end
 
 module Abstract (A : AbstractDomain) : sig
 
-  val init : A.context Syntax.formula -> A.context Smt.Solver.t * A.t
+  val init : A.context Syntax.formula -> A.context Smt.StdSolver.t * A.t
 
   val abstract : A.context Syntax.formula -> A.t
 
 end = struct
 
   let init formula =
-    let solver = Smt.mk_solver A.context in
-    Smt.Solver.add solver [formula];
+    let solver = Smt.StdSolver.make A.context in
+    Smt.StdSolver.add solver [formula];
     (solver, A.bottom)
 
   let abstract formula =
     let (solver, initial_value) = init formula in
     let rec go n value =
       logf "Iteration %d@." n;
-      match Smt.Solver.get_model solver with
+      match Smt.StdSolver.get_model solver with
       | `Sat interp ->
          let rho = A.abstract formula interp in
          logf "abstract: abstracted, now joining";
@@ -299,7 +299,7 @@ end = struct
          let formula = A.concretize joined in
          logf "abstract: new constraint to negate: %a@."
            (Syntax.pp_smtlib2 A.context) formula;
-         Smt.Solver.add solver
+         Smt.StdSolver.add solver
            [Syntax.mk_not A.context formula];
          go (n + 1) joined
       | `Unsat ->

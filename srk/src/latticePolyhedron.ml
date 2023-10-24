@@ -9,7 +9,7 @@ module MixedHull: sig
 
   val mixed_lattice_hull:
     'a Syntax.context -> Polyhedron.t -> IntLattice.t -> DD.closed DD.t
-  
+
 end = struct
 
   let to_inequality srk (ckind, v) =
@@ -19,7 +19,7 @@ end = struct
       | `Nonneg -> Syntax.mk_leq srk zero
       | `Pos -> Syntax.mk_lt srk zero
     in op (Linear.of_linterm srk v)
-     
+
   let translate_constraint var_to_ray_var v =
     BatEnum.fold (fun v (coeff, dim) ->
         if dim <> Linear.const_dim then
@@ -45,7 +45,7 @@ end = struct
         BatEnum.push system (ckind, subspace_point_constraint))
       (Polyhedron.enum_constraints p);
     Polyhedron.of_constraints system
-    
+
   let subspace_restriction srk var_to_ray_var l m =
     let constraints = BatEnum.empty () in
     BatList.iter
@@ -73,7 +73,7 @@ end = struct
         (Polyhedron.enum_constraints p)
     in
     SrkUtil.Int.Set.remove Linear.const_dim dimensions
-    
+
   let mixed_lattice_hull srk p l =
     let p_variables = non_constant_dimensions p in
     let var_to_ray_var =
@@ -88,7 +88,7 @@ end = struct
     in
     let pre_abstraction = recession_extension var_to_ray_var p in
     let max_dim = Polyhedron.max_constrained_dim p in
-    let solver = Smt.mk_solver srk in
+    let solver = Smt.StdSolver.make srk in
     let lattice_constraints =
       List.map (fun v -> Syntax.mk_is_int srk (Linear.of_linterm srk v))
         (IntLattice.basis l) in
@@ -98,7 +98,7 @@ end = struct
         []
         (Polyhedron.enum_constraints p)
     in
-    let () = Smt.Solver.add solver
+    let () = Smt.StdSolver.add solver
                (polyhedron_constraints @ lattice_constraints)
     in
     let rec go curr m =
@@ -117,20 +117,20 @@ end = struct
           []
           (DD.enum_constraints abstraction)
       in
-      Smt.Solver.add solver
+      Smt.StdSolver.add solver
         [Syntax.mk_not srk (Syntax.mk_and srk atoms_of_abstraction)];
-      match Smt.Solver.get_model solver with
+      match Smt.StdSolver.get_model solver with
       | `Sat m -> go next m
       | `Unsat -> curr
       | `Unknown -> failwith "LatticePolyhedron: Solver cannot decide"
     in
-    match Smt.Solver.get_model solver with
+    match Smt.StdSolver.get_model solver with
     | `Sat m -> go (DD.of_constraints_closed max_dim (BatEnum.empty ())) m
     | `Unsat -> DD.of_constraints_closed max_dim (BatEnum.empty ())
     | `Unknown -> failwith "LatticePolyhedron: Solver cannot decide"
 
 end
-      
+
 module CooperProjection : sig
 
   val local_project_cooper:

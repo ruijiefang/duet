@@ -630,20 +630,20 @@ end = struct
 
   type t =
     {
-      solver : A.context Smt.Solver.t
+      solver : A.context Smt.StdSolver.t
     ; value : A.t
     }
 
   let init formula =
-    let solver = Smt.mk_solver A.context in
-    Smt.Solver.add solver [formula];
+    let solver = Smt.StdSolver.make A.context in
+    Smt.StdSolver.add solver [formula];
     { solver ; value = A.bottom }
 
   let abstract formula =
     let state = init formula in
     let rec go bound n state =
       logf "Iteration %d@." n;
-      match Smt.Solver.get_model state.solver with
+      match Smt.StdSolver.get_model state.solver with
       | `Sat interp ->
          let rho = A.abstract formula interp in
          logf "abstract: abstracted, now joining";
@@ -654,7 +654,7 @@ end = struct
            A.pp joined;
          let formula = A.concretize joined in
          logf "abstract: new constraint to negate: %a@." (Syntax.pp_smtlib2 A.context) formula;
-         Smt.Solver.add state.solver
+         Smt.StdSolver.add state.solver
            [Syntax.mk_not A.context formula];
          let next = { state with value = joined } in
          begin match bound with

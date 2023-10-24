@@ -27,7 +27,7 @@ end
 
 module Abstract (A : AbstractDomain) : sig
 
-  val init : A.context Syntax.formula -> A.context Smt.Solver.t * A.t
+  val init : A.context Syntax.formula -> A.context Smt.StdSolver.t * A.t
 
   val abstract : A.context Syntax.formula -> A.t
 

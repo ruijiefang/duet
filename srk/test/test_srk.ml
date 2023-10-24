@@ -22,11 +22,14 @@ let suite = "Main" >::: [
     Test_wedge.suite;
     Test_abstract.suite;
     Test_lts.suite;
+    Test_transitionIdeal.suite;
     Test_iteration.suite;
     Test_termination.suite;
     Test_transition.suite;
     Test_WeightedGraph.suite;
-    Test_chc.suite
+    Test_chc.suite;
+    Test_numberField.suite;
+    Test_rational.suite
 ]
 
 let _ =

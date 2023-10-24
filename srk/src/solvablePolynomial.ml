@@ -62,35 +62,6 @@ module UPXs = struct
       zero
 end
 
-type block =
-  { blk_transform : QQ.t array array;
-    blk_add : QQXs.t array }
-
-(* A solvable polynomial map is a list of blocks representing a function
-   x_1' = A_1*x_1 + p_1()
-   x_2' = A_2*x_2 + p_2(x_1)
-   ...
-   x_m' = A_m*x_m + p_m(x_1,...,x_{m-1})
-
-   where each A_i is a rational matrix and each p_i is a vector of
-   polynomials over the variables of lower blocks. *)
-type solvable_polynomial = block list
-
-(* Map Q^n -> Q^n defined by an array of polynomials
-     p_0(x_0,...,x_{n-1})
-     ...
-     p_{n-1}(x_0,...,x_{n-1}) *)
-type polynomial_map = QQXs.t array
-
-(* Matrix-polynomial vector multiplication.  Assumes that the columns of m are
-   a subset of {0,...,|polyvec|-1}. *)
-let matrix_polyvec_mul m polyvec =
-  Array.init (QQMatrix.nb_rows m) (fun i ->
-      BatEnum.fold (fun p (coeff, j) ->
-          QQXs.add p (QQXs.scalar_mul coeff polyvec.(j)))
-        QQXs.zero
-        (V.enum (QQMatrix.row i m)))
-
 let vec_upxsvec_dot vec1 vec2 =
   BatEnum.fold (fun ep i ->
       UPXs.add
@@ -107,54 +78,8 @@ let vec_qqxsvec_dot vec1 vec2 =
     QQXs.zero
     (0 -- (Array.length vec2 - 1))
 
-let term_of_ocrs srk loop_counter pre_term_of_id post_term_of_id =
-  let open OCRS in
-  let open Type_def in
-  let ss_pre = SSVar "k" in
-  let rec go = function
-    | Plus (x, y) -> mk_add srk [go x; go y]
-    | Minus (x, y) -> mk_sub srk (go x) (go y)
-    | Times (x, y) -> mk_mul srk [go x; go y]
-    | Divide (x, y) -> mk_div srk (go x) (go y)
-    | Product xs -> mk_mul srk (List.map go xs)
-    | Sum xs -> mk_add srk (List.map go xs)
-    | Symbolic_Constant name -> pre_term_of_id name
-    | Base_case (name, index) ->
-      assert (index = 0);
-      pre_term_of_id name
-    | Input_variable name ->
-      assert (name = "k");
-      loop_counter
-    | Output_variable (name, subscript) ->
-      assert (subscript = ss_pre);
-      post_term_of_id name
-    | Rational k -> mk_real srk (QQ.of_mpq (Mpqf.of_mpq k))
-    | Undefined -> assert false
-    | Pow (x, y) -> Nonlinear.mk_pow srk (go x) (go y)
-    | Log (base, x) ->
-      Nonlinear.mk_log srk (mk_real srk (QQ.of_mpq (Mpqf.of_mpq base))) (go x)
-    | IDivide (x, y) ->
-      mk_idiv srk (go x) (mk_real srk (QQ.of_mpq (Mpqf.of_mpq y)))
-    | Mod (x, y) ->
-      mk_mod srk (go x) (go y)
-    | Iif (func, ss) ->
-      let arg =
-        match ss with
-        | SSVar "k" -> loop_counter
-        | SAdd ("k", i) ->
-          mk_add srk [loop_counter; mk_real srk (QQ.of_int i)]
-        | _ -> assert false
-      in
-      let sym =
-        if not (is_registered_name srk func) then
-          register_named_symbol srk func (`TyFun ([`TyReal], `TyReal));
-        get_named_symbol srk func
-      in
-      mk_app srk sym [arg]
-    | Binomial (_, _) | Factorial _ | Sin _ | Cos _ | Arctan _ | Pi | Shift (_, _) ->
-      assert false
-  in
-  go
+
+open TransitionIdeal
 
 let block_size block = Array.length block.blk_add
 
@@ -288,61 +213,6 @@ let _pp_block formatter block =
   done;
   fprintf formatter "@]"
 
-(* Compute closed-form representation of the dynamics of solvable
-   polynomial map using OCRS *)
-let closure_ocrs sp =
-  let open OCRS in
-  let open Type_def in
-
-  (* pre/post subscripts *)
-  let ss_pre = SSVar "k" in
-  let ss_post = SAdd ("k", 1) in
-
-  (* Map identifiers to their closed forms, so that they can be used
-     in the additive term of blocks at higher strata *)
-  let cf =
-    Array.make (dimension sp) (Rational (Mpq.of_int 0))
-  in
-  let close_block block offset =
-    let size = Array.length block.blk_add in
-    if size = 0 then
-      []
-    else
-      let dim_vec = Array.init size (fun i -> string_of_int (offset + i)) in
-      let ocrs_transform =
-        Array.map (Array.map (Mpqf.to_mpq % QQ.mpq_of)) block.blk_transform
-      in
-      let ocrs_add =
-        Array.init size (fun i ->
-            let cf_monomial m =
-              Monomial.enum m
-              /@ (fun (id, pow) -> Pow (cf.(id), Rational (Mpq.of_int pow)))
-              |> BatList.of_enum
-            in
-            QQXs.enum block.blk_add.(i)
-            /@ (fun (coeff, m) ->
-                Product (Rational (Mpqf.to_mpq (QQ.mpq_of coeff))::(cf_monomial m)))
-            |> (fun x -> Sum (BatList.of_enum x)))
-      in
-      let block_closed =
-        let mat_rec =
-          VEquals (Ovec (dim_vec, ss_post),
-                   ocrs_transform,
-                   Ovec (dim_vec, ss_pre),
-                   ocrs_add)
-        in
-        logf "Block:@\n%s" (Mat_helpers.matrix_rec_to_string mat_rec);
-        Log.time "OCRS" (Ocrs.solve_mat_recurrence mat_rec) false
-      in
-      block_closed
-  in
-  sp |> iter_blocks (fun offset block ->
-      close_block block offset
-      |> List.iteri (fun i ineq ->
-          match ineq with
-          | Equals (_, y) -> cf.(offset + i) <- y
-          | _ -> assert false));
-  cf
 
 (* Given a matrix in which each vector in the standard basis is a
    periodic generalized eigenvector, find a PRSD over the standard
@@ -514,189 +384,7 @@ let closure_periodic_rational sp =
   cf
 
 (** Solvable polynomial abstractions ****************************************************)
-(* map pre-state coordinates to their post-state counterparts *)
-let post_coord_map cs tr_symbols =
-  List.fold_left
-    (fun map (sym, sym') ->
-       try
-         let coord = CS.cs_term_id cs (`App (sym, [])) in
-         let coord' = CS.cs_term_id cs (`App (sym', [])) in
-         IntMap.add coord coord' map
-       with Not_found -> map)
-    IntMap.empty
-    tr_symbols
 
-(* Are most coefficients of a vector negative? *)
-let is_vector_negative vec =
-  let sign =
-    BatEnum.fold (fun sign (coeff,_) ->
-        if QQ.lt coeff QQ.zero then
-          sign - 1
-        else
-          sign + 1)
-      0
-      (V.enum vec)
-  in
-  sign < 0
-
-exception IllFormedRecurrence
-
-(* Write the affine hull of a wedge as Ax' = Bx + c, where c is vector of
-   polynomials in recurrence terms, and the non-zero rows of A are linearly
-   independent. *)
-let rec_affine_hull srk wedge tr_symbols rec_terms rec_ideal =
-  let cs = Wedge.coordinate_system wedge in
-
-  (* pre_dims is a set of dimensions corresponding to pre-state
-     dimensions. pre_map is a mapping from dimensions that correspond to
-     post-state dimensions to their pre-state counterparts *)
-  let (pre_map, pre_dims) =
-    List.fold_left (fun (pre_map, pre_dims) (s,s') ->
-        let id_of_sym sym =
-          try
-            CS.cs_term_id cs (`App (sym, []))
-          with Not_found ->
-            assert false
-        in
-        let pre = id_of_sym s in
-        let post = id_of_sym s' in
-        (IntMap.add post pre pre_map, IntSet.add pre pre_dims))
-      (IntMap.empty, IntSet.empty)
-      tr_symbols
-  in
-
-  (* An additive dimension is one that is allowed to appear as an additive
-     term *)
-  let cs_dim = CS.dim cs in
-  let additive_dim x = x >= cs_dim in
-  let post_dim x = IntMap.mem x pre_map in
-  let pp_coord formatter i =
-    if i < cs_dim then
-      Format.fprintf formatter "w[%a]"
-        (Term.pp srk) (CS.term_of_coordinate cs i)
-    else
-      Format.fprintf formatter "v[%a]"
-        (Term.pp srk) (DArray.get rec_terms (i - cs_dim))
-  in
-  let rec_term_rewrite =
-    let ideal = ref rec_ideal in
-    let elim_order =
-      Monomial.block [not % additive_dim] Monomial.degrevlex
-    in
-    rec_terms |> DArray.iteri (fun i t ->
-        let vec = CS.vec_of_term cs t in
-        let p =
-          QQXs.add_term
-            (QQ.of_int (-1))
-            (Monomial.singleton (i + cs_dim) 1)
-            (QQXs.of_vec ~const:(CS.const_id) vec)
-        in
-        ideal := p::(!ideal));
-    Polynomial.Rewrite.mk_rewrite elim_order (!ideal)
-    |> Polynomial.Rewrite.grobner_basis
-  in
-  let basis =
-    let elim_order =
-      Monomial.block [not % additive_dim; not % post_dim] Monomial.degrevlex
-    in
-    BatList.filter_map
-      (fun x ->
-         let x' = Polynomial.Rewrite.reduce rec_term_rewrite x in
-         if QQXs.equal x' QQXs.zero then
-           None
-         else
-           Some x')
-      (Wedge.vanishing_ideal wedge)
-    |> Polynomial.Rewrite.mk_rewrite elim_order
-    |> Polynomial.Rewrite.grobner_basis
-    |> Polynomial.Rewrite.generators
-  in
-  let (mA, mB, pvc, _) =
-    logf ~attributes:[`Bold] "Vanishing ideal:";
-    List.fold_left (fun (mA,mB,pvc,i) p ->
-        try
-          logf "  @[%a@]" (QQXs.pp pp_coord) p;
-          let (vecA, vecB, pc) =
-            BatEnum.fold (fun (vecA, vecB, pc) (coeff, monomial) ->
-                match BatList.of_enum (Monomial.enum monomial) with
-                | [(dim, 1)] when IntMap.mem dim pre_map ->
-                  (V.add_term (QQ.negate coeff) (IntMap.find dim pre_map) vecA,
-                   vecB,
-                   pc)
-                | [(dim, 1)] when IntSet.mem dim pre_dims ->
-                  (vecA, V.add_term coeff dim vecB, pc)
-                | monomial_list ->
-                  if List.for_all (additive_dim % fst) monomial_list then
-                    (vecA, vecB, QQXs.add_term coeff monomial pc)
-                  else
-                    raise IllFormedRecurrence)
-              (V.zero, V.zero, QQXs.zero)
-              (QQXs.enum p)
-          in
-          let (vecA, vecB, pc) =
-            if is_vector_negative vecA then
-              (V.negate vecA, V.negate vecB, QQXs.negate pc)
-            else
-              (vecA, vecB, pc)
-          in
-          let pc =
-            QQXs.substitute (fun i ->
-                QQXs.add_term
-                  QQ.one
-                  (Monomial.singleton (i - cs_dim) 1)
-                  QQXs.zero)
-              pc
-          in
-          let mAt = QQMatrix.transpose mA in
-          match Linear.solve mAt vecA with
-          | Some r ->
-            (* vecA is already in the span of mA -- r*mA = vecA. *)
-            let vecB = V.sub vecB (Linear.vector_left_mul r mB) in
-            if V.is_zero vecB then
-              (mA, mB, pvc, i)
-            else
-              let pc =
-                let rpc = (* r*pvc *)
-                  BatEnum.fold (fun p (coeff, i) ->
-                      QQXs.add p (QQXs.scalar_mul coeff (List.nth pvc i)))
-                    QQXs.zero
-                    (V.enum r)
-                in
-                QQXs.sub pc rpc
-              in
-              (mA,
-               QQMatrix.add_row i vecB mB,
-               pc::pvc,
-               i+1)
-          | None ->
-            (QQMatrix.add_row i vecA mA,
-             QQMatrix.add_row i vecB mB,
-             pc::pvc,
-             i+1)
-        with IllFormedRecurrence -> (mA, mB, pvc, i))
-      (QQMatrix.zero, QQMatrix.zero, [], 0)
-      basis
-  in
-  (mA, mB, List.rev pvc)
-
-(* Given a wedge w, compute A,B,C such that w |= Ax' = BAx + Cy, and such that
-   the row space of A is maximal. *)
-let extract_affine_transformation srk wedge tr_symbols rec_terms rec_ideal =
-  let (mA, mB, pvc) = rec_affine_hull srk wedge tr_symbols rec_terms rec_ideal in
-  let (dlts, mT) = Lts.determinize (mA, mB) in
-  let mS =
-    let mD = QQMatrix.mul (PLM.map dlts) mT in
-    match Lts.containment_witness (mA,mB) (mT,mD) with
-    | Some k -> k
-    | None -> assert false
-  in
-  let mA = mT in
-  let mB = PLM.map dlts in
-  let pvc = matrix_polyvec_mul mS (Array.of_list pvc) in
-  logf ~attributes:[`Blue] "Affine transformation:";
-  logf " A: @[%a@]" QQMatrix.pp mA;
-  logf " B: @[%a@]" QQMatrix.pp mB;
-  (mA, mB, pvc)
 
 (* Iteration domain element.  Recurrence equations have the form
      A_1 * x' = B_1 * A_1 * x + c_1
@@ -772,102 +460,60 @@ let pp srk tr_symbols formatter iter =
 
 exception Not_a_polynomial
 
-(* A block corresponds to a set of polynomial equations.  block_zeros
-   produces a list of these equations, represented in the coordinate
-   system term_of_id.  Adds terms to term_of_id as necessary -- one
-   per dimension of the block. *)
-let block_zeros cs block simulation tr_symbols term_of_id =
-  let post_coord_map = post_coord_map cs tr_symbols in
-  let size = Array.length block.blk_add in
-  let offset = DArray.length term_of_id in
-
-  for i = 0 to size - 1 do
-    DArray.add term_of_id (CS.term_of_vec cs (QQMatrix.row i simulation))
-  done;
-
-  (0 -- (size - 1)) /@ (fun i ->
-      let lhs =
-        QQXs.of_vec ~const:CS.const_id (QQMatrix.row i simulation)
-        |> QQXs.substitute (fun coord ->
-            assert (IntMap.mem coord post_coord_map);
-            QQXs.of_dim (IntMap.find coord post_coord_map))
-      in
-      let add =
-        QQXs.substitute (fun i ->
-            (CS.polynomial_of_term cs (DArray.get term_of_id i)))
-          block.blk_add.(i)
-      in
-      let rhs =
-        BatArray.fold_lefti (fun p j coeff ->
-            QQXs.add p
-              (QQXs.scalar_mul coeff
-                 (CS.polynomial_of_term cs
-                    (DArray.get term_of_id (offset + j)))))
-          QQXs.zero
-          block.blk_transform.(i)
-        |> QQXs.add add
-      in
-      QQXs.add lhs (QQXs.negate rhs))
-  |> BatList.of_enum
-
-let extract_solvable_polynomial_eq srk wedge tr_symbols term_of_id =
+let _extract_solvable_polynomial_eq witness srk wedge tr_symbols term_of_id =
   let cs = Wedge.coordinate_system wedge in
-
-  let rec fix rec_ideal =
-    logf "New stratum (%d terms)" (DArray.length term_of_id);
-    let (mA,mB,blk_add) =
-      extract_affine_transformation srk wedge tr_symbols term_of_id rec_ideal
-    in
-    let size = Array.length blk_add in
-    if size = 0 then
-      []
-    else
-      let blk_transform = QQMatrix.dense_of mB size size in
-      let block = { blk_transform; blk_add } in
-      let zeros = block_zeros cs block mA tr_symbols term_of_id in
-      block::(fix (zeros@rec_ideal))
+  let nb_constants = DArray.length term_of_id in
+  let dim = (List.length tr_symbols) + nb_constants in
+  let shift i =
+    if i < 0 then QQXs.of_dim i
+    else QQXs.of_dim (i + (2 * dim))
   in
-  fix []
-
-(* Extract a stratified system of matrix recurrences *)
-let extract_periodic_rational_matrix_eq srk wedge tr_symbols term_of_id =
-  let cs = Wedge.coordinate_system wedge in
-
-  (* Detect stratified recurrences *)
-  let rec fix rec_ideal =
-    logf "New stratum (%d recurrence terms)" (DArray.length term_of_id);
-    let (mA,mB,blk_add) =
-      extract_affine_transformation srk wedge tr_symbols term_of_id rec_ideal
-    in
-
-    let dims = SrkUtil.Int.Set.elements (QQMatrix.row_set mA) in
-    let prsd = Linear.periodic_rational_spectral_decomposition mB dims in
-    let mU =
-      BatList.fold_lefti (fun m i (_,_,v) ->
-          QQMatrix.add_row i v m)
-        QQMatrix.zero
-        prsd
-    in
-
-    let mUA = QQMatrix.mul mU mA in
-    let mUB = QQMatrix.mul mU mB in
-    let mB = match Linear.divide_right mUB mU with
-      | Some x -> x
-      | None -> assert false
-    in
-    let mA = mUA in
-    let blk_add = matrix_polyvec_mul mU blk_add in
-
-    let size = Array.length blk_add in
-    if size = 0 then
-      []
-    else
-      let blk_transform = QQMatrix.dense_of mB size size in
-      let block = { blk_transform; blk_add } in
-      let zeros = block_zeros cs block mA tr_symbols term_of_id in
-      block::(fix (zeros@rec_ideal))
+  let tr m =
+    BatEnum.for_all (fun (d, _) -> d < 2*dim) (Monomial.enum m)
   in
-  fix []
+  let elim_ord =
+    Monomial.block [(fun x -> x >= 2 * dim)] Monomial.degrevlex
+  in
+  let defeq i p = QQXs.add_term (QQ.of_int (-1)) (Monomial.singleton i 1) p in
+  let shift_sym s = shift (CS.cs_term_id cs (`App (s, []))) in
+  let ideal =
+    BatList.fold_lefti (fun defs i (s,s') ->
+        let pre = defeq (i + nb_constants) (shift_sym s) in
+        let post = defeq (i + dim + nb_constants) (shift_sym s') in
+        pre::post::defs)
+      (List.map (QQXs.substitute shift) (Wedge.vanishing_ideal wedge))
+      tr_symbols
+  in
+  let ideal =
+    DArray.fold_lefti (fun defs i term ->
+        (defeq i (QQXs.substitute shift (CS.polynomial_of_term cs term)))
+        ::(defeq (i + dim) (QQXs.of_dim i))
+        ::defs)
+      ideal
+      term_of_id
+      |> Polynomial.Rewrite.mk_rewrite elim_ord
+      |> Polynomial.Rewrite.grobner_basis
+      |> Polynomial.Rewrite.restrict tr
+  in
+  let ti = TransitionIdeal.make dim ideal in
+  let (witness, sim) = witness ti in
+  let ambient = Array.make (2*dim) (mk_zero srk) in
+  BatEnum.iter (fun i ->
+      ambient.(i) <- DArray.get term_of_id i)
+    (0 -- (nb_constants - 1));
+  List.iteri (fun i (s,s') ->
+      ambient.(i + nb_constants) <- mk_const srk s;
+      ambient.(i + nb_constants + dim) <- mk_const srk s')
+    tr_symbols;
+  let to_ambient = QQXs.term_of srk (Array.get ambient) in
+  Array.iter (fun p -> DArray.add term_of_id (to_ambient p)) sim;
+  witness
+
+let extract_solvable_polynomial_eq srk =
+  _extract_solvable_polynomial_eq TransitionIdeal.solvable_witness srk
+
+let extract_periodic_rational_matrix_eq srk =
+  _extract_solvable_polynomial_eq TransitionIdeal.periodic_rational_solvable_witness srk
 
 (* Extract recurrences of the form t' <= base * t + p, where p is a
    polynomial over recurrence terms *)
@@ -1171,12 +817,12 @@ let _extract_matrix_leq srk wedge tr_symbols term_of_id =
                       (mk_real srk (V.coeff pre (DArray.get constraints i))))
                 |> BatList.of_enum
               in
-              let s = Smt.mk_solver srk in
-              Smt.Solver.add s pos_constraints;
-              Smt.Solver.add s row_constraints;
+              let s = Smt.StdSolver.make srk in
+              Smt.StdSolver.add s pos_constraints;
+              Smt.StdSolver.add s row_constraints;
               let model =
                 (* First try for a simple recurrence, then fall back *)
-                Smt.Solver.push s;
+                Smt.StdSolver.push s;
                 (0 -- (Array.length m_entries - 1))
                 /@ (fun j ->
                     if i = j then
@@ -1186,12 +832,12 @@ let _extract_matrix_leq srk wedge tr_symbols term_of_id =
                         (mk_const srk m_entries.(j))
                         (mk_real srk QQ.zero))
                 |> BatList.of_enum
-                |> Smt.Solver.add s;
-                match Smt.Solver.get_model s with
+                |> Smt.StdSolver.add s;
+                match Smt.StdSolver.get_model s with
                 | `Sat model -> model
                 | _ ->
-                  Smt.Solver.pop s 1;
-                  match Smt.Solver.get_model s with
+                  Smt.StdSolver.pop s 1;
+                  match Smt.StdSolver.get_model s with
                   | `Sat model -> model
                   | _ -> assert false
               in
@@ -1291,10 +937,129 @@ let extract_constant_symbols srk tr_symbols wedge =
   done;
   term_of_id
 
-let exp_ocrs srk tr_symbols loop_counter iter =
-  let open OCRS in
-  let open Type_def in
 
+let term_of_ratep srk loop_counter pre_term_of_id ep =
+  let module CX = Rational.ConstRingX in
+  let open Rational.RatEP in
+  let translate_const_ring c = 
+    let translate_mon m = 
+      BatEnum.fold (
+        fun mul (dim, pow) ->
+          (mk_pow srk (pre_term_of_id dim) pow) :: mul
+      ) [] (Monomial.enum m)
+    in
+    let add_l = QQXs.fold (
+      fun m c acc ->
+        (mk_mul srk ((mk_real srk c) :: (translate_mon m))) :: acc
+    ) c [] 
+    in
+    mk_add srk add_l
+  in
+  let translate_poly p = 
+    let add_l = CX.fold (
+      fun pow c acc ->
+        let term = mk_mul srk [(translate_const_ring c); (mk_pow srk loop_counter pow)] in
+        term :: acc
+    ) p [] in
+    mk_add srk add_l
+  in
+  let translate_ep (p, b) = 
+    mk_mul srk [translate_poly p; Nonlinear.mk_pow srk (mk_real srk b) loop_counter]
+  in
+  let translate_iif ((den, shift), c) = 
+    let func = QQX.show den in (*Converting the iif to a string*)
+    let arg = if shift = 0 then loop_counter else mk_add srk [loop_counter; mk_int srk shift] in
+    let sym =
+      if not (is_registered_name srk func) then
+        register_named_symbol srk func (`TyFun ([`TyReal], `TyReal));
+      get_named_symbol srk func
+    in
+    let iif = mk_app srk sym [arg] in
+    mk_mul srk [iif; translate_const_ring c]
+  in
+  let translate_heavy (offset, c) = 
+    mk_ite srk (mk_lt srk loop_counter (mk_real srk (QQ.of_int offset))) (mk_real srk QQ.zero) (translate_const_ring c)
+  in
+  let eps_list = 
+    BatEnum.fold (
+      fun add_l e ->
+        (translate_ep e) :: add_l
+    ) [] (enum_ep ep)
+  in
+  let eps_iifs_list =
+    BatEnum.fold (
+      fun add_l iif ->
+        (translate_iif iif) :: add_l
+    ) eps_list (enum_iif ep)
+  in
+  let eps_iifs_heavies_list = 
+    BatEnum.fold (
+      fun add_l heavy ->
+        (translate_heavy heavy) :: add_l
+    ) eps_iifs_list (enum_heavy ep)
+  in
+  mk_add srk eps_iifs_heavies_list
+
+(** Produce a formatted string representing the matrix recurrence *)
+let pp_mat_rec f (matrix, offset, add) = 
+  let primed_str = Array.init (Array.length matrix) (fun i -> "x_" ^ (string_of_int (i+offset)) ^ "'") in
+  let unprimed_str = Array.init (Array.length matrix) (fun i -> "x_" ^ (string_of_int (i+offset))) in
+  let add_str = Array.map (SrkUtil.mk_show (QQXs.pp (fun fo d -> Format.fprintf fo "x_%d" d))) add in
+  let matrix_str = Array.map (fun x -> Array.map QQ.show x) matrix in
+  let length_of_biggest_primed = Array.fold_left (fun a b -> max a (String.length b)) 0 primed_str in
+  let length_of_biggest_unprimed = Array.fold_left (fun a b -> max a (String.length b)) 0 unprimed_str in
+  let length_of_biggest_add = Array.fold_left (fun a b -> max a (String.length b)) 0 add_str in
+  let lens_with_format_list = 
+    List.init (Array.length matrix) (
+      fun i ->
+        let len = Array.fold_left (
+          fun maxi r ->
+            max maxi (String.length r.(i))
+            ) (-1) matrix_str in
+        Scanf.format_from_string ("%" ^ (string_of_int (len+1)) ^ "s") "%s"
+    ) in
+  let primed_form = Scanf.format_from_string ("| %" ^ string_of_int length_of_biggest_primed ^ "s |") "%s" in
+  let unprimed_form = Scanf.format_from_string ("| %" ^ string_of_int length_of_biggest_unprimed ^ "s |") "%s" in
+  let add_form = Scanf.format_from_string ("| %" ^ string_of_int length_of_biggest_add ^ "s |") "%s" in
+  let pp_row f i = 
+    Format.pp_open_box f 0;
+    Format.fprintf f primed_form primed_str.(i);
+    if i = ((Array.length matrix_str)/2) then
+      Format.fprintf f "%3s" " = "
+    else
+      Format.fprintf f "%3s" "";
+    let row_lis = Array.to_list (Array.get matrix_str i) in
+    Format.pp_print_string f "|";
+    List.iter2 (fun form value -> Format.fprintf f form value) lens_with_format_list row_lis;
+    Format.pp_print_string f " |";
+    if i = ((Array.length matrix_str)/2) then
+      Format.fprintf f "%3s" " * "
+    else
+      Format.fprintf f "%3s" "";
+    Format.fprintf f unprimed_form unprimed_str.(i);
+    if i = ((Array.length matrix_str)/2) then
+      Format.fprintf f "%3s" " + "
+    else
+      Format.fprintf f "%3s" "";
+    Format.fprintf f add_form add_str.(i);
+    Format.pp_close_box f ();
+    Format.pp_print_space f ()
+  in
+  Format.pp_open_vbox f 0;
+  Array.iteri (fun i _ -> pp_row f i) matrix;
+  Format.pp_print_newline f ();
+  Format.pp_close_box f ()
+
+let pp_sp f sp = 
+  let _ = List.fold_left (
+    fun (i, offset) (blk : block) ->
+      Format.fprintf f "@[Block %d : %a@]" i pp_mat_rec (blk.blk_transform, offset, blk.blk_add);
+      (i+1, offset + (Array.length blk.blk_transform))      
+      ) (1, 0) sp in
+  ()
+  
+
+let exp_rat srk tr_symbols loop_counter iter =
   Nonlinear.ensure_symbols srk;
 
   let post_map = (* map pre-state vars to post-state vars *)
@@ -1311,10 +1076,7 @@ let exp_ocrs srk tr_symbols loop_counter iter =
     substitute_const srk subst
   in
 
-  (* pre subscript *)
-  let ss_pre = SSVar "k" in
-
-  let constant_blocks =
+  let constant_blocks = (*What is the purpose of this?*)
     let const =
       { blk_transform = [|[|QQ.one|]|];
         blk_add = [| QQXs.zero |] }
@@ -1323,46 +1085,23 @@ let exp_ocrs srk tr_symbols loop_counter iter =
     |> BatList.of_enum
   in
   let sp = constant_blocks @ iter.block_eq @ iter.block_leq in
-  let cf = closure_ocrs sp in
+  log_pp pp_sp sp;
+  let cf = Log.time "Rat Exp" (Rational.RatEP.solve_rec) sp in
   let nb_equations = nb_equations iter in
   let term_of_expr =
-    let pre_term_of_id name =
-      iter.term_of_id.(int_of_string name)
+    let pre_term_of_id id =
+      iter.term_of_id.(id)
     in
-    let post_term_of_id name =
-      let id = int_of_string name in
-      postify (iter.term_of_id.(id))
-    in
-    term_of_ocrs srk loop_counter pre_term_of_id post_term_of_id
+    term_of_ratep srk loop_counter pre_term_of_id
   in
-  let mk_int k = mk_real srk (QQ.of_int k) in
-
   (iter.nb_constants -- ((Array.length cf) - 1))
   /@ (fun i ->
-      let outvar = Output_variable (string_of_int i, ss_pre) in
-      let PieceWiseIneq (ivar, pieces) =
-        Deshift.deshift_ineq (Equals (outvar, cf.(i)))
-      in
-      assert (ivar = "k");
-      let piece_to_formula (ivl, ineq) =
-        let hypothesis = match ivl with
-          | Bounded (lo, hi) ->
-            mk_and srk [mk_leq srk (mk_int lo) loop_counter;
-                        mk_leq srk loop_counter (mk_int hi)]
-          | BoundBelow lo ->
-            mk_and srk [mk_leq srk (mk_int lo) loop_counter]
-        in
-        let conclusion = match ineq with
-          | Equals (x, y) ->
-            if i < (iter.nb_constants + nb_equations) then
-              mk_eq srk (term_of_expr x) (term_of_expr y)
-            else
-              mk_leq srk (term_of_expr x) (term_of_expr y)
-          | _ -> assert false
-        in
-        mk_if srk hypothesis conclusion
-      in
-      mk_and srk (List.map piece_to_formula pieces))
+      let lhs = postify (iter.term_of_id.(i)) in
+      let rhs = term_of_expr cf.(i) in
+      if i < (iter.nb_constants + nb_equations) then
+        mk_eq srk lhs rhs
+      else
+        mk_leq srk lhs rhs)
   |> BatList.of_enum
   |> mk_and srk
 
@@ -1428,6 +1167,8 @@ let wedge_of srk tr_symbols iter =
 
 let equal srk tr_symbols iter iter' =
   Wedge.equal (wedge_of srk tr_symbols iter) (wedge_of srk tr_symbols iter')
+
+exception IllFormedRecurrence
 
 module SolvablePolynomialOne = struct
   type nonrec 'a t = 'a t
@@ -1535,7 +1276,8 @@ module SolvablePolynomialOne = struct
     Wedge.widen (wedge_of srk tr_symbols iter) (wedge_of srk tr_symbols iter')
     |> abstract_wedge srk tr_symbols
 
-  let exp = exp_ocrs
+  (*let exp = exp_ocrs*)
+  let exp = exp_rat
   let equal = equal
   let pp = pp
 end
@@ -1566,7 +1308,8 @@ module SolvablePolynomial = struct
 
   let equal = equal
   let pp = pp
-  let exp = exp_ocrs
+  (*let exp = exp_ocrs*)
+  let exp = exp_rat
 end
 
 module SolvablePolynomialPeriodicRational = struct
@@ -1744,7 +1487,7 @@ module PresburgerGuard = struct
       pos_rewriter srk expr(*(SrkSimplify.simplify_terms_rewriter srk expr)*)
     in
     rewrite srk ~up:(idiv_to_ite srk) phi
-    |> eliminate_ite srk
+    |> lift_ite srk
     |> rewrite srk ~down:pos_simplify ~up:(abstract_presburger_rewriter srk)
 
   let exp srk tr_symbols loop_counter (sp, guard) =
@@ -2201,3 +1944,268 @@ module DLTSPeriodicRational = struct
   let exp srk tr_symbols loop_count iter =
     exp_impl SolvablePolynomialPeriodicRational.exp srk tr_symbols loop_count iter
 end
+
+module I = Polynomial.Rewrite
+
+module Id = Polynomial.Ideal
+
+module SolvablePolynomialLIRR = struct
+
+  type pre_t = 
+    {
+      ideal : TransitionIdeal.t
+    ; witness : TransitionIdeal.solvable_polynomial
+    }
+
+
+  type 'a t =
+    { ti : pre_t
+    ; simulation : 'a arith_term array 
+    ; constants : (symbol * symbol) list}
+
+  let pp _ = assert false
+
+  let make_sp ti witness = {ideal = ti; witness = witness}
+
+  let pp_dim offset formatter i = 
+    if i = 2 * offset then 
+      Format.fprintf formatter "K"
+    else if i < offset then 
+      Format.fprintf formatter "x_%d" i
+    else
+      Format.fprintf formatter "x_%d'" (i - offset)
+
+
+  let exp_ti it = 
+    let it_offset = it.ideal.dim in
+    logf "Exponentiating : %a" (TransitionIdeal.pp (pp_dim it_offset)) it.ideal;
+    if I.generators (it.ideal.ideal) = [] then
+      TransitionIdeal.make it_offset it.ideal.ideal
+    else 
+      let k_equal_i i = QQXs.sub (QQXs.of_dim (2 * it.ideal.dim)) (QQXs.scalar (QQ.of_int i)) in
+      let zeroth = Id.make ((k_equal_i 0) :: (List.init it_offset (fun d -> QQXs.sub (QQXs.of_dim (d+it_offset)) (QQXs.of_dim d)))) in
+      if QQXs.is_zero (I.reduce it.ideal.ideal QQXs.one) then
+        TransitionIdeal.make it_offset (Id.mk_rewrite zeroth)
+      else
+        let inv_seq, inv_dom = TransitionIdeal.iteration_sequence it.ideal in
+        let inv_dom_id = Id.make (I.generators inv_dom) in
+        let inv_seq_id = List.mapi (fun i (id : TransitionIdeal.t) -> Id.make ((k_equal_i (i+1)) :: (I.generators id.ideal))) inv_seq in
+        let transient_closure = List.fold_left Id.intersect zeroth inv_seq_id in
+        logf "Invariant Dom : %a" (I.pp (pp_dim it_offset)) inv_dom;
+        if QQXs.is_zero (I.reduce inv_dom QQXs.one) then 
+          TransitionIdeal.make it_offset (Id.mk_rewrite transient_closure)
+        else      
+          (log_pp  pp_sp it.witness;
+          let cf = Log.time "Rat Exp" (Rational.RatEP.solve_rec) it.witness in
+          let pp_cl f = Array.iteri (fun i cl -> Format.fprintf f "cl.(%d) = %a@." i Rational.RatEP.pp cl) in
+          logf "%a" pp_cl cf;
+          let sp_map_offset = Array.length cf in
+          let module EP = (val Log.time "Splitting Field" Rational.RatEP.to_nf cf) in
+
+          let zero_eig_transient, zero_eigen_stab, rels = Log.time "Algebraic Relations" EP.long_run_algebraic_relations () in
+          logf "Alg Relations: %a" (Id.pp (pp_dim it_offset)) (Id.make rels);
+          
+          let cl = 
+            if (List.length inv_seq_id) + 1 >= zero_eigen_stab then
+              Id.intersect transient_closure (Id.sum inv_dom_id (Id.make rels))
+            else
+              let rec get_rels_after_inv_transient i l = 
+                if i >= (List.length inv_seq_id) + 1 then 
+                  List.fold_left (
+                    fun ideal state ->
+                      let gens, _ = Array.fold_left (
+                        fun (gs, index) p ->
+                          (QQXs.sub (QQXs.of_dim (index + sp_map_offset)) p) :: gs, index + 1
+                      ) ([k_equal_i i], 0) state in
+                      Id.intersect ideal (Id.sum inv_dom_id (Id.make gens))
+                  ) (Id.sum inv_dom_id (Id.make rels)) l
+                else get_rels_after_inv_transient (i+1) (List.tl l)
+              in
+              Id.intersect transient_closure (get_rels_after_inv_transient 0 zero_eig_transient)
+          in
+          TransitionIdeal.make it_offset (Id.mk_rewrite cl))
+      
+
+
+  let exp srk tr_symbols loop_count it =
+    (*let pp_symbols f = List.iteri (fun i (pre, prime) -> Format.fprintf f "tr_symbols.(%d) : pre = %a, prime = %a@." i (pp_symbol srk) pre (pp_symbol srk) prime) in
+    logf "constants : %a" pp_symbols it.constants;
+    logf "tr_symbols : %a" pp_symbols tr_symbols;*)
+    let pp_sim f = Array.iteri (fun i s -> Format.fprintf f "simulation.(%d) : %a@." i (pp_expr_unnumbered srk) s) in
+    logf "%a" pp_sim it.simulation;
+    let post_map = (* map pre-state vars to post-state vars *)
+      TF.post_map srk it.constants
+    in
+    let postify =
+      let subst sym =
+        if Symbol.Map.mem sym post_map then
+          Symbol.Map.find sym post_map
+        else
+          mk_const srk sym
+      in
+      substitute_const srk subst
+    in
+    let it_cl = exp_ti it.ti in
+    logf "Ideal closure : %a" (TransitionIdeal.pp (pp_dim (it_cl.dim))) it_cl;
+    if QQXs.is_zero (I.reduce it_cl.ideal QQXs.one) then
+      let ident = List.map (fun (pre, post) -> mk_eq srk (mk_const srk pre) (mk_const srk post)) tr_symbols in
+      mk_and srk ((mk_eq srk loop_count (mk_real srk QQ.zero)) :: ident)
+    else
+      let gens = I.generators it_cl.ideal in
+      let gens_t = List.map (
+        fun p ->
+          let p_t = QQXs.term_of srk (
+            fun d ->
+              if d = 2 * it_cl.dim then loop_count
+              else if d < it_cl.dim then it.simulation.(d)
+              else postify (it.simulation.(d-it_cl.dim))
+          ) p in
+          mk_eq srk p_t (mk_real srk (QQ.zero))
+      ) gens in
+      mk_and srk gens_t
+    
+
+  module PC = PolynomialCone
+  let abstract_sp abstraction srk tf =
+    let is_symbolic_constant = TF.is_symbolic_constant tf in
+    let abstract_cone ideal =
+      let ideal_constants =
+        List.fold_left (fun constants p ->
+            IntSet.fold
+              (fun i ks ->
+                 let s = symbol_of_int i in
+                 if is_symbolic_constant s then Symbol.Set.add s ks
+                 else ks)
+              (QQXs.dimensions p)
+              constants)
+          Symbol.Set.empty
+          (I.generators ideal)
+        |> Symbol.Set.elements
+      in
+      let ks =
+        List.map (dup_symbol srk) ideal_constants
+      in
+      let tr_symbols =
+        List.fold_left2
+          (fun tr_symbols k k' -> (k,k')::tr_symbols)
+          (TF.symbols tf)
+          ideal_constants
+          ks
+      in
+      let polynomials =
+        List.fold_left2
+          (fun polynomials k k' ->
+             (QQXs.sub (QQXs.of_dim (int_of_symbol k)) (QQXs.of_dim (int_of_symbol k')))
+             ::polynomials)
+          (I.generators ideal)
+          ideal_constants
+          ks
+      in
+      let ti =
+        TransitionIdeal.of_tf_polynomials polynomials tr_symbols
+      in
+      let (ti, sim, witness) =
+        abstraction ti
+      in
+      let sim' =
+        Array.map (fun p ->
+            QQXs.term_of
+              srk
+              (fun i -> mk_const srk (fst (List.nth tr_symbols i)))
+              p)
+          sim
+      in
+      { ti = {ideal = ti; witness = witness }
+      ; simulation = sim'
+      ; constants = tr_symbols}
+    in
+    let ideal =
+      PC.get_ideal
+        (LirrSolver.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+    in
+    abstract_cone ideal
+
+  let abstract srk tf = 
+    abstract_sp TransitionIdeal.solvable_reflection srk tf
+  
+end
+
+module UltSolvablePolynomialLIRR = struct
+
+  type 'a t = 'a SolvablePolynomialLIRR.t
+
+  let pp _ = assert false
+
+  let exp =
+    SolvablePolynomialLIRR.exp     
+
+  let abstract srk tf = 
+    SolvablePolynomialLIRR.abstract_sp TransitionIdeal.ultimately_solvable_reflection srk tf
+end
+
+module SolvablePolynomialLIRRQuadratic = struct
+  include SolvablePolynomialLIRR
+  let abstract srk tf =
+    let is_symbolic_constant = TF.is_symbolic_constant tf in
+    let abstract_cone ideal =
+      let ideal_constants =
+        List.fold_left (fun constants p ->
+            IntSet.fold
+              (fun i ks ->
+                 let s = symbol_of_int i in
+                 if is_symbolic_constant s then Symbol.Set.add s ks
+                 else ks)
+              (QQXs.dimensions p)
+              constants)
+          Symbol.Set.empty
+          (I.generators ideal)
+        |> Symbol.Set.elements
+      in
+      let ks =
+        List.map (dup_symbol srk) ideal_constants
+      in
+      let tr_symbols =
+        List.fold_left2
+          (fun tr_symbols k k' -> (k,k')::tr_symbols)
+          (TF.symbols tf)
+          ideal_constants
+          ks
+      in
+      let polynomials =
+        List.fold_left2
+          (fun polynomials k k' ->
+             (QQXs.sub (QQXs.of_dim (int_of_symbol k)) (QQXs.of_dim (int_of_symbol k')))
+             ::polynomials)
+          (I.generators ideal)
+          ideal_constants
+          ks
+      in
+      let ti =
+        TransitionIdeal.of_tf_polynomials polynomials tr_symbols
+      in
+      let (ti2, sim2) =
+        TransitionIdeal.affine_degree_limited ti 2
+      in
+      let (ti, sim, witness) =
+        TransitionIdeal.solvable_reflection ti2
+      in
+      let sim' =
+        Array.map (fun p ->
+            QQXs.term_of
+              srk
+              (fun i -> mk_const srk (fst (List.nth tr_symbols i)))
+              p)
+          (TransitionIdeal.compose_polynomial_map sim sim2)
+      in
+      { ti = {ideal = ti; witness = witness }
+      ; simulation = sim'
+      ; constants = tr_symbols}
+    in
+    let ideal =
+      PC.get_ideal
+        (LirrSolver.abstract srk (fun cone ->
+             PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+    in
+    abstract_cone ideal
+end
+

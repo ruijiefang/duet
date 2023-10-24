@@ -34,6 +34,14 @@ module GT = struct
   let star srk tf = closure (abstract srk tf)
 end
 
+module SPQ = struct
+  include Iteration.MakeDomain(Iteration.Product
+                                 (SolvablePolynomial.SolvablePolynomialLIRRQuadratic)
+                                 (Iteration.LIRRGuard))
+  let star srk tf = closure (abstract srk tf)
+end
+
+
 
 let assert_implies_nonlinear phi psi =
   match Wedge.is_sat srk (mk_and srk [phi; mk_not srk psi]) with
@@ -52,7 +60,7 @@ let assert_implies_wat phi psi =
                       (Formula.show srk psi))
 
 
-let tr_symbols = [(wsym,wsym');(xsym,xsym');(ysym,ysym');(zsym,zsym')]
+let tr_symbols = [(vsym,vsym');(wsym,wsym');(xsym,xsym');(ysym,ysym');(zsym,zsym')]
 
 
 let prepost () =
@@ -164,6 +172,26 @@ let stratified2 () =
     (int 2)*y' = x'*(x' - (int 1))
   in
   assert_implies closure result
+
+let stratified3 () =
+  let phi =
+    TransitionFormula.make
+      Infix.(x' = x + (int 1)
+             && y' = y + x'*x')
+      [(xsym,xsym');(ysym,ysym')]
+  in
+  let closure =
+    let open Infix in
+    x = (int 0)
+    && y = (int 0)
+    && SP.star srk phi
+  in
+  let result =
+    let open Infix in
+    (int 6)*y' = x'*(x'+(int 1))*((int 2)*x' + (int 1))
+  in
+  assert_implies closure result
+
 
 let count_by_k () =
   let phi =
@@ -515,6 +543,7 @@ let suite = "Iteration" >::: [
     "count_by_2" >:: count_by_2;
     "stratified1" >:: stratified1;
     "stratified2" >:: stratified2;
+    "stratified3" >:: stratified3;
     "count_by_k" >:: count_by_k;
     "ineq1" >:: ineq1;
     "ineq2" >:: ineq2;
@@ -535,4 +564,33 @@ let suite = "Iteration" >::: [
     "algebraic2" >:: algebraic2;
     "guarded_translation1" >:: guarded_translation1;
     "guarded_translation2" >:: guarded_translation2;
+    "bresenham" >:: (fun () ->
+        let _X = w in
+        let _Y = z in
+        let _X' = w' in
+        let _Y' = z' in
+        let phi =
+          TransitionFormula.make
+            Infix.(x < _X
+                   && ((v < (int 0)
+                        && (v' = v + (int 2)*_Y)
+                        && y' = y)
+                       || ((int 0) <= v
+                           && (v' = v + (int 2)*( _Y - _X))
+                           && y' = y + (int 1)))
+                   && x' = x + (int 1)
+                   && _X' = _X
+                   && _Y' = _Y)
+            tr_symbols
+        in
+        let closure =
+          Infix.(x = (int 0)
+                 && y = (int 0)
+                 && v = (int 2)*_Y - _X
+                 && (SPQ.star srk phi))
+        in
+        assert_implies_wat
+          closure
+          Infix.((int 2)*_Y'*x' - (int 2)*_X'*y' - _X' + (int 2)*_Y' = v')
+      )
   ]

@@ -609,9 +609,19 @@ let local_project srk binding interp ~eliminate_original implicant =
            (ckind, VectorConversion.to_int_and_floor binding v))
     |> Polyhedron.of_constraints
   in
+  let lineality =
+    let open BatEnum in
+    Polyhedron.enum_constraints poly_without_frac
+    //@ (fun (ckind, v) ->
+      match ckind with
+      | `Zero -> Some v
+      | _ -> None)
+    |> BatList.of_enum
+  in
   let lattice_without_frac =
     List.map (VectorConversion.to_int_and_floor binding)
       (IntLattice.basis lattice_after_int)
+    |> List.rev_append lineality
     |> IntLattice.hermitize
   in
   (* We have to take the L-hull here to preserve strongest consequences.
@@ -619,5 +629,6 @@ let local_project srk binding interp ~eliminate_original implicant =
      taking the L-hull at the end of each iteration; the former can introduce
      more L-points than necessary, even when L is the standard lattice.
    *)
-  LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
-    lattice_without_frac
+  (LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
+     lattice_without_frac
+  , lattice_without_frac)

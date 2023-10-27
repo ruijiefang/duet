@@ -55,7 +55,6 @@ val int_frac_dim_of: int -> dimension_binding -> int * int
 
 (** A linear formula is a conjunction of positive inequalities and
     positive integrality constraints over LIRA vectors.
-    Integrality constraints are "pure", i.e., in integer-valued variables only.
  *)
 type linear_formula
 

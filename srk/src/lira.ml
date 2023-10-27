@@ -495,7 +495,7 @@ end = struct
             adjoin cnstrs curr_cnstrs
          | `Atom (`IsInt t) ->
             let cnstrs =
-              linearize_inequality srk binding m (`Eq, t, mk_floor srk t)
+              linearize_inequality srk binding m (`Lt, mk_floor srk t, t)
             in
             adjoin cnstrs curr_cnstrs
          | _ -> invalid_arg "purify: not a subformula of an implicant"
@@ -629,6 +629,7 @@ let local_project srk binding interp ~eliminate_original implicant =
      taking the L-hull at the end of each iteration; the former can introduce
      more L-points than necessary, even when L is the standard lattice.
    *)
-  (LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
-     lattice_without_frac
-  , lattice_without_frac)
+  let hull = LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
+               lattice_without_frac
+  in
+  (hull, lattice_without_frac)

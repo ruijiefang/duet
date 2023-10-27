@@ -556,7 +556,7 @@ let round_lower_bound binding cnstr_kind lower_bound m =
     | `Pos -> let (cond, floored) = LinearizeTerm.floor binding m lower_bound in
               (cond, Linear.QQVector.add_term QQ.one Linear.const_dim floored)
     | `Zero ->
-       assert false
+       LinearizeTerm.floor binding m lower_bound
   in
   (rounded_term, implicant.inequalities, implicant.integral)
 

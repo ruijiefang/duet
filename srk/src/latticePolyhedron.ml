@@ -207,21 +207,29 @@ end = struct
   let local_project_one m dim_to_elim ~round_lower_bound polyhedron lattice =
     let (glb, relevant, irrelevant, equality, has_upper_bound) =
       classify_constraints m dim_to_elim (P.enum_constraints polyhedron) in
+    let substitute_and_adjoin_ineqs solution ineqs_cond =
+      let cnstrs = BatList.enum irrelevant in
+      List.iter (fun (kind, v) -> BatEnum.push cnstrs (kind, v))
+          ineqs_cond;
+        List.iter (fun (cnstr_kind, v) ->
+            BatEnum.push cnstrs
+              (cnstr_kind, substitute_term solution dim_to_elim v))
+          relevant;
+        P.of_constraints cnstrs
+    in
+    let substitute_and_adjoin_integral solution integral_cond =
+      List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
+      |> List.rev_append integral_cond
+      |> IntLattice.hermitize      
+    in
     if Option.is_some equality then
       let v = Option.get equality in
       let (coeff, v') = V.pivot dim_to_elim v in
-      let solution = V.scalar_mul (QQ.negate (QQ.inverse coeff)) v' in
-      let new_p =
-        let cnstrs = BatList.enum irrelevant in
-        List.iter (fun (cnstr_kind, v) ->
-            BatEnum.push cnstrs (cnstr_kind, substitute_term solution dim_to_elim v))
-          relevant;
-        P.of_constraints cnstrs
-      in
-      let new_l =
-        List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
-        |> IntLattice.hermitize
-      in
+      let term = V.scalar_mul (QQ.negate (QQ.inverse coeff)) v' in
+      let (rounded_term, inequalities, integrality) =
+        round_lower_bound `Zero term m in
+      let new_p = substitute_and_adjoin_ineqs rounded_term inequalities in
+      let new_l = substitute_and_adjoin_integral rounded_term integrality in
       (new_p, new_l)
     else if not has_upper_bound || glb = None then
       ( P.of_constraints (BatList.enum irrelevant)
@@ -240,21 +248,8 @@ end = struct
         round_lower_bound cnstr_kind (lower_bound dim_to_elim glb_v) m in
       let delta = QQ.modulo (QQ.sub (m dim_to_elim) (QQ.of_zz rounded_value)) modulus in
       let solution = Linear.QQVector.add_term delta Linear.const_dim rounded_term in
-      let new_p =
-        let cnstrs = BatList.enum irrelevant in
-        List.iter (fun (kind, v) -> BatEnum.push cnstrs (kind, v))
-          inequalities;
-        List.iter (fun (cnstr_kind, v) ->
-            BatEnum.push cnstrs
-              (cnstr_kind, substitute_term solution dim_to_elim v))
-          relevant;
-        P.of_constraints cnstrs
-      in
-      let new_l =
-        List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
-        |> List.rev_append integrality
-        |> IntLattice.hermitize
-      in
+      let new_p = substitute_and_adjoin_ineqs solution inequalities in
+      let new_l = substitute_and_adjoin_integral solution integrality in
       (new_p, new_l)
 
   let local_project_cooper m ~eliminate

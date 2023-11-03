@@ -756,6 +756,8 @@ end
 
 type lira_context = DimensionBinding.t
 
+let empty = DimensionBinding.empty
+
 let add_dimension = DimensionBinding.add
 
 let lira_implicant_of_implicant srk binding

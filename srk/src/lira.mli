@@ -10,6 +10,8 @@
 
 type lira_context
 
+val empty: lira_context
+
 (** Add a dimension corrresponding to a symbol. *)
 val add_dimension: int -> lira_context -> lira_context
 

@@ -759,13 +759,13 @@ type lira_context = DimensionBinding.t
 let add_dimension = DimensionBinding.add
 
 let lira_implicant_of_implicant srk binding
-      ?(int_of_symbol = Syntax.int_of_symbol) interp phis =
+      ?(int_of_symbol = Linear.dim_of_sym) interp phis =
   let linfml =
     LinearizeFormula.purify_implicant srk binding ~int_of_symbol interp phis in
   ( Polyhedron.of_constraints (BatList.enum (linfml.inequalities))
   , IntLattice.hermitize linfml.integral )
 
-let linearize srk binding ?(int_of_symbol=Syntax.int_of_symbol) interp term =
+let linearize srk binding ?(int_of_symbol=Linear.dim_of_sym) interp term =
   let (linfml, v) =
     LinearizeTerm.linearize srk binding ~int_of_symbol term interp in
   let (p, l) = ( Polyhedron.of_constraints (BatList.enum (linfml.inequalities))

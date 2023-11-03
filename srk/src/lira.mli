@@ -2,10 +2,10 @@
 (** LIRA vectors are LIRA terms that are linear in floor(x) and fractional(x),
     where x ranges over symbols/variables. LIRA vectors have to exist within
     a common LIRA context that contains all dimensions corresponding to symbols
-    (by default, via [Syntax.int_of_symbol]).
+    (by default, via [Linear.dim_of_symbol]).
 
     TODO: Say something about the relationship between dimensions of symbols
-    and dimensions of LIRA vectors.
+    and dimensions of LIRA vectors; otherwise, it is unusable by the client.
  *)
 
 type lira_context

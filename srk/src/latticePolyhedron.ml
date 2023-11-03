@@ -220,7 +220,7 @@ end = struct
     let substitute_and_adjoin_integral solution integral_cond =
       List.map (substitute_term solution dim_to_elim) (IntLattice.basis lattice)
       |> List.rev_append integral_cond
-      |> IntLattice.hermitize      
+      |> IntLattice.hermitize
     in
     if Option.is_some equality then
       let v = Option.get equality in

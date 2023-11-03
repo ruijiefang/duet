@@ -1,28 +1,32 @@
-(** A LIRA vector is a vector where each coordinate is the coefficient of an
-    integer-valued variable or the coefficient of a real-valued fractional
-    variable.
-    A LIRA vector exists in the context of an environment mapping "original"
-    variables x to integer-valued floor(x) and fractional-valued frac(x)
-    in the LIRA vector.
+(** This module defines LIRA vectors (implicitly) and LIRA formulas.
 
-   - Syntax-vector conversion.
-     Model-based term linearization: This turns LIRA terms into a LIRA vector.
+    - A LIRA term (formula) is a term (formula) in the FOL with equality over
+      (QQ; +, scalar multiplication, floor(-); >, >=, Int(-)).
 
-     Given a term [t1] in LIRA, and a point [m], we can compute a term [t2]
-     that is linear in integer and fractional variables
-     and a condition [phi] such that m |= phi |= t1 = t2.
-     There are finitely many such [phis], and these correspond to a case analysis
-     on the whole space.
+    - A LIRA vector is a QQVector where every coordinate corresponds to either
+      an integer-valued variable or a real-valued fractional variable
+      (i.e., 0 <= x < 1).
+      When coordinates mean coefficients, it represents a term
+      [sum_i a_i (x_int)_i + sum_j b_j (x_frac)_j] that is linear in
+      integer and fractional variables.
 
-     For this to make sense, we should have a context that maps a variable in [t1]
-     to integer and fractional variables in [t2].
-     Moreover, this should be consistent over the whole formula, rather than
-     having fresh variables created ad-hoc.
-     The context is an implicit environment expressing the constraint
-     [x = x_{floor(x)} + x_{frac(x)}] for each variable [x].
+      A LIRA vector exists in the context of a [dimension_binding] ("context"),
+      which maps "original" variables [x] in LIRA terms/formulas to an
+      integer-valued variable [x_int] and a fractional-valued variable [x_frac]
+      in the LIRA vector.
+      The context corresponds to constraints between [x] and its
+      integer-fractional counterparts: for each original variable [x],
+      [x = x_int + x_frac /\ 0 <= x_frac < 1 /\ Int(x_int)].
 
-   - LIRA vector-standard vector conversion: Converting between a LIRA vector
-     and a vector in the original variables.
+      LIRA vectors represent only a subset of LIRA terms: those that are linear
+      in floor(v) and frac(v) (= v - floor(v)), for variables v.
+      Nevertheless, any LIRA term is semantically equal to a LIRA vector (the
+      linear term it represents) modulo some conditions, which can be expressed
+      as a formula over LIRA vectors (that we call a [linear_formula] below).
+
+    - A LIRA formula ([linear_formula]) is a positive conjunction of
+      inequalities and integrality constraints in (terms represented by)
+      LIRA vectors.
  *)
 
 module IntMap = SrkUtil.Int.Map
@@ -33,14 +37,6 @@ type linear_formula =
     inequalities: (Polyhedron.constraint_kind * Linear.QQVector.t) list
   ; integral: Linear.QQVector.t list
   }
-
-let to_inequality srk (ckind, v) =
-  let zero = Syntax.mk_zero srk in
-  let op = match ckind with
-    | `Zero -> Syntax.mk_eq srk zero
-    | `Nonneg -> Syntax.mk_leq srk zero
-    | `Pos -> Syntax.mk_lt srk zero
-  in op (Linear.of_linterm srk v)
 
 let tru = {inequalities = []; integral = []}
 
@@ -53,213 +49,155 @@ let bounds_for_frac_dim frac_dim =
   [lower_bound; upper_bound]
 
 module DimensionBinding : sig
+  (** A dimension binding associates a dimension [x] ("original dimension/variable") 
+      with a pair of dimensions ([x_int], [x_frac]) ("integer dimension", 
+      "fractional dimension"), such that:
 
+      - The integer-fractional dimensions are guaranteed to be an initial segment
+        of the natural numbers, starting from 0.
+      - Each integer dimension is even.
+      - Each fractional dimension is odd.
+ *)
   type t
 
-  (** [add srk x t] adds a fresh integer symbol [x_int] and a fresh fractional
-      symbol [x_frac] to the context if [x] is not already in [t], and binds
-      (the dimension corresponding to) [x] to these symbols (corresponding
-      dimensions).
-   *)
-  val add: 'a Syntax.context -> Syntax.symbol -> t -> t
+  (** An assignment of [x_int] and [x_frac] variables to [QQ.t] *)
+  type int_frac_valuation
 
-  val of_formula: 'a Syntax.context -> 'a Syntax.formula -> t
+  val empty: t
+
+  (** [add x t] assigns [x] to a fresh integer dimension [x_int] and a fresh 
+      fractional dimension [x_frac].
+   *)
+  val add: int -> t -> t
 
   val int_frac_dim_of: int -> t -> int * int
 
-  val to_original_dim: int -> t -> int
+  (* val to_original_dim: int -> t -> int *)
 
   val fold: ('a -> original_dim:int -> int_dim:int -> frac_dim:int -> 'a) -> t -> 'a -> 'a
 
-  val integer_constraints: t -> Linear.QQVector.t BatEnum.t
+  val integer_constraints_for:
+    (original_dim:int -> int_dim:int -> bool) -> t -> Linear.QQVector.t BatEnum.t
 
-  val inequalities: t -> (Polyhedron.constraint_kind * Linear.QQVector.t) BatEnum.t
+  val inequalities_for:
+    (original_dim:int -> frac_dim:int -> bool) ->
+    t -> (Polyhedron.constraint_kind * Linear.QQVector.t) BatEnum.t
 
-  (** Produce an extended interpretation that also assigns integer and fractional
-      variables
-   *)
-  val extend_interp: t -> 'a Interpretation.interpretation -> (int -> QQ.t)
+  val valuation: t -> 'a Interpretation.interpretation -> int_frac_valuation
+
+  val value_of: int_frac_valuation -> int -> QQ.t
+
+  val to_int_frac_valuation: (int -> QQ.t) -> int_frac_valuation
 
 end = struct
 
-  type t =
-    {
-      to_int_frac: (int * int) IntMap.t
-    ; from_int_frac: int IntMap.t
-    }
+  type t = { to_int_frac: int IntMap.t
+           ; from_int_frac: int IntMap.t
+           }
 
-  let empty: t =
-    {
-      to_int_frac = IntMap.empty
+  type int_frac_valuation = (int -> QQ.t)
+
+  let empty =
+    { to_int_frac = IntMap.empty
     ; from_int_frac = IntMap.empty
     }
 
-  let add srk sym t =
-    let original_dim = Syntax.int_of_symbol sym in
-    try
-      let _ = IntMap.find original_dim t.to_int_frac in
-      t
-    with Not_found ->
-      let name = match Syntax.symbol_name srk sym with
-          Some name -> name
-        | None -> ""
-      in
-      let int_name = Format.sprintf "%s_int" name in
-      let frac_name = Format.sprintf "%s_frac" name in
-      let (int_dim, frac_dim) =
-        ( Syntax.int_of_symbol (Syntax.mk_symbol srk ~name:int_name `TyInt)
-        , Syntax.int_of_symbol (Syntax.mk_symbol srk ~name:frac_name `TyReal)
-        ) in
-      {
-        to_int_frac = IntMap.add original_dim
-                        (int_dim, frac_dim)
-                        t.to_int_frac
-      ; from_int_frac = IntMap.add int_dim original_dim t.from_int_frac
-                        |> IntMap.add frac_dim original_dim
-      }
+  let add original_dim t =
+    match IntMap.find_opt original_dim t.to_int_frac with
+    | None ->
+       begin match IntMap.max_binding_opt t.from_int_frac with
+       | None ->
+          { to_int_frac = IntMap.add original_dim 0 t.to_int_frac
+          ; from_int_frac = IntMap.add 0 original_dim t.from_int_frac
+          }
+       | Some (curr_max, _) ->
+          { to_int_frac = IntMap.add original_dim (curr_max + 1) t.to_int_frac
+          ; from_int_frac = IntMap.add (curr_max + 1) original_dim t.from_int_frac
+          }
+       end
+    | Some _ -> t
+       
+  let int_frac_dim_of x t =
+    match IntMap.find_opt x t.to_int_frac with
+    | Some dim -> (2 * dim, 2 * dim + 1)
+    | None -> raise Not_found
 
-  let of_formula srk phi =
-    Syntax.Symbol.Set.fold (add srk) (Syntax.symbols phi) empty
-
-  let int_frac_dim_of x t = IntMap.find x t.to_int_frac
-
-  let to_original_dim x t = IntMap.find x t.from_int_frac
-
-  (*
-  let is_int_dim x t =
-    try
-      let original_dim = IntMap.find x t.from_int_frac in
-      let (int_dim, _) = IntMap.find original_dim t.to_int_frac in
-      x = int_dim
-    with Not_found -> false
-
-  let is_frac_dim x t =
-    try
-      let original_dim = IntMap.find x t.from_int_frac in
-      let (_, frac_dim) = IntMap.find original_dim t.to_int_frac in
-      x = frac_dim
-    with Not_found -> false
-
-  let is_original_dim x t =
-    IntMap.mem x t.to_int_frac
-   *)
+  let to_original_dim x t =
+    if x mod 2 = 0 then IntMap.find (x mod 2) t.from_int_frac
+    else IntMap.find ((x - 1) mod 2) t.from_int_frac
 
   let fold (f: 'a -> original_dim:int -> int_dim:int -> frac_dim:int -> 'a) t initial =
     IntMap.fold
-      (fun original_dim (int_dim, frac_dim) curr ->
-        f curr ~original_dim:original_dim ~int_dim:int_dim ~frac_dim:frac_dim) t.to_int_frac initial
+      (fun source target curr ->
+        f curr ~original_dim:source ~int_dim:(2*target) ~frac_dim:(2*target + 1))
+      t.to_int_frac initial
 
-  let integer_constraints t =
+  let integer_constraints_for select t =
     let cnstrs = BatEnum.empty () in
-    fold (fun () ~original_dim:_ ~int_dim ~frac_dim:_ ->
-        BatEnum.push cnstrs (Linear.QQVector.of_term QQ.one int_dim);
-        ()) t ();
+    fold (fun () ~original_dim ~int_dim ~frac_dim:_ ->
+        if select ~original_dim ~int_dim then
+          BatEnum.push cnstrs (Linear.QQVector.of_term QQ.one int_dim)
+        else
+          ())
+      t ();
     cnstrs
 
-  let inequalities t =
-    fold (fun bds ~original_dim:_ ~int_dim:_ ~frac_dim ->
-        BatEnum.append (BatList.enum (bounds_for_frac_dim frac_dim)) bds)
+  let inequalities_for select t =
+    fold (fun bds ~original_dim ~int_dim:_ ~frac_dim ->
+        if select ~original_dim ~frac_dim then
+          BatEnum.append (BatList.enum (bounds_for_frac_dim frac_dim)) bds
+        else
+          bds)
       t (BatEnum.empty ())
 
-  let extend_interp binding interpretation x =
-    let extended_interp =
-      fold (fun curr ~original_dim ~int_dim ~frac_dim ->
-          let original_value = Interpretation.real interpretation
-                                 (Syntax.symbol_of_int original_dim) in
-          let intval = QQ.of_zz (QQ.floor original_value) in
-          Interpretation.add_real
-            (Syntax.symbol_of_int int_dim) intval curr
-          |> Interpretation.add_real (Syntax.symbol_of_int frac_dim)
-               (QQ.sub original_value intval)
-        )
-        binding
-        interpretation
-    in
-    Interpretation.real extended_interp (Syntax.symbol_of_int x)
+  let valuation t interpretation x =
+    let v =
+      Interpretation.real interpretation
+        (Syntax.symbol_of_int (to_original_dim x t)) in
+    let intval = QQ.of_zz (QQ.floor v) in
+    if x mod 2 = 0 then intval else QQ.sub v intval
 
-end
+  let value_of valuation dim = valuation dim
 
-let to_formula srk binding linear_phi =
-  let to_isint v =
-    Syntax.mk_is_int srk (Linear.of_linterm srk v)
-  in
-  let int_constraints =
-    BatEnum.append (DimensionBinding.integer_constraints binding)
-      (BatList.enum linear_phi.integral)
-    |> BatEnum.map to_isint
-  in
-  let inequalities =
-    BatEnum.append (DimensionBinding.inequalities binding)
-      (BatList.enum linear_phi.inequalities)
-    |> BatEnum.map (to_inequality srk) in
-  BatList.of_enum (BatEnum.append int_constraints inequalities)
+  let to_int_frac_valuation m = m
 
-module VectorConversion : sig
-
-  val to_int_frac: DimensionBinding.t -> Linear.QQVector.t -> Linear.QQVector.t
-
-  val to_int_and_floor: DimensionBinding.t -> Linear.QQVector.t -> Linear.QQVector.t
-
-end = struct
-
-  let to_int_frac binding v =
-    Linear.QQVector.fold (fun dim coeff v' ->
-        try
-          let (int_dim, frac_dim) = DimensionBinding.int_frac_dim_of dim binding
-          in
-          Linear.QQVector.add_term coeff int_dim v'
-          |> Linear.QQVector.add_term coeff frac_dim
-        with Not_found ->
-          Linear.QQVector.add_term coeff dim v'
-      )
-      v
-      Linear.QQVector.zero
-
-  let to_int_and_floor binding v =
-    Linear.QQVector.fold (fun dim coeff v' ->
-        try
-          let original_dim = DimensionBinding.to_original_dim dim binding in
-          let (int_dim, frac_dim) =
-            DimensionBinding.int_frac_dim_of original_dim binding in
-          if dim = frac_dim then
-            Linear.QQVector.add_term coeff original_dim v'
-            |> Linear.QQVector.add_term (QQ.negate coeff) int_dim
-          else
-            v'
-        with Not_found ->
-          Linear.QQVector.add_term coeff dim v'
-      )
-      v
-      Linear.QQVector.zero
 end
 
 module LinearizeTerm: sig
 
+  (** A linear condition is a linear formula where Int(-) constraints are
+      pure, i.e., they do not contain any real-valued variables.
+   *)
   type lincond = linear_formula
 
   exception Nonlinear
 
-  (** [linearize srk binding term model = (phi, v)] where
-      [model |= phi |= term = of_linterm(v)], where the entailment is modulo
+  (** Given a [term] that is in original variables, a [binding] whose
+      domain contains {int_of_symbol(x): x in symbols(term)}, 
+      and an interpretation [m],
+      [linearize srk binding ~int_of_symbol term m = (phi, v)] implies
+      [m |= phi |= term = v], where the entailment is modulo
       LIRA, the equalities [x = x_int + x_frac], bounds for [x_frac],
       and integrality constraints for [x_int], that appear in [binding].
+      Int literals in [phi] are pure, i.e., free of fractional variables.
    *)
   val linearize:
-    'a Syntax.context -> DimensionBinding.t -> 'a Syntax.arith_term ->
-    (int -> QQ.t) ->
+    'a Syntax.context -> DimensionBinding.t ->
+    int_of_symbol: (Syntax.symbol -> int) ->
+    'a Syntax.arith_term -> 'a Interpretation.interpretation ->
     lincond * Linear.QQVector.t
 
   (** Given a LIRA vector [t] under LIRA context [binding],
-      and a valuation [m] that has been extended to assign integer and fractional
-      variables,
-      [floor binding m t = (phi, t')] where [m |= phi] and
-      [phi |= floor(t) = t'].
+      and a valuation [m] for integer and fractional variables,
+      [floor binding m t = (phi, t')] where [m |= phi],
+      [phi |= floor(t) = t'], [t'] is free of fractional variables,
+      and Int literals in [phi] are pure.
    *)
-  val floor: DimensionBinding.t -> (int -> QQ.t) -> Linear.QQVector.t ->
-             lincond * Linear.QQVector.t
+  val floor: DimensionBinding.t -> DimensionBinding.int_frac_valuation ->
+             Linear.QQVector.t -> lincond * Linear.QQVector.t
 
-  val ceiling: DimensionBinding.t -> (int -> QQ.t) -> Linear.QQVector.t ->
-               lincond * Linear.QQVector.t
+  val ceiling: DimensionBinding.t -> DimensionBinding.int_frac_valuation ->
+               Linear.QQVector.t -> lincond * Linear.QQVector.t
 
   val conjoin: lincond -> lincond -> lincond
 
@@ -300,7 +238,7 @@ end = struct
       DB.fold (fun (linearized, v, cond) ~original_dim:_ ~int_dim ~frac_dim:_ ->
           let (a, v') = Linear.QQVector.pivot int_dim v in
           let remainder =
-            let x = QQ.mul a (m int_dim) in
+            let x = QQ.mul a (DimensionBinding.value_of m int_dim) in
             QQ.sub x (QQ.of_zz (QQ.floor x))
           in
           let defloored =
@@ -316,7 +254,7 @@ end = struct
     let (sum_of_fractional, fractional, residue_to_floor) =
       DB.fold (fun (sum, fractional, v) ~original_dim:_ ~int_dim:_ ~frac_dim ->
           let (coeff, v') = Linear.QQVector.pivot frac_dim v in
-          let fraction = m frac_dim in
+          let fraction = (DimensionBinding.value_of m frac_dim) in
           ( QQ.add (QQ.mul coeff fraction) sum
           , Linear.QQVector.add_term coeff frac_dim fractional
           , v' )
@@ -352,9 +290,9 @@ end = struct
     let (cond, v') = floor binding m (Linear.QQVector.negate v) in
     (cond, Linear.QQVector.negate v')
 
-  let linearize srk binding term m =
-    let open Syntax in
-    ArithTerm.eval srk
+  let linearize srk binding ~int_of_symbol term interp =
+    let m = DimensionBinding.valuation binding interp in
+    Syntax.ArithTerm.eval srk
       (function
        | `Real r -> (tru, Linear.QQVector.of_term r Linear.const_dim)
        | `App (x, l) when l = [] ->
@@ -415,19 +353,17 @@ end
 module LinearizeFormula : sig
 
   (** Given an [implicant] computed by [Interpretation.select_implicant],
-      and [binding] that contains all variables in [implicant] in its support
-      (for original variables),
-      [purify_implicant srk binding m implicant = (P, L)] where
-      - [P] is only in [x_int] and [x_frac] dimensions that occur in
-        [binding].
-      - [L] is only in [x_int] dimensions that occur in [binding].
-      - m |= P /\ L, where [m] is extended to
-        [x_int] and [x_frac] dimensions according to the expected semantics.
-      - [P /\ L |= phi] modulo LIRA and
-        equalities [x] = [x_int] + [x_frac] (and integrality and bound constraints).
-   *)
+      a [binding] that contains {int_of_symbol(x): x in symbols(implicant)}
+      in its domain, and an interpretation [interp] that satisfies [implicant],
+      [lira_implicant srk ctx interp implicant = (p, l)] where:
+    - [interp |= (p, l)].
+    - [(p, l) |= implicant] modulo LIRA, equalities [x] = [x_int] + [x_frac],
+      integrality constraints for [x_int], and bound constraints for [x_frac],
+      for each variable x that occurs in [binding].
+ *)  
   val purify_implicant:
     'a Syntax.context -> DimensionBinding.t ->
+    int_of_symbol: (Syntax.symbol -> int) ->
     'a Interpretation.interpretation ->
     'a Syntax.formula list ->
     linear_formula
@@ -436,9 +372,9 @@ end = struct
 
   open Syntax
 
-  let linearize_inequality srk binding m (rel, t1, t2) =
-    let (cond1, linear1) = LinearizeTerm.linearize srk binding t1 m in
-    let (cond2, linear2) = LinearizeTerm.linearize srk binding t2 m in
+  let linearize_inequality srk binding int_of_symbol m (rel, t1, t2) =
+    let (cond1, linear1) = LinearizeTerm.linearize srk binding ~int_of_symbol t1 m in
+    let (cond2, linear2) = LinearizeTerm.linearize srk binding ~int_of_symbol t2 m in
     let v = Linear.QQVector.sub linear2 linear1 in
     let cond = LinearizeTerm.conjoin cond1 cond2 in
     let constrnt = match rel with
@@ -448,13 +384,14 @@ end = struct
     in
     (constrnt :: cond.inequalities, cond.integral)
 
-  let purify_implicant srk binding interp implicant =
-    let m = DimensionBinding.extend_interp binding interp in
+  let purify_implicant srk binding ~int_of_symbol interp implicant =
     let adjoin (pcons, lcons) (polyhedral_cnstrs, lattice_cnstrs) =
       ( BatList.rev_append pcons polyhedral_cnstrs
       , BatList.rev_append lcons lattice_cnstrs
       )
     in
+    let linearize_inequality = linearize_inequality srk binding int_of_symbol
+                                 interp in
     let collect curr_cnstrs literal =
       match Formula.destruct srk literal with
       | `Proposition (`App (_, _))
@@ -463,11 +400,11 @@ end = struct
       | `Atom (`ArrEq (_a1, _a2)) ->
          invalid_arg "purify: LIRA cannot handle array terms"
       | `Atom (`Arith ineq) ->
-         let cnstrs = linearize_inequality srk binding m ineq in
+         let cnstrs = linearize_inequality ineq in
          adjoin cnstrs curr_cnstrs
       | `Atom (`IsInt t) ->
          let cnstrs =
-           linearize_inequality srk binding m (`Eq, t, mk_floor srk t)
+           linearize_inequality (`Eq, t, mk_floor srk t)
          in
          adjoin cnstrs curr_cnstrs
       | `Not phi ->
@@ -479,23 +416,21 @@ end = struct
          | `Atom (`Arith (`Eq, t1, t2)) ->
             let cnstrs =
               if Interpretation.evaluate_formula interp (mk_lt srk t1 t2)
-              then
-                linearize_inequality srk binding m (`Lt, t1, t2)
-              else
-                linearize_inequality srk binding m (`Lt, t2, t1)
+              then linearize_inequality (`Lt, t1, t2)
+              else linearize_inequality (`Lt, t2, t1)
             in
             adjoin cnstrs curr_cnstrs
          | `Atom (`Arith (`Leq, t1, t2)) ->
             let cnstrs =
-              linearize_inequality srk binding m (`Lt, t2, t1) in
+              linearize_inequality (`Lt, t2, t1) in
             adjoin cnstrs curr_cnstrs
          | `Atom (`Arith (`Lt, t1, t2)) ->
             let cnstrs =
-              linearize_inequality srk binding m (`Leq, t2, t1) in
+              linearize_inequality (`Leq, t2, t1) in
             adjoin cnstrs curr_cnstrs
          | `Atom (`IsInt t) ->
             let cnstrs =
-              linearize_inequality srk binding m (`Lt, mk_floor srk t, t)
+              linearize_inequality (`Lt, mk_floor srk t, t)
             in
             adjoin cnstrs curr_cnstrs
          | _ -> invalid_arg "purify: not a subformula of an implicant"
@@ -507,26 +442,6 @@ end = struct
     ; integral = lcons }
 
 end
-
-type dimension_binding = DimensionBinding.t
-
-let mk_lira_context srk phi = DimensionBinding.of_formula srk phi
-
-let fold = DimensionBinding.fold
-
-let add_binding = DimensionBinding.add
-
-let int_frac_dim_of = DimensionBinding.int_frac_dim_of
-
-let to_int_frac = VectorConversion.to_int_frac
-
-let to_int_and_floor = VectorConversion.to_int_and_floor
-
-let floor = LinearizeTerm.floor
-
-let ceiling = LinearizeTerm.ceiling
-
-let lira_implicant_of_implicant = LinearizeFormula.purify_implicant
 
 (*
   lattice_hull P L =
@@ -549,87 +464,320 @@ let lira_implicant_of_implicant = LinearizeFormula.purify_implicant
     (S, DD.bottom, Solver.get_model S)
  *)
 
-let round_lower_bound binding cnstr_kind lower_bound m =
-  let (implicant, rounded_term) =
-    match cnstr_kind with
-    | `Nonneg -> LinearizeTerm.ceiling binding m lower_bound
-    | `Pos -> let (cond, floored) = LinearizeTerm.floor binding m lower_bound in
-              (cond, Linear.QQVector.add_term QQ.one Linear.const_dim floored)
-    | `Zero ->
-       LinearizeTerm.floor binding m lower_bound
-  in
-  (rounded_term, implicant.inequalities, implicant.integral)
+module LocalProject : sig
 
-let local_project srk binding interp ~eliminate_original implicant =
-  let eliminate_original = IntSet.of_list eliminate_original in
-  let (ints_to_eliminate, fracs_to_eliminate) =
-    fold (fun (ints_to_elim, fracs_to_elim) ~original_dim ~int_dim ~frac_dim ->
-        if IntSet.mem original_dim eliminate_original then
-          (int_dim :: ints_to_elim, frac_dim :: fracs_to_elim)
-        else
-          (ints_to_elim, fracs_to_elim)
-      )
-      binding
-      ([], [])
-  in
-  let all_inequalities =
-    BatEnum.append
-      (DimensionBinding.inequalities binding) (BatList.enum implicant.inequalities)
-  in
-  let all_ints =
-    BatEnum.append (DimensionBinding.integer_constraints binding)
-      (BatList.enum implicant.integral) in
-  let m = DimensionBinding.extend_interp binding interp in
-  let poly_after_real =
-    Polyhedron.local_project m fracs_to_eliminate
-      (Polyhedron.of_constraints all_inequalities)
-  in
-  (* Local projection eliminating integer dimensions must use mixed Cooper
-     because fractional dimensions for variables to keep still exist.
-     The difference between mixed Cooper and pure Cooper is that the greatest
-     lower bound term [t] in [t <= x_int] is strengthened to
-     [ceiling(t) <= x_int]; this ensures local projection has finite image.
+  (** [local_proj srk binding m onto implicant = (p, l)] where
+      - [p] and [l] are in the integer and fractional dimensions corresponding to
+        original dimensions in [domain(binding) - onto].
+      - [m |= phi] and
+      - [phi |=
+             exists (integer and fractional variables x not in [onto]).
+             (Int(x_int) /\ 0 <= x_frac < 1) /\ implicant]
+      - If [implicant |= ax <= b], [phi |= ax <= b].
+      Entailments are all modulo LIRA.
    *)
-  let (poly_after_int, lattice_after_int) =
-    LatticePolyhedron.local_project_cooper m
-      ~eliminate:ints_to_eliminate poly_after_real
-      ~round_lower_bound:(round_lower_bound binding)
-      (IntLattice.hermitize (BatList.of_enum all_ints))
-  in
-  (* Convert constraints over LIRA vectors to constraints over LIRA terms
-     and drop bounds on fractions, so that we don't incur exponential
-     cost in DD conversion.
+  val local_project:
+    'a Syntax.context -> DimensionBinding.t ->
+    DimensionBinding.int_frac_valuation -> onto_original:IntSet.t ->
+    linear_formula -> DD.closed DD.t * IntLattice.t
 
-     TODO: Use SMT solver to test validity of each atom to detect these
-     bounds?
+end = struct
+
+  let round_lower_bound binding cnstr_kind lower_bound m =
+    let int_frac_m = DimensionBinding.to_int_frac_valuation m in
+    let (implicant, rounded_term) =
+      match cnstr_kind with
+      | `Nonneg -> LinearizeTerm.ceiling binding int_frac_m lower_bound
+      | `Pos -> let (cond, floored) = LinearizeTerm.floor binding int_frac_m
+                                        lower_bound in
+                (cond, Linear.QQVector.add_term QQ.one Linear.const_dim floored)
+      | `Zero ->
+         LinearizeTerm.floor binding int_frac_m lower_bound
+    in
+    (rounded_term, implicant.inequalities, implicant.integral)
+
+  let local_project_linear binding int_frac_m ~onto_original implicant =
+    (* TODO:
+     - Bounds for fractional variables corresponding to variables to be kept
+       should be left implicit. They come in only when we interface with SMT.
+
+       (This doesn't look possible now, because we want everything in terms
+       of original variables. An alternative is to include bounds only when
+       they are used somewhere to linearize a term. They can then be left out
+       of both the formula for QE and in the blocking clause for SMT.)
+
+     - Model-based projection for L-hull may be interleaved with local
+       projection; just use the same model, and block using the implicant
+       for the hull, not the implicant in the outer loop.
+     *)
+    let (ints_to_elim, fracs_to_elim) =
+      DimensionBinding.fold
+        (fun (ints_to_elim, fracs_to_elim) ~original_dim ~int_dim ~frac_dim ->
+          if IntSet.mem original_dim onto_original then
+            (ints_to_elim, fracs_to_elim)
+          else
+            (IntSet.add int_dim ints_to_elim, IntSet.add frac_dim fracs_to_elim))
+        binding
+        (IntSet.empty, IntSet.empty)
+    in
+    let all_inequalities =
+      DimensionBinding.inequalities_for
+        (fun ~original_dim ~frac_dim:_ ->
+          not (IntSet.mem original_dim onto_original))
+        binding
+      |> BatEnum.append (BatList.enum implicant.inequalities)
+    in
+    let all_int_constraints =
+      DimensionBinding.integer_constraints_for
+        (fun ~original_dim ~int_dim:_ ->
+          not (IntSet.mem original_dim onto_original))
+        binding
+      |> BatEnum.append
+           (BatList.enum implicant.integral)
+      |> BatEnum.append
+           (BatList.enum [Linear.QQVector.of_term QQ.one Linear.const_dim])
+    in
+    (*
+    let int_frac_defs =
+      let defns = BatEnum.empty () in
+      IntSet.iter (fun dim ->
+          let (int_dim, frac_dim) = DimensionBinding.int_frac_dim_of dim binding in
+          let v = Linear.QQVector.of_list
+                    [(QQ.one, dim); (QQ.of_int (-1), int_dim); (QQ.of_int (-1), frac_dim)]
+          in
+          BatEnum.push defns (`Zero, v)
+        ) onto_original;
+      defns
+    in
+     *)
+    let poly =
+      (* Polyhedron.of_constraints (BatEnum.append all_inequalities int_frac_defs) *)
+      Polyhedron.of_constraints all_inequalities
+    in
+    let poly_after_real =
+      (* Integer constraints do not contain real variables *)
+      Polyhedron.local_project (DimensionBinding.value_of int_frac_m)
+        (BatList.of_enum (IntSet.enum fracs_to_elim))
+        poly
+    in
+    (* [round_lower_bound] has to satisfy two properties:
+
+     1. There exists a discrete subgroup of the reals that contains the
+        { m(t): t a term in image(round_lower_bound), m a valuation }.
+        This ensures that local projection has finite image.
+
+     2. Each term in the image of [round_lower_bound] has to be free of
+        fractional variables. This maintains the invariant that Int(-)
+        atoms are pure, i.e., free of fractional variables, so that they
+        can be left out of quantifier elimination for fractional variables.
+     *)
+    let (poly_after_int, lattice_after_int) =
+      LatticePolyhedron.local_project_cooper
+        (DimensionBinding.value_of int_frac_m)
+        ~eliminate:(BatList.of_enum (IntSet.enum ints_to_elim))
+        ~round_lower_bound:(round_lower_bound binding)
+        poly_after_real
+        (IntLattice.hermitize (BatList.of_enum all_int_constraints))
+    in
+    (poly_after_int, lattice_after_int)
+
+  let local_project srk binding int_frac_m ~onto_original implicant =
+    let (p, l) = local_project_linear binding int_frac_m ~onto_original
+                   implicant in
+    let lineality =
+      let open BatEnum in
+      Polyhedron.enum_constraints p
+      //@ (fun (ckind, v) ->
+        match ckind with
+        | `Zero -> Some v
+        | _ -> None)
+      |> BatList.of_enum
+    in
+    let l' =
+      IntLattice.basis l
+      |> List.rev_append lineality
+      |> IntLattice.hermitize
+    in
+    let hull = LatticePolyhedron.mixed_lattice_hull srk p l' in
+    (hull, l')
+
+end
+
+module Projection : sig
+
+  val project:
+    'a Syntax.context -> 'a Syntax.formula -> ('a Syntax.arith_term) array ->
+    DD.closed DD.t * IntLattice.t
+
+end = struct
+
+  (** (P, L) such that P is closed and P is the L-hull of P,
+      and both are in dimensions 0, ... , 2 * len(term array) - 1,
+      where an even offset from base corresponds to a term t in the array
+      and an odd offset corresponds to floor(t).
+      For term t = a[i], the dimension [2i] in the ambient
+      space of [P] and [L] is the one for [t_int], and [2i + 1] is the one
+      for [t_frac].
+
+      [L] is a lattice of constraints, and always contains 1 
+      (i.e., Int(1) is always implicit).
    *)
-  let poly_without_frac =
-    Polyhedron.enum_constraints poly_after_int
-    |> BatEnum.map (fun (ckind, v) ->
-           (ckind, VectorConversion.to_int_and_floor binding v))
-    |> Polyhedron.of_constraints
-  in
-  let lineality =
-    let open BatEnum in
-    Polyhedron.enum_constraints poly_without_frac
-    //@ (fun (ckind, v) ->
-      match ckind with
-      | `Zero -> Some v
-      | _ -> None)
-    |> BatList.of_enum
-  in
-  let lattice_without_frac =
-    List.map (VectorConversion.to_int_and_floor binding)
-      (IntLattice.basis lattice_after_int)
-    |> List.rev_append lineality
-    |> IntLattice.hermitize
-  in
-  (* We have to take the L-hull here to preserve strongest consequences.
-     Taking L-hull after completing local projection is not the same as
-     taking the L-hull at the end of each iteration; the former can introduce
-     more L-points than necessary, even when L is the standard lattice.
+  type t = DD.closed DD.t * IntLattice.t
+
+  let join (p1, l1) (p2, l2) =
+    (DD.join p1 p2, IntLattice.intersect l1 l2)
+
+  let bottom ambient_dim =
+    ( Polyhedron.dd_of ambient_dim Polyhedron.bottom
+    , IntLattice.hermitize [Linear.QQVector.of_term QQ.one Linear.const_dim]
+    )
+
+  let top ambient_dim =
+    ( Polyhedron.dd_of ambient_dim Polyhedron.top
+    , IntLattice.hermitize [Linear.QQVector.of_term QQ.one Linear.const_dim]
+    )
+
+  let original_dim_of_symbol base sym = base + Syntax.int_of_symbol sym
+
+  (*
+  let symbol_of_original_dim base dim =
+    if dim >= base then Syntax.symbol_of_int (dim - base)
+    else failwith "dimension corresponds to term in array"
    *)
-  let hull = LatticePolyhedron.mixed_lattice_hull srk poly_without_frac
-               lattice_without_frac
-  in
-  (hull, lattice_without_frac)
+
+  let of_model srk binding terms phi = function
+    | `LIRA interp ->
+       let implicant = Interpretation.select_implicant interp phi in
+       begin match implicant with
+       | None -> failwith "abstractLira: Cannot produce implicant"
+       | Some implicant ->
+          let lin_fml = LinearizeFormula.purify_implicant srk binding
+                          ~int_of_symbol:(original_dim_of_symbol (Array.length terms))
+                          interp implicant in
+          let (term_constraints, onto, _) =
+            Array.fold_left (fun (linearized, onto, i) term ->
+                let (lincond, linterm) =
+                  LinearizeTerm.linearize srk binding
+                    ~int_of_symbol:(original_dim_of_symbol (Array.length terms))
+                    term interp in
+                let (int_dim, frac_dim) =
+                  DimensionBinding.int_frac_dim_of i binding in
+                let cnstr =
+                  ( `Zero
+                  , linterm
+                    |> Linear.QQVector.add_term (QQ.of_int (-1)) int_dim
+                    |> Linear.QQVector.add_term (QQ.of_int (-1)) frac_dim )
+                in
+                ( LinearizeTerm.conjoin
+                    { lincond with inequalities = cnstr :: lincond.inequalities }
+                    linearized
+                , IntSet.add i onto
+                , i + 1 ))
+              (tru, IntSet.empty, 0) terms
+          in
+          let lin_fml = LinearizeTerm.conjoin term_constraints lin_fml in
+          let int_frac_m = DimensionBinding.valuation binding interp in
+          let (dd, l) =
+            LocalProject.local_project srk binding int_frac_m ~onto_original:onto
+              lin_fml in
+          (dd, l)
+       end
+    | _ -> assert false
+
+  let term_of srk binding terms v =
+    let mk_multiple coeff term =
+      if QQ.equal coeff QQ.zero then []
+      else if QQ.equal coeff QQ.one then [term]
+      else [Syntax.mk_mul srk [Syntax.mk_real srk coeff; term]]
+    in
+    let summands =
+      Array.fold_left (fun (summands, i) term ->
+          let (int_dim, frac_dim) =
+            DimensionBinding.int_frac_dim_of i binding in
+          let int_coeff = Linear.QQVector.coeff int_dim v in
+          let frac_coeff = Linear.QQVector.coeff frac_dim v in
+          let diff = QQ.sub int_coeff frac_coeff in
+          let int_term = Syntax.mk_floor srk term in
+          ( mk_multiple diff int_term @ mk_multiple frac_coeff term @ summands
+          , i + 1)
+        )
+        ([], 0) terms
+      |> (fun (l, _) -> List.rev l)
+    in
+    Syntax.mk_add srk summands
+
+  let formula_of srk binding terms (p, l) =
+    let inequalities =
+      BatEnum.map
+        (fun (ckind, v) ->
+          let rhs = term_of srk binding terms v in
+          let zero = Syntax.mk_real srk QQ.zero in
+          match ckind with
+          | `Zero -> Syntax.mk_eq srk zero rhs
+          | `Nonneg -> Syntax.mk_eq srk zero rhs
+          | `Pos -> Syntax.mk_lt srk zero rhs
+        )
+        (DD.enum_constraints p)
+      |> BatList.of_enum
+    in
+    let integrality =
+      List.map (fun v -> Syntax.mk_is_int srk (term_of srk binding terms v))
+        (IntLattice.basis l)
+    in
+    Syntax.mk_and srk (List.rev_append integrality inequalities)
+
+  let project (srk: 'a Syntax.context) phi terms =
+    let base = Array.length terms in
+    let binding =
+      (* Dimensions for terms have to be added first, because dimensions for
+         (P, L) are interpreted according to the array. *)
+      BatEnum.fold (fun binding i -> DimensionBinding.add i binding)
+        DimensionBinding.empty (BatEnum.(--^) 0 (Array.length terms))
+      |> Syntax.Symbol.Set.fold
+           (fun sym binding ->
+             DimensionBinding.add (original_dim_of_symbol base sym) binding)
+           (Syntax.symbols phi)
+    in
+    let of_model = of_model srk binding terms phi in
+    let formula_of = formula_of srk binding terms in
+    let domain: ('a, t) Abstract.domain =
+      {
+        join
+      ; of_model
+      ; formula_of
+      ; top = top (Array.length terms * 2)
+      ; bottom = bottom (Array.length terms * 2)
+      }
+    in
+    let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
+    Abstract.Solver.abstract solver domain
+
+end
+
+type lira_context = DimensionBinding.t
+
+let add_dimension = DimensionBinding.add
+
+let lira_implicant_of_implicant srk binding
+      ?(int_of_symbol = Syntax.int_of_symbol) interp phis =
+  let linfml =
+    LinearizeFormula.purify_implicant srk binding ~int_of_symbol interp phis in
+  ( Polyhedron.of_constraints (BatList.enum (linfml.inequalities))
+  , IntLattice.hermitize linfml.integral )
+
+let linearize srk binding ?(int_of_symbol=Syntax.int_of_symbol) interp term =
+  let (linfml, v) =
+    LinearizeTerm.linearize srk binding ~int_of_symbol term interp in
+  let (p, l) = ( Polyhedron.of_constraints (BatList.enum (linfml.inequalities))
+               , IntLattice.hermitize linfml.integral ) in
+  ((p, l), v)
+
+let local_project srk binding interp ~onto_original (p, l) =
+  let onto_original = IntSet.of_list onto_original in
+  LocalProject.local_project srk binding
+    (DimensionBinding.valuation binding interp) ~onto_original
+    { inequalities = BatList.of_enum (Polyhedron.enum_constraints p)
+    ; integral = IntLattice.basis l
+    }
+
+let project srk phi terms = Projection.project srk phi terms

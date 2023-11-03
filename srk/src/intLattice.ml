@@ -146,7 +146,7 @@ let basis t =
   | Lattice { generators ; denominator ; _ } ->
     List.map (qqify_denom denominator) generators
 
-let pp fmt t =
+let pp pp_dim fmt t =
   match t with
   | ZeroLattice -> Format.fprintf fmt "{zero lattice}"
   | Lattice lat ->
@@ -156,7 +156,7 @@ let pp fmt t =
         ; basis: @[%a@]
         }@]"
       ZZ.pp lat.denominator
-      (SrkUtil.pp_print_list Linear.ZZVector.pp) lat.generators
+      (SrkUtil.pp_print_list (Linear.ZZVector.pp_term pp_dim)) lat.generators
 
 let member v t =
   match t with

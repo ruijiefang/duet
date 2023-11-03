@@ -43,4 +43,4 @@ val subset : t -> t -> bool
 
 val equal : t -> t -> bool
 
-val pp : Format.formatter -> t -> unit
+val pp : (Format.formatter -> int -> unit) -> Format.formatter -> t -> unit

@@ -244,7 +244,7 @@ module CooperProjection (Target : Target)
       IntLattice.hermitize (lattice_constraints @ symbol_dimensions)
     in
     logf "Polyhedron to project: %a@." (Polyhedron.pp pp_dim) p;
-    logf "Lattice: %a@." IntLattice.pp l;
+    logf "Lattice: %a@." (IntLattice.pp pp_dim) l;
     logf "Dimensions to eliminate: %a@."
       (Format.pp_print_list Format.pp_print_int) dimensions_to_eliminate;
     let (projected_p, projected_l) =
@@ -253,7 +253,7 @@ module CooperProjection (Target : Target)
     logf "Polyhedron after projection: %a@."
       (Polyhedron.pp pp_dim) projected_p;
     logf "Lattice after projection: %a@."
-      IntLattice.pp projected_l;
+      (IntLattice.pp pp_dim) projected_l;
     logf "Computing lattice polyhedron...@;";
     (* TODO: What should this hull be? *)
     let hull_dd = LatticePolyhedron.mixed_lattice_hull Target.context
@@ -266,7 +266,7 @@ module CooperProjection (Target : Target)
   let pp fmt (p, l) =
     Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
       (DD.pp (fun fmt d -> Format.fprintf fmt "%d" d)) p
-      IntLattice.pp l
+      (IntLattice.pp pp_dim) l
 
 end
 

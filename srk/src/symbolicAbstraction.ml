@@ -528,7 +528,7 @@ module CooperProjection (C : Context) (S : PreservedSymbols)
   let pp fmt (p, l) =
     Format.fprintf fmt "{ polyhedron : %a @. lattice: %a }"
       (DD.pp (fun fmt d -> Format.fprintf fmt "%d" d)) p
-      IntLattice.pp l
+      (IntLattice.pp Util.pp_dim) l
 
 end
 

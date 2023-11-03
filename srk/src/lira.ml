@@ -554,6 +554,8 @@ end = struct
       (* Polyhedron.of_constraints (BatEnum.append all_inequalities int_frac_defs) *)
       Polyhedron.of_constraints all_inequalities
     in
+    Format.printf "Polyhedron before projection: @[%a@]@;"
+      (Polyhedron.pp Format.pp_print_int) poly;
     let poly_after_real =
       (* Integer constraints do not contain real variables *)
       Polyhedron.local_project (DimensionBinding.value_of int_frac_m)
@@ -571,6 +573,8 @@ end = struct
         atoms are pure, i.e., free of fractional variables, so that they
         can be left out of quantifier elimination for fractional variables.
      *)
+    Format.printf "Polyhedron after real QE: @[%a@]@;"
+      (Polyhedron.pp Format.pp_print_int) poly;
     let (poly_after_int, lattice_after_int) =
       LatticePolyhedron.local_project_cooper
         (DimensionBinding.value_of int_frac_m)
@@ -704,9 +708,16 @@ end = struct
         ([], 0) terms
       |> (fun (l, _) -> List.rev l)
     in
-    Syntax.mk_add srk summands
+    let term = Syntax.mk_add srk summands in
+    Format.printf "term_of: v: %a@; terms were: %a@; result: %a@;"
+      Linear.QQVector.pp v
+      (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
+      terms
+      (Syntax.ArithTerm.pp srk) term;
+    term
 
   let formula_of srk binding terms (p, l) =
+    Format.printf "formula_of: input: %a" (DD.pp Format.pp_print_int) p;
     let inequalities =
       BatEnum.map
         (fun (ckind, v) ->
@@ -724,7 +735,9 @@ end = struct
       List.map (fun v -> Syntax.mk_is_int srk (term_of srk binding terms v))
         (IntLattice.basis l)
     in
-    Syntax.mk_and srk (List.rev_append integrality inequalities)
+    let phi = Syntax.mk_and srk (List.rev_append integrality inequalities) in
+    Format.printf "formula_of: result: @[%a@]@;" (Syntax.Formula.pp srk) phi;
+    phi
 
   let project (srk: 'a Syntax.context) phi terms =
     let base = Array.length terms in
@@ -750,6 +763,7 @@ end = struct
       }
     in
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
+    ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
 
 end
@@ -782,4 +796,5 @@ let local_project srk binding interp ~onto_original (p, l) =
     ; integral = IntLattice.basis l
     }
 
-let project srk phi terms = Projection.project srk phi terms
+let project srk phi terms =
+  Projection.project srk phi terms

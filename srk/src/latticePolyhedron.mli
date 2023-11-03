@@ -36,6 +36,7 @@ val mixed_lattice_hull: 'a Syntax.context -> Polyhedron.t -> IntLattice.t ->
     - For all integers n,
       [ineqs /\ IsInt(ints) |= n <ckind> lower_bound -> n <ckind> t].
     - [ineqs], [ints], and [t] all involve only dimensions in [lower_bound].
+    - [m |= ineqs /\ ints]
     These ensure soundness, i.e., that (i), (ii) and (iii) hold.
 
     For image-finiteness, [round] needs to satisfy the following.

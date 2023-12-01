@@ -187,9 +187,21 @@ module IntHullProjection (Target : Target)
     let (inequalities, lattice_constraints) = constraints_of_implicant implicant in
     let p = P.of_constraints (BatList.enum inequalities) in
     let l = IntLattice.hermitize lattice_constraints in
-    (* TODO: What should this hull be? *)
-    let hull_dd = LatticePolyhedron.mixed_lattice_hull Target.context p l in
-    (* let hull_dd = Polyhedron.dd_of ambient_dimension hull in *)
+    (* TODO: Original intention was to compute the full integer hull before
+       projection. When the polyhedron is within the QQ-span of the lattice
+       in its constrained dimensions, this is probably a change of basis +
+       standard integer hull. Verify and implement.
+     *)
+    let hull =
+      LatticePolyhedron.local_mixed_lattice_hull
+        (fun dim ->
+          if dim = Linear.const_dim then QQ.one
+          else match Linear.sym_of_dim dim with
+               | Some sym ->
+                  Interpretation.real interp sym
+               | None -> failwith (Format.sprintf "Cannot find dimension %d in model" dim))
+        (p, l) in
+    let hull_dd = Polyhedron.dd_of ambient_dimension hull in
     DD.project dimensions_to_eliminate hull_dd
 
   let pp fmt p =
@@ -247,17 +259,25 @@ module CooperProjection (Target : Target)
     logf "Lattice: %a@." (IntLattice.pp pp_dim) l;
     logf "Dimensions to eliminate: %a@."
       (Format.pp_print_list Format.pp_print_int) dimensions_to_eliminate;
-    let (projected_p, projected_l) =
+    let (projected_p, projected_l, _) =
       LatticePolyhedron.local_project_cooper (valuation interp)
-        ~eliminate:dimensions_to_eliminate p l in
+        ~eliminate:(Array.of_list dimensions_to_eliminate) (p, l) in
     logf "Polyhedron after projection: %a@."
       (Polyhedron.pp pp_dim) projected_p;
     logf "Lattice after projection: %a@."
       (IntLattice.pp pp_dim) projected_l;
     logf "Computing lattice polyhedron...@;";
-    (* TODO: What should this hull be? *)
-    let hull_dd = LatticePolyhedron.mixed_lattice_hull Target.context
-                 projected_p projected_l in
+    (* TODO: Check if this is still correct after changes in latticePolyhedron *)
+    let hull =
+      LatticePolyhedron.local_mixed_lattice_hull
+        (fun dim ->
+          if dim = Linear.const_dim then QQ.one
+          else match Linear.sym_of_dim dim with
+               | Some sym ->
+                  Interpretation.real interp sym
+               | None -> failwith (Format.sprintf "Cannot find dimension %d in model" dim))
+        (projected_p, projected_l) in
+    let hull_dd = Polyhedron.dd_of ambient_dimension hull in
     (* logf "Computed lattice polyhedron: %a@." (P.pp pp_dim) hull; *)
     ( (* DD.of_constraints_closed ambient_dimension (P.enum_constraints hull) *)
       hull_dd

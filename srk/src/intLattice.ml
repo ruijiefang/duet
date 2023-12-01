@@ -152,7 +152,7 @@ let pp pp_dim fmt t =
   | Lattice lat ->
     Format.fprintf fmt
       "@[<v 0>
-        { denominator: %a
+        { denominator: @[%a@]
         ; basis: @[%a@]
         }@]"
       ZZ.pp lat.denominator

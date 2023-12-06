@@ -111,7 +111,7 @@ val project_cooper:
 
 val abstract_cooper:
   'a Syntax.context -> ?round_lower_bound: ceiling -> 'a Syntax.formula ->
-  'a Syntax.term Array.t -> DD.closed DD.t * IntLattice.t
+  'a Syntax.arith_term Array.t -> DD.closed DD.t * IntLattice.t
 
 (*
 (** [local_project_and_hull m elim (P, L) = P'] is a polyhedron

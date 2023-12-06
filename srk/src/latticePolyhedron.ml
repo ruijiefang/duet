@@ -16,7 +16,7 @@ let remap_vector move_constant f v =
 
 module FixedPoint : sig
 
-  (* TODO: Generalize [of_linterm] etc. to not assume standard 
+  (* TODO: Generalize [of_linterm] etc. to not assume standard
      symbol-dimension binding; then remove translation here. *)
 
   val to_inequality:
@@ -31,10 +31,25 @@ module FixedPoint : sig
     'a Syntax.context -> dim_of_symbol:(Syntax.symbol -> int) ->
     'a Syntax.formula list -> ([> `Nonneg | `Pos | `Zero ] * V.t) list * V.t list
 
-  val ambient_dim: (P.t * L.t) list -> int
+  val collect_dimensions:
+    ('a -> Linear.QQVector.t) -> 'a BatEnum.t -> SrkUtil.Int.Set.t
+    
+  val ambient_dim: (P.t * L.t) list -> except:int list -> int
+
+  val define_terms:
+    'a Syntax.context -> 'a Syntax.arith_term Array.t ->
+    (Polyhedron.constraint_kind * Linear.QQVector.t) list
+
+  val extract_implicant_and_abstract:
+    'a Syntax.context -> 'a Syntax.formula ->
+    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
+    abstract: ((int -> Q.t) -> P.t * L.t -> 'b) ->
+    [> `LIRA of 'a Interpretation.interpretation ] -> 'b
 
 end = struct
-  
+
+  module IntSet = SrkUtil.Int.Set
+
   let to_inequality srk ~symbol_of_dim (ckind, v) =
     let zero = Syntax.mk_zero srk in
     let op = match ckind with
@@ -72,7 +87,7 @@ end = struct
       | `Atom (`IsInt t) ->
          (pcons, Linear.linterm_of srk t :: lcons)
       | _ -> assert false
-    in  
+    in
     List.fold_left collect ([], []) atoms
 
   let make_conjunct srk ~symbol_of_dim (p, l) =
@@ -89,14 +104,68 @@ end = struct
         (IntLattice.basis l)
     in Syntax.mk_and srk (List.rev_append integral inequalities)
 
-  let ambient_dim conjuncts =
+  let collect_dimensions to_vector cnstrs =
+    BatEnum.fold
+      (fun dims cnstr ->
+        let v = to_vector cnstr in
+        Linear.QQVector.fold
+          (fun dim _coeff dims ->
+            if dim <> Linear.const_dim then IntSet.add dim dims
+            else dims
+          )
+          v dims)
+      IntSet.empty
+      cnstrs
+
+  let ambient_dim conjuncts ~except =
+    let except = IntSet.of_list except in
     List.fold_left (fun curr_max (p, l) ->
-        let curr =
-          Int.max (Polyhedron.max_constrained_dim p) (IntLattice.max_dim l) + 1
+        let p_dims =
+          collect_dimensions (fun (_, v) -> v) (Polyhedron.enum_constraints p)
         in
+        let l_dims =
+          collect_dimensions (fun x -> x) (BatList.enum (IntLattice.basis l)) in
+        let dims = IntSet.diff (IntSet.union p_dims l_dims) except in
+        let curr = IntSet.max_elt dims + 1 in
         Int.max curr curr_max)
       0
       conjuncts
+
+  let define_terms srk terms =
+    let base = Array.length terms in
+    Array.fold_left
+      (fun (vs, idx) term ->
+        let v = Linear.linterm_of srk term
+                |> remap_vector true (fun dim -> base + dim) in
+        ((`Zero, Linear.QQVector.add_term (QQ.of_int (-1)) idx v) :: vs, idx + 1)
+      )
+      ([], 0) terms
+    |> fst
+
+  let extract_implicant_and_abstract
+        srk phi ~symbol_of_dim ~dim_of_symbol ~abstract model =
+    match model with
+    | `LIRA interp ->
+       let m dim =
+         if dim = Linear.const_dim then QQ.one
+         else
+           match symbol_of_dim dim with
+           | None ->
+              failwith
+                (Format.sprintf "Cannot translate dimension %d to a symbol for evaluation" dim)
+           | Some s -> Interpretation.real interp s
+       in
+       let implicant = Interpretation.select_implicant interp phi in
+       let (pcons, lcons) = match implicant with
+         | None -> assert false
+         | Some atoms -> constraints_of_implicant srk ~dim_of_symbol atoms
+       in
+       let (p, l) =
+         ( Polyhedron.of_constraints (BatList.enum pcons)
+         , IntLattice.hermitize lcons )
+       in
+       abstract m (p, l)
+    | _ -> assert false
 
 end
 
@@ -111,13 +180,18 @@ module MixedHull: sig
     dim_of_symbol:(Syntax.symbol -> int) ->
     (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
+  val abstract:
+    'a Syntax.context ->
+    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
+    'a Syntax.formula -> DD.closed DD.t
+
 end = struct
 
   module IntMap = SrkUtil.Int.Map
   module IntSet = SrkUtil.Int.Set
 
   let recession_extension var_to_ray_var p =
-    (* ax <= b, a'x < b' --> 
+    (* ax <= b, a'x < b' -->
        ax <= b, ax' < b', ar <= 0, a(x-r) <= b, a'(x - r) < b'
      *)
     let system = Polyhedron.enum_constraints p in
@@ -168,7 +242,7 @@ end = struct
     Log.logf ~level:`debug "local_mixed_lattice_hull, before projection: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) abstraction;
     let projected =
-      (* Local projection diverges *)
+      (* Local projection diverges if we do local projection here! *)
       (* Polyhedron.local_project
         (fun dim -> if is_ray_dim start dim then QQ.zero else m dim)
         (BatList.of_enum (BatEnum.(--^) start (2 * start)))
@@ -180,52 +254,61 @@ end = struct
       (Polyhedron.pp Format.pp_print_int) projected;
     projected
 
+  let formula_of srk ~symbol_of_dim dd =
+    BatEnum.fold
+      (fun l (ckind, v) -> FixedPoint.to_inequality srk ~symbol_of_dim (ckind, v) :: l)
+      []
+      (DD.enum_constraints dd)
+    |> Syntax.mk_and srk    
+
   let mixed_lattice_hull srk ~symbol_of_dim ~dim_of_symbol conjuncts =
     let open FixedPoint in
     let phi = Syntax.mk_or srk (List.map (make_conjunct srk ~symbol_of_dim) conjuncts) in
-    let formula_of dd =
-      BatEnum.fold
-        (fun l (ckind, v) -> to_inequality srk ~symbol_of_dim (ckind, v) :: l)
-        []
-        (DD.enum_constraints dd)
-      |> Syntax.mk_and srk
-    in
-    let ambient_dim = ambient_dim conjuncts in
-    let of_model model =
-      match model with
-      | `LIRA interp ->
-         let m dim =
-           if dim = Linear.const_dim then QQ.one
-           else
-             match symbol_of_dim dim with
-             | None ->
-                failwith (Format.sprintf "mixed_lattice_hull: Cannot translate dimension %d to a symbol" dim)
-             | Some s -> Interpretation.real interp s
-         in
-         let implicant = Interpretation.select_implicant interp phi in
-         let (pcons, lcons) = match implicant with
-           | None -> assert false
-           | Some atoms -> constraints_of_implicant srk ~dim_of_symbol atoms
-         in
-         let (p, l) =
-           ( Polyhedron.of_constraints (BatList.enum pcons)
-           , IntLattice.hermitize lcons )
-         in
-         let subp = local_mixed_lattice_hull m (p, l) in
-         Polyhedron.dd_of ambient_dim subp
-      | _ -> assert false
+    let ambient_dim = ambient_dim conjuncts ~except:[] in
+    let of_model =
+      let abstract m (p, l) =
+        local_mixed_lattice_hull m (p, l)
+        |> Polyhedron.dd_of ambient_dim
+      in
+      FixedPoint.extract_implicant_and_abstract srk phi
+        ~symbol_of_dim ~dim_of_symbol ~abstract
     in
     let domain: ('a, DD.closed DD.t) Abstract.domain =
       {
         join = DD.join
       ; of_model
-      ; formula_of
+      ; formula_of = formula_of srk ~symbol_of_dim
       ; top = Polyhedron.dd_of ambient_dim Polyhedron.top
       ; bottom = Polyhedron.dd_of ambient_dim Polyhedron.bottom
       }
     in
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     Log.logf "phi: @[%a@]@;" (Syntax.pp_smtlib2 srk) phi;
+    ignore (Abstract.Solver.get_model solver);
+    Abstract.Solver.abstract solver domain
+
+  let abstract srk ~symbol_of_dim ~dim_of_symbol phi =
+    let ambient_dim =
+      let dims = Syntax.Symbol.Set.fold
+                   (fun sym dims -> IntSet.add (dim_of_symbol sym) dims)
+                   (Syntax.symbols phi) IntSet.empty in
+      (IntSet.max_elt dims) + 1
+    in
+    let abstract m (p, l) =
+      local_mixed_lattice_hull m (p, l) |> Polyhedron.dd_of ambient_dim in
+    let domain: ('a, 'b) Abstract.domain =
+      {
+        join = DD.join
+      ; of_model =
+          FixedPoint.extract_implicant_and_abstract
+            srk phi ~symbol_of_dim ~dim_of_symbol
+            ~abstract
+      ; formula_of = formula_of srk ~symbol_of_dim
+      ; top = Polyhedron.dd_of ambient_dim Polyhedron.top
+      ; bottom = Polyhedron.dd_of ambient_dim Polyhedron.bottom
+      }
+    in
+    let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
 
@@ -241,22 +324,29 @@ type ceiling =
 
 module CooperProjection : sig
 
-  val local_project_cooper:
+  val local_project:
     (int -> QQ.t) -> eliminate: int Array.t -> ?round_lower_bound: ceiling ->
     P.t * L.t ->
     P.t * L.t * [`MinusInfinity | `PlusInfinity | `Term of V.t] Array.t
 
-  val project_cooper:
+  val project:
     'a Syntax.context ->
     symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
     eliminate: int list -> ?round_lower_bound: ceiling ->
     (P.t * L.t) list ->
     DD.closed DD.t * L.t
 
+  val abstract:
+    'a Syntax.context -> ?round_lower_bound: ceiling -> 'a Syntax.formula ->
+    ('a Syntax.arith_term) array ->
+    DD.closed DD.t * L.t
+
   (** Identity ceiling *)
   val all_variables_are_integral_and_no_strict_ineqs: ceiling
 
 end = struct
+
+  module IntSet = SrkUtil.Int.Set
 
   let lower_bound dim v =
     let (coeff, v') = V.pivot dim v in
@@ -420,7 +510,7 @@ end = struct
         (fun _ lower_bound _m -> (lower_bound, [], []))
     }
 
-  let local_project_cooper m ~eliminate
+  let local_project m ~eliminate
         ?(round_lower_bound=all_variables_are_integral_and_no_strict_ineqs)
         (polyhedron, lattice) =
     let (p, l, ts) =
@@ -438,76 +528,105 @@ end = struct
     in
     (p, l, Array.of_list (List.rev ts))
 
-  let project_cooper srk ~symbol_of_dim ~dim_of_symbol ~eliminate
+  let default_lattice = IntLattice.hermitize [Linear.const_linterm QQ.one]
+
+  let top ambient_dim =
+    (Polyhedron.dd_of ambient_dim Polyhedron.top, default_lattice)
+
+  let bottom ambient_dim =
+    (Polyhedron.dd_of ambient_dim Polyhedron.bottom, default_lattice)
+
+  let join (p1, l1) (p2, l2) =
+    (DD.join p1 p2, IntLattice.intersect l1 l2)
+
+  let formula_of ~symbol_of_dim srk (dd, l) =
+    let pcons =
+      BatEnum.fold
+        (fun l (ckind, v) ->
+          FixedPoint.to_inequality srk ~symbol_of_dim (ckind, v) :: l)
+        []
+        (DD.enum_constraints dd)
+    in
+    let lcons =
+      List.fold_left (fun fml v ->
+          Syntax.mk_is_int srk (Linear.of_linterm srk v) :: fml)
+        []
+        (IntLattice.basis l)
+    in
+    let fml = Syntax.mk_and srk (List.rev_append lcons pcons) in
+    Log.logf "project_cooper: blocking @[%a@]@;" (Syntax.Formula.pp srk) fml;
+    fml
+
+  let project srk ~symbol_of_dim ~dim_of_symbol ~eliminate
         ?(round_lower_bound=all_variables_are_integral_and_no_strict_ineqs)
         conjuncts =
     let open FixedPoint in
     let phi = Syntax.mk_or srk (List.map (make_conjunct srk ~symbol_of_dim) conjuncts) in
-    let formula_of (dd, l) =
-      let pcons =
-        BatEnum.fold
-          (fun l (ckind, v) -> to_inequality srk ~symbol_of_dim (ckind, v) :: l)
-          []
-          (DD.enum_constraints dd)
-      in
-      let lcons =
-        List.fold_left (fun fml v ->
-            Syntax.mk_is_int srk (Linear.of_linterm srk v) :: fml)
-          []
-          (IntLattice.basis l)
-      in
-      let fml = Syntax.mk_and srk (List.rev_append lcons pcons) in
-      Log.logf "project_cooper: blocking @[%a@]@;" (Syntax.Formula.pp srk) fml;
-      fml
-    in
-    let ambient_dim = ambient_dim conjuncts in
+    let ambient_dim = ambient_dim conjuncts ~except:eliminate in
     let eliminate = Array.of_list eliminate in
-    let of_model model =
-      match model with
-      | `LIRA interp ->
-         let m dim =
-           if dim = Linear.const_dim then QQ.one
-           else
-             match symbol_of_dim dim with
-             | None ->
-                failwith (Format.sprintf "project_cooper: Cannot translate dimension %d to a symbol" dim)
-             | Some s -> Interpretation.real interp s
-         in
-         let implicant = Interpretation.select_implicant interp phi in
-         let (pcons, lcons) = match implicant with
-           | None -> assert false
-           | Some atoms -> constraints_of_implicant srk ~dim_of_symbol atoms
-         in
-         let (p, l) =
-           ( Polyhedron.of_constraints (BatList.enum pcons)
-           , IntLattice.hermitize lcons )
-         in
-         let (p', l', _) = local_project_cooper m ~eliminate
-                             ~round_lower_bound (p, l) in
-         (Polyhedron.dd_of ambient_dim p', l')
-      | _ -> assert false
+    let abstract m (p, l) =
+      let (p', l', _) = local_project m ~eliminate ~round_lower_bound (p, l) in
+      (Polyhedron.dd_of ambient_dim p', l')
     in
-    let default_lattice = IntLattice.hermitize [Linear.const_linterm QQ.one] in
-    let top =
-      (Polyhedron.dd_of ambient_dim Polyhedron.top, default_lattice) in
-    let bottom =
-      (Polyhedron.dd_of ambient_dim Polyhedron.bottom, default_lattice) in      
-    let join (p1, l1) (p2, l2) =
-      (DD.join p1 p2, IntLattice.intersect l1 l2) in
     let domain: ('a, 'b) Abstract.domain =
       {
         join
-      ; of_model
-      ; formula_of
-      ; top
-      ; bottom
+      ; of_model = FixedPoint.extract_implicant_and_abstract srk phi
+                     ~symbol_of_dim ~dim_of_symbol ~abstract
+      ; formula_of = formula_of srk ~symbol_of_dim
+      ; top = top ambient_dim
+      ; bottom = bottom ambient_dim
       }
     in
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     Log.logf "phi: @[%a@]@;" (Syntax.pp_smtlib2 srk) phi;
     ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
-    
+
+  let abstract srk
+        ?(round_lower_bound=all_variables_are_integral_and_no_strict_ineqs)
+        phi terms =
+    let base = Array.length terms in
+    let dim_of_symbol base sym = base + (Syntax.int_of_symbol sym) in
+    let symbol_of_dim base dim =
+      if dim >= base then
+        Some (Syntax.symbol_of_int (dim - base))
+      else None
+    in
+    let term_vectors = FixedPoint.define_terms srk terms in    
+    let ambient_dim = Array.length terms in
+    let abstract m (p, l) =
+      let eliminate_p =
+        (Polyhedron.enum_constraints p)
+        |> FixedPoint.collect_dimensions (fun (_, v) -> v)
+      in
+      let eliminate_l =
+        IntLattice.basis l |> BatList.enum
+        |> FixedPoint.collect_dimensions (fun v -> v)
+      in
+      let eliminate = IntSet.union eliminate_p eliminate_l
+                      |> IntSet.to_array in
+      let p_with_terms = Polyhedron.of_constraints (BatList.enum term_vectors)
+                         |> Polyhedron.meet p in
+      let (p', l', _) = local_project m ~eliminate ~round_lower_bound
+                          (p_with_terms, l) in
+      (Polyhedron.dd_of ambient_dim p', l')
+    in
+    let domain: ('a, 'b) Abstract.domain =
+      {
+        join
+      ; of_model =
+          FixedPoint.extract_implicant_and_abstract
+            srk phi ~symbol_of_dim:(symbol_of_dim base) ~dim_of_symbol:(dim_of_symbol base) ~abstract
+      ; formula_of = formula_of srk ~symbol_of_dim:(symbol_of_dim base)
+      ; top = top ambient_dim
+      ; bottom = bottom ambient_dim
+      }
+    in
+    let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
+    ignore (Abstract.Solver.get_model solver);
+    Abstract.Solver.abstract solver domain
+
 end
 
 (*
@@ -544,10 +663,11 @@ end
  *)
 
 let local_mixed_lattice_hull = MixedHull.local_mixed_lattice_hull
-let local_project_cooper = CooperProjection.local_project_cooper
-let mixed_lattice_hull = MixedHull.mixed_lattice_hull
-let project_cooper = CooperProjection.project_cooper
-                   
+let mixed_lattice_hull = MixedHull.mixed_lattice_hull                             
+let abstract_lattice_hull = MixedHull.abstract                      
+let local_project_cooper = CooperProjection.local_project
+let project_cooper = CooperProjection.project
+let abstract_cooper = CooperProjection.abstract
 
 module ProjectHull : sig
 
@@ -603,7 +723,7 @@ end = struct
     let phi = Syntax.mk_or srk
                 (List.map (make_conjunct srk ~symbol_of_dim) conjuncts)
     in
-    let ambient_dim = ambient_dim conjuncts in
+    let ambient_dim = ambient_dim conjuncts ~except:eliminate in
     let of_model model =
       match model with
       | `LIRA interp ->
@@ -652,7 +772,7 @@ end = struct
         ~round_lower_bound =
     saturate srk ~symbol_of_dim ~dim_of_symbol ~eliminate ~round_lower_bound
       local_hull_and_project
-    
+
 end
 
 (*
@@ -665,7 +785,7 @@ let project_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate
       ?(round_lower_bound = CooperProjection.all_variables_are_integral_and_no_strict_ineqs) =
   ProjectHull.project_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate
     ~round_lower_bound
-  
+
 let hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate
       ?(round_lower_bound = CooperProjection.all_variables_are_integral_and_no_strict_ineqs) =
   ProjectHull.hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate

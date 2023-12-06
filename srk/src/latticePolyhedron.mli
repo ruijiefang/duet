@@ -28,6 +28,12 @@ val mixed_lattice_hull:
   dim_of_symbol:(Syntax.symbol -> int) ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
+val abstract_lattice_hull:
+  'a Syntax.context ->
+  symbol_of_dim:(int -> Syntax.symbol option) ->
+  dim_of_symbol:(Syntax.symbol -> int) ->
+  'a Syntax.formula -> DD.closed DD.t
+
 (** A ceiling (f, g) is such that
     - The image of [f] is a lattice of QQ that contains ZZ.
       (This is needed for [local_project_cooper] to be sound and image-finite.)
@@ -103,6 +109,10 @@ val project_cooper:
   (Polyhedron.t * IntLattice.t) list ->
   DD.closed DD.t * IntLattice.t
 
+val abstract_cooper:
+  'a Syntax.context -> ?round_lower_bound: ceiling -> 'a Syntax.formula ->
+  'a Syntax.term Array.t -> DD.closed DD.t * IntLattice.t
+
 (*
 (** [local_project_and_hull m elim (P, L) = P'] is a polyhedron
     whose constrained dimensions exclude [elim], [m |= P'], and
@@ -118,7 +128,7 @@ val local_project_and_hull:
  *)
 
 
-(** [hull_and_project elim round phis] computes the set of non-strict 
+(** [hull_and_project elim round phis] computes the set of non-strict
     inequalities in dimensions not in [elim] that are implied by [phis].
     This is done by [local_hull_and_project] until fixed point.
     This diverges in general when some variable is real-valued.
@@ -129,7 +139,7 @@ val project_and_hull:
     eliminate: int list -> ?round_lower_bound: ceiling ->
     (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
-(** [hull_and_project elim round phis] computes the set of non-strict 
+(** [hull_and_project elim round phis] computes the set of non-strict
     inequalities in dimensions not in [elim] that are implied by [phis].
     This is done by [local_hull_and_project] until fixed point.
     This may diverge when variables in [elim] can be real-valued, but should

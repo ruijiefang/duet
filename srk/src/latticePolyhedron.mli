@@ -4,6 +4,10 @@
     That is, the vectors in L are generators of the constraints for Int(),
     while the constraints of P are constraints for inequalities.
     Inequalities for polyhedra in this module can be strict.
+
+    For [abstract] procedures, variables that have integer type within the 
+    syntactic context do not need to be asserted as integers via [is_int]
+    explicitly.
  *)
 
 (** Given a point [m] in the intersection of [P] and [L],
@@ -130,23 +134,38 @@ val local_project_and_hull:
 
 (** [hull_and_project elim round phis] computes the set of non-strict
     inequalities in dimensions not in [elim] that are implied by [phis].
-    This is done by [local_hull_and_project] until fixed point.
-    This diverges in general when some variable is real-valued.
+    This is done by local projection ([local_project_cooper])
+    followed by local hulling ([local_mixed_lattice_hull]),
+    and repeating this until a fixed point is reached.
+    This diverges in general when some variable is real-valued (whether
+    the variable is to be eliminated or not).
  *)
 val project_and_hull:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
-    eliminate: int list -> ?round_lower_bound: ceiling ->
-    (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
+  'a Syntax.context ->
+  symbol_of_dim:(int -> Syntax.symbol option) ->
+  dim_of_symbol:(Syntax.symbol -> int) ->
+  eliminate: int list -> ?round_lower_bound: ceiling ->
+  (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 (** [hull_and_project elim round phis] computes the set of non-strict
     inequalities in dimensions not in [elim] that are implied by [phis].
-    This is done by [local_hull_and_project] until fixed point.
+    This is done by local hulling ([local_mixed_lattice_hull])
+    followed by local projection ([local_project_cooper]), until a fixed point
+    is reached.
     This may diverge when variables in [elim] can be real-valued, but should
     converge otherwise.
  *)
 val hull_and_project:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
-    eliminate: int list -> ?round_lower_bound: ceiling ->
-    (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
+  'a Syntax.context ->
+  symbol_of_dim:(int -> Syntax.symbol option) ->
+  dim_of_symbol:(Syntax.symbol -> int) ->
+  eliminate: int list -> ?round_lower_bound: ceiling ->
+  (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
+
+val abstract_by_local_project_and_hull:
+  'a Syntax.context -> ?round_lower_bound: ceiling ->
+  'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
+
+val abstract_by_local_hull_and_project:
+  'a Syntax.context -> ?round_lower_bound: ceiling ->
+  'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t

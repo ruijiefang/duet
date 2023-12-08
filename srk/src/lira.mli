@@ -119,6 +119,14 @@ val lira_implicant_of_implicant:
   'a Syntax.context -> 'a context -> 'a Interpretation.interpretation ->
   'a Syntax.formula list -> Polyhedron.t * IntLattice.t
 
+(** [project phi terms] is the strongest conjunctive consequence in
+    non-strict (linear) inequalities modulo the theory of linear integer-real
+    arithmetic. [phi] is an arbitrary quantifier-free formula in the
+    first-order language of LIRA, whose signature is
+    (QQ; scalar multiplication, +, floor(); >=, >, Int).
+    Variables that are of sort integer do not need to explicitly asserted as
+    integral via [Int].
+ *)
 val project:
   'a Syntax.context -> 'a Syntax.formula -> ('a Syntax.arith_term) array ->
   DD.closed DD.t

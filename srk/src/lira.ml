@@ -120,7 +120,7 @@ end = struct
     match IntMap.find_opt x t.to_int_frac with
     | Some dim -> (2 * dim, 2 * dim + 1)
     | None ->
-       Log.logf ~level:`debug "int_frac_dim_of: Cannot find %d" x;
+       logf ~level:`debug "int_frac_dim_of: Cannot find %d" x;
        raise Not_found
 
   let to_original_dim x t =
@@ -128,7 +128,7 @@ end = struct
       if x mod 2 = 0 then IntMap.find (x / 2) t.from_int_frac
       else IntMap.find ((x - 1) / 2) t.from_int_frac
     with Not_found ->
-      Log.logf ~level:`debug
+      logf ~level:`debug
         "to_original_dim: Cannot find original dimension for %d" x;
       raise Not_found
 
@@ -428,7 +428,7 @@ end = struct
             (linearized, Linear.QQVector.add_term coeff dim residue, cond)
           else (* integer dimension *)
             let remainder =
-              Log.logf ~level:`trace "Querying for dim = %d@;" dim;
+              logf ~level:`trace "Querying for dim = %d@;" dim;
               let x = QQ.mul coeff (IntFracValuation.value_of m dim) in
               QQ.sub x (QQ.of_zz (QQ.floor x))
             in
@@ -468,7 +468,7 @@ end = struct
             (sum, fractional, Linear.QQVector.add_term coeff dim residue)
           else
             begin
-              Log.logf ~level:`trace "Querying for frac_dim = %d" dim;
+              logf ~level:`trace "Querying for frac_dim = %d" dim;
               let fraction = (IntFracValuation.value_of m dim) in
               ( QQ.add (QQ.mul coeff fraction) sum
               , Linear.QQVector.add_term coeff dim fractional
@@ -535,7 +535,7 @@ end = struct
          | `Real r -> (tru, Linear.QQVector.of_term r Linear.const_dim)
          | `App (x, l) when l = [] ->
             begin try
-                Log.logf ~level:`trace
+                logf ~level:`trace
                   "linearize: translating symbol %a to dimension %d@;"
                   (Syntax.pp_symbol srk) x (Context.dim_of_symbol context x);
                 let (int_dim, frac_dim) =
@@ -579,10 +579,10 @@ end = struct
          | `Binop (`Mod, (_phi1, _v1), (_phi2, _v2)) ->
             invalid_arg "linearize: Can't handle mod for now"
          | `Unop (`Floor, (phi, v)) ->
-            Log.logf ~level:`trace "flooring v = %a@;" Linear.QQVector.pp v;
+            logf ~level:`trace "flooring v = %a@;" Linear.QQVector.pp v;
             let (floor_phi, v') =
               floor (Context.dimension_binding context) m (fold_vector v) in
-            Log.logf ~level:`trace "floored v = %a@;" Linear.QQVector.pp v;
+            logf ~level:`trace "floored v = %a@;" Linear.QQVector.pp v;
             (conjoin floor_phi phi, (unfold_vector v'))
          | `Unop (`Neg, (phi, v)) ->
             (phi, Linear.QQVector.negate v)
@@ -600,7 +600,7 @@ end
 module LinearizeFormula : sig
 
   (** Given an [implicant] computed by [Interpretation.select_implicant],
-      a [binding] that contains all symbols in [implicant] in in its domain,
+      a [binding] that contains all symbols in [implicant] in its domain,
       and an interpretation [interp] that satisfies [implicant],
       [lira_implicant srk binding interp implicant = phi] where
       [interp |= phi |= implicant] modulo LIRA,
@@ -621,7 +621,7 @@ end = struct
   open Linearized
 
   let linearize_inequality srk binding interp (rel, t1, t2) =
-    Log.logf ~level:`trace "Linearizing inequality: %a %a %a"
+    logf ~level:`trace "Linearizing inequality: %a %a %a"
       (Syntax.ArithTerm.pp srk) t1
       (fun fmt rel -> match rel with
                       | `Lt -> Format.fprintf fmt "<"
@@ -629,14 +629,14 @@ end = struct
                       | `Eq -> Format.fprintf fmt "=") rel
       (Syntax.ArithTerm.pp srk) t2;
     let (cond1, linear1) = LinearizeTerm.linearize srk binding t1 interp in
-    Log.logf ~level:`trace "Linearized t1 = %a@;" (Syntax.ArithTerm.pp srk) t1;
+    logf ~level:`trace "Linearized t1 = %a@;" (Syntax.ArithTerm.pp srk) t1;
     let (cond2, linear2) = LinearizeTerm.linearize srk binding t2 interp in
-    Log.logf ~level:`trace "Linearized t2 = %a@;" (Syntax.ArithTerm.pp srk) t2;
+    logf ~level:`trace "Linearized t2 = %a@;" (Syntax.ArithTerm.pp srk) t2;
     let v =
       Linear.QQVector.sub (unfold_vector linear2) (unfold_vector linear1)
       |> fold_vector
     in
-    Log.logf ~level:`trace "Linearized result: @[%a@]@;" Linear.QQVector.pp
+    logf ~level:`trace "Linearized result: @[%a@]@;" Linear.QQVector.pp
       (unfold_vector v);
     let cond = LinearizeTerm.conjoin cond1 cond2 in
     let constrnt = match rel with
@@ -647,7 +647,7 @@ end = struct
     (constrnt :: cond.inequalities, cond.integral)
 
   let purify_implicant srk binding interp implicant =
-    Log.logf ~level:`trace
+    logf ~level:`trace
       "Purifying implicant @[%a@]@;"
       (Format.pp_print_list (Syntax.Formula.pp srk)) implicant;
     let adjoin (pcons, lcons) (polyhedral_cnstrs, lattice_cnstrs) =
@@ -851,7 +851,7 @@ end = struct
       (* Polyhedron.of_constraints (BatEnum.append all_inequalities int_frac_defs) *)
       Polyhedron.of_constraints all_inequalities
     in
-    Log.logf ~level:`trace "Polyhedron before projection: @[%a@]@;"
+    logf ~level:`trace "Polyhedron before projection: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) poly;
     let poly_after_real =
       (* Integer constraints do not contain real variables *)
@@ -870,7 +870,7 @@ end = struct
         atoms are pure, i.e., free of fractional variables, so that they
         can be left out of quantifier elimination for fractional variables.
      *)
-    Log.logf ~level:`trace "Polyhedron after real QE: @[%a@]@;"
+    logf ~level:`trace "Polyhedron after real QE: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) poly;
     let (poly_after_int, lattice_after_int, _) =
       LatticePolyhedron.local_project_cooper
@@ -881,20 +881,20 @@ end = struct
         , (IntLattice.hermitize (BatList.of_enum all_int_constraints))
         )
     in
-    Log.logf ~level:`debug "lira_local_project: onto_original: @[%a@]"
+    logf ~level:`debug "lira_local_project: onto_original: @[%a@]"
       IntSet.pp onto_original;
-    Log.logf ~level:`debug "Polyhedron after int QE: @[%a@]@;"
+    logf ~level:`debug "Polyhedron after int QE: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) poly_after_int;
-    Log.logf ~level:`debug "Lattice after int QE: @[%a@]@;"
+    logf ~level:`debug "Lattice after int QE: @[%a@]@;"
       (IntLattice.pp Format.pp_print_int) lattice_after_int;
     fold_linear_set (poly_after_int, lattice_after_int)
 
   let hull m p l =
     let m = IntFracValuation.value_of m in
-    Log.logf ~level:`debug "Polyhedron before hull: @[%a@]@;"
+    logf ~level:`debug "Polyhedron before hull: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) p;
     let hull = LatticePolyhedron.local_mixed_lattice_hull m (p, l) in
-    Log.logf ~level:`debug "Hull: @[%a@]@;"
+    logf ~level:`debug "Hull: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) hull;
     hull
 
@@ -974,9 +974,9 @@ end = struct
         (fun x -> x)
         (Polyhedron.enum_constraints pre_projection_p)
     in
-    Log.logf ~level:`trace "local_project_linset_onto_original: original dimensions @[%a@], elim dimensions: @[%a@]"
+    logf ~level:`trace "local_project_linset_onto_original: original dimensions @[%a@], elim dimensions: @[%a@]"
       IntSet.pp original_dims IntSet.pp elim_dimensions;
-    Log.logf ~level:`trace "pre_projection: @[%a@]@;"
+    logf ~level:`trace "pre_projection: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) pre_projection_p;
     let p_in_original =
       Polyhedron.project (IntSet.to_list elim_dimensions) pre_projection_p in
@@ -990,13 +990,13 @@ end = struct
       IntLattice.project
         (fun dim -> IntSet.mem dim original_dims || dim = Linear.const_dim)
         pre_projection_l in
-    Log.logf ~level:`debug "Polyhedron in original dimensions: @[%a@]@;"
+    logf ~level:`debug "Polyhedron in original dimensions: @[%a@]@;"
       (Polyhedron.pp Format.pp_print_int) p_in_original;
-    Log.logf ~level:`debug "Lattice before lineality: @[%a@]@;"
+    logf ~level:`debug "Lattice before lineality: @[%a@]@;"
       (IntLattice.pp Format.pp_print_int) l;
-    Log.logf ~level:`debug "Lattice before projection: @[%a@]@;"
+    logf ~level:`debug "Lattice before projection: @[%a@]@;"
       (IntLattice.pp Format.pp_print_int) pre_projection_l;
-    Log.logf ~level:`debug "Lattice in original dimensions: @[%a@]@;"
+    logf ~level:`debug "Lattice in original dimensions: @[%a@]@;"
       (IntLattice.pp Format.pp_print_int) l_in_original;
     (p_in_original, l_in_original)
 
@@ -1084,7 +1084,7 @@ end = struct
        begin match implicant with
        | None -> failwith "Lira: Cannot produce implicant"
        | Some implicant ->
-          Log.logf ~level:`trace "Lira: of_model: binding: @[%a@]@;"
+          logf ~level:`trace "Lira: of_model: binding: @[%a@]@;"
             DimensionBinding.pp (Context.dimension_binding binding);
           let implicant =
             (* Int(1) is always implicit *)
@@ -1093,7 +1093,7 @@ end = struct
           let linset = LinearizeFormula.purify_implicant srk binding
                          interp implicant in
           let (p, l) = Linearized.unfold_linear_set linset in
-          Log.logf ~level:`trace "Lira: purified implicant: @[%a@]@; AND @[%a@]@;"
+          logf ~level:`trace "Lira: purified implicant: @[%a@]@; AND @[%a@]@;"
             (Polyhedron.pp Format.pp_print_int) p
             (IntLattice.pp Format.pp_print_int) l;
           let term_constraints = define_terms srk binding terms interp in
@@ -1112,7 +1112,7 @@ end = struct
           let onto_original =
             BatEnum.(--^) 0 (Array.length terms)
             |> IntSet.of_enum in
-          Log.logf ~level:`trace "@\nonto_original: @[%a@]@;"
+          logf ~level:`trace "@\nonto_original: @[%a@]@;"
             IntSet.pp onto_original;
           let dim_binding = Context.dimension_binding binding in
           let valuation = Context.valuation_of binding interp in
@@ -1143,7 +1143,7 @@ end = struct
         ) v []
     in
     let term = Syntax.mk_add srk summands in
-    Log.logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
+    logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
       Linear.QQVector.pp v
       (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
       terms
@@ -1151,7 +1151,7 @@ end = struct
     term
 
   let formula_of srk terms p =
-    Log.logf ~level:`trace "formula_of: blocking: %a" (DD.pp Format.pp_print_int) p;
+    logf ~level:`trace "formula_of: blocking: %a" (DD.pp Format.pp_print_int) p;
     let inequalities =
       BatEnum.map
         (fun (ckind, v) ->
@@ -1173,7 +1173,7 @@ end = struct
     let phi = Syntax.mk_and srk (List.rev_append integrality inequalities) in
      *)
     let phi = Syntax.mk_and srk inequalities in
-    Log.logf ~level:`debug "formula_of: result: @[%a@]@;" (Syntax.Formula.pp srk) phi;
+    logf ~level:`debug "formula_of: result: @[%a@]@;" (Syntax.Formula.pp srk) phi;
     phi
 
   let project (srk: 'a Syntax.context) phi terms =
@@ -1202,7 +1202,7 @@ let empty = DimensionBinding.empty
 
 let add_dimension = DimensionBinding.add
 
-(*                  
+(*
 let symbol_of binding dim =
   DimensionBinding.to_original_dim dim
     (Context.dimension_binding binding)

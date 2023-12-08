@@ -529,6 +529,17 @@ end = struct
 
   let linearize srk context term interp =
     let m = Context.valuation_of context interp in
+    let qq_of term =
+      let (k, rest) = Linear.QQVector.pivot Linear.const_dim term in
+      if Linear.QQVector.equal rest Linear.QQVector.zero then k
+      else invalid_arg "linearize: not a constant; term is possibly nonlinear"
+    in
+    let nonzero_qq_of term =
+      let qq = qq_of term in
+      if QQ.equal qq QQ.zero then
+        invalid_arg "linearize: division or mod by 0"
+      else qq
+    in
     let (lincond, v) =
       Syntax.ArithTerm.eval srk
         (function
@@ -571,13 +582,12 @@ end = struct
             let v' = List.fold_left multiply_vectors (BatList.hd vs) (BatList.tl vs) in
             (conditions, v')
          | `Binop (`Div, (phi1, v1), (phi2, v2)) ->
-            let (c, v2') = Linear.QQVector.pivot Linear.const_dim v2 in
-            if Linear.QQVector.is_zero v2' then
-              (conjoin phi1 phi2, (Linear.QQVector.scalar_mul (QQ.inverse c) v1))
-            else
-              invalid_arg "linearize: cannot divide by a non-constant"
-         | `Binop (`Mod, (_phi1, _v1), (_phi2, _v2)) ->
-            invalid_arg "linearize: Can't handle mod for now"
+            let c = nonzero_qq_of v2 in
+            (conjoin phi1 phi2, (Linear.QQVector.scalar_mul (QQ.inverse c) v1))
+         | `Binop (`Mod, (phi1, v1), (phi2, v2)) ->
+            let r2 = nonzero_qq_of v2 in
+            let r1 = qq_of v1 in
+            (conjoin phi1 phi2, Linear.const_linterm (QQ.modulo r1 r2))
          | `Unop (`Floor, (phi, v)) ->
             logf ~level:`trace "flooring v = %a@;" Linear.QQVector.pp v;
             let (floor_phi, v') =

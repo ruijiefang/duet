@@ -14,12 +14,12 @@ module FormulaVectorInterface: sig
 
   val to_inequality:
     'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> V.t option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
     [< `Nonneg | `Pos | `Zero ] * V.t -> 'a Syntax.formula
 
   val to_is_int:
     'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> V.t option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
     V.t -> 'a Syntax.formula
 
   val make_conjunct:
@@ -34,24 +34,21 @@ module FormulaVectorInterface: sig
   val abstract_implicant:
     'a Syntax.context ->
     symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> V.t option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
     dim_of_symbol:(Syntax.symbol -> int) ->
     abstract: ((int -> Q.t) -> P.t * L.t -> 'b) ->
     'a Syntax.formula ->
     [> `LIRA of 'a Interpretation.interpretation ] -> 'b
 
-  type bindings =
+  type 'a bindings =
     {
       sym_of_dim: int -> Syntax.symbol option
-    (** [vector_of_dim dim] interprets [dim] as a term in symbols [X], but
-        in vector form, where each dimension is an [int_of_symbol].
-     *)
-    ; vector_of_dim: int -> V.t option
+    ; term_of_dim: int -> 'a Syntax.arith_term option
     ; dim_of_sym: Syntax.symbol -> int
     }
 
   val bindings_for_term_abstraction:
-    'a Syntax.context -> 'a Syntax.arith_term array -> bindings
+    'a Syntax.arith_term array -> 'a bindings
 
   (* Given a local projection algorithm [proj] that eliminates variables,
      [make_term_abstraction terms proj = proj']
@@ -75,24 +72,26 @@ end = struct
       (V.enum v)
 
   let term_of_vector srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) v =
-    let f dim =
-      match symbol_of_dim dim with
-      | Some s ->
-         V.of_term QQ.one (Syntax.int_of_symbol s)
-      | None ->
-         begin match term_of_dim dim with
-         | Some term -> term
-         | None ->
-            if dim <> Linear.const_dim then
-              failwith
-                (Format.sprintf
-                   "cannot translate dimension %d to a symbol or term" dim)
-            else
-              Linear.const_linterm QQ.one
-         end
+    let open Syntax in
+    let summands =
+      V.fold (fun dim coeff l ->
+          match symbol_of_dim dim with
+          | Some s -> mk_mul srk [mk_real srk coeff; Syntax.mk_const srk s] :: l
+          | None ->
+             begin match term_of_dim dim with
+             | Some term -> term :: l
+             | None ->
+                if dim <> Linear.const_dim then
+                  failwith
+                    (Format.sprintf
+                       "cannot translate dimension %d to a symbol or term" dim)
+                else
+                  mk_real srk coeff :: l
+             end
+        ) v []
+      |> List.rev
     in
-    let in_symbol_dimensions = substitute f v in
-    Linear.of_linterm srk in_symbol_dimensions
+    mk_add srk summands
 
   let to_inequality srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) (ckind, v) =
     let zero = Syntax.mk_zero srk in
@@ -203,8 +202,8 @@ end = struct
               failwith
                 (Format.sprintf "Cannot translate dimension %d to a symbol for evaluation" dim)
            | Some s, _ -> Interpretation.real interp s
-           | _, Some t -> Interpretation.evaluate_term interp
-                            (term_of_vector srk ~symbol_of_dim ~term_of_dim t)
+           | _, Some t ->
+              Interpretation.evaluate_term interp t
        in
        let implicant = Interpretation.select_implicant interp phi in
        let (pcons, lcons) = match implicant with
@@ -218,14 +217,14 @@ end = struct
        abstract m (p, l)
     | _ -> assert false
 
-  type bindings =
+  type 'a bindings =
     {
       sym_of_dim: int -> Syntax.symbol option
-    ; vector_of_dim: int -> V.t option
+    ; term_of_dim: int -> 'a Syntax.arith_term option
     ; dim_of_sym: Syntax.symbol -> int
     }
 
-  let bindings_for_term_abstraction srk terms =
+  let bindings_for_term_abstraction terms =
     let base = Array.length terms in
     let dim_of_symbol sym = base + (Syntax.int_of_symbol sym) in
     let symbol_of_dim dim =
@@ -238,14 +237,8 @@ end = struct
         Some (Array.get terms dim)
       else None
     in
-    let vector_of_dim dim =
-      match term_of_dim dim with
-      | Some term ->
-         Some (vector_of_term srk ~dim_of_symbol:Syntax.int_of_symbol term)
-      | None -> None
-    in
     { sym_of_dim = symbol_of_dim
-    ; vector_of_dim
+    ; term_of_dim
     ; dim_of_sym = dim_of_symbol
     }
 
@@ -693,8 +686,8 @@ end = struct
         phi terms =
     let module FVI = FormulaVectorInterface in
     let ambient_dim = Array.length terms in
-    let FVI.{sym_of_dim ; vector_of_dim; dim_of_sym} =
-      FVI.bindings_for_term_abstraction srk terms
+    let FVI.{sym_of_dim ; term_of_dim; dim_of_sym} =
+      FVI.bindings_for_term_abstraction terms
     in
     let abstract_terms =
       let variable_projection ~eliminate m (p, l) =
@@ -712,9 +705,9 @@ end = struct
         join
       ; of_model =
           FVI.abstract_implicant srk ~symbol_of_dim:sym_of_dim
-            ~term_of_dim:vector_of_dim ~dim_of_symbol:dim_of_sym
+            ~term_of_dim ~dim_of_symbol:dim_of_sym
             ~abstract phi
-      ; formula_of = formula_of srk ~symbol_of_dim:sym_of_dim ~term_of_dim:vector_of_dim
+      ; formula_of = formula_of srk ~symbol_of_dim:sym_of_dim ~term_of_dim
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }
@@ -871,8 +864,8 @@ end = struct
       (Format.pp_print_list ~pp_sep:Format.pp_print_space (Syntax.ArithTerm.pp srk))
       (Array.to_list terms)
       (Array.length terms);
-    let FVI.{ sym_of_dim; vector_of_dim; dim_of_sym } =
-      FVI.bindings_for_term_abstraction srk terms in
+    let FVI.{ sym_of_dim; term_of_dim; dim_of_sym } =
+      FVI.bindings_for_term_abstraction terms in
     let abstract_terms =
       let proj ~eliminate m (p, l) =
         local_project m ~eliminate ~round_lower_bound (p, l)
@@ -890,9 +883,9 @@ end = struct
         join = DD.join
       ; of_model = FVI.abstract_implicant srk
                      ~symbol_of_dim:sym_of_dim
-                     ~term_of_dim:vector_of_dim
+                     ~term_of_dim
                      ~dim_of_symbol:dim_of_sym ~abstract phi
-      ; formula_of = formula_of srk sym_of_dim ~term_of_dim:vector_of_dim
+      ; formula_of = formula_of srk sym_of_dim ~term_of_dim
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }

@@ -60,6 +60,8 @@ type ceiling =
         Linear.QQVector.t list
   }
 
+val all_variables_are_integral_and_no_strict_ineqs: ceiling
+
 (**
    Given (P, L) representing a linear arithmetic formula, a point [m] in
    [P /\ L], and [elim] a list of dimensions such that
@@ -101,20 +103,21 @@ type ceiling =
  *)
 val local_project_cooper:
   (int -> QQ.t) -> eliminate: int Array.t ->
-  ?round_lower_bound: ceiling ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral] ->
   Polyhedron.t * IntLattice.t ->
   Polyhedron.t * IntLattice.t *
     [`MinusInfinity | `PlusInfinity | `Term of Linear.QQVector.t] Array.t
 
 val project_cooper:
   'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list -> ?round_lower_bound: ceiling ->
+  dim_of_symbol:(Syntax.symbol -> int) -> eliminate: int list ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list ->
   DD.closed DD.t * IntLattice.t
 
 val abstract_cooper:
-  'a Syntax.context -> ?round_lower_bound: ceiling -> 'a Syntax.formula ->
+  'a Syntax.context -> [`RoundLowerBound of ceiling | `AssumeVariablesIntegral ] ->
+  'a Syntax.formula ->
   'a Syntax.arith_term Array.t -> DD.closed DD.t * IntLattice.t
 
 (*
@@ -144,7 +147,8 @@ val project_and_hull:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list -> ?round_lower_bound: ceiling ->
+  eliminate: int list ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 (** [hull_and_project elim round phis] computes the set of non-strict
@@ -159,13 +163,16 @@ val hull_and_project:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list -> ?round_lower_bound: ceiling ->
+  eliminate: int list ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val abstract_by_local_project_and_hull:
-  'a Syntax.context -> ?round_lower_bound: ceiling ->
+  'a Syntax.context ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral ] ->
   'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
 
 val abstract_by_local_hull_and_project:
-  'a Syntax.context -> ?round_lower_bound: ceiling ->
+  'a Syntax.context ->
+  [`RoundLowerBound of ceiling | `AssumeVariablesIntegral ] ->
   'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t

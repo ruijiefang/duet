@@ -212,7 +212,8 @@ let spec_list = [
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
        let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
-       let hull = LatticePolyhedron.abstract_by_local_hull_and_project srk phi
+       let hull = LatticePolyhedron.abstract_by_local_hull_and_project srk
+                    `AssumeVariablesIntegral phi
                     (Array.of_list (List.map (Syntax.mk_const srk) preserved_symbols))
        in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
@@ -226,7 +227,8 @@ let spec_list = [
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
        let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
-       let hull = LatticePolyhedron.abstract_by_local_project_and_hull srk phi
+       let hull = LatticePolyhedron.abstract_by_local_project_and_hull srk
+                    `AssumeVariablesIntegral phi
                     (Array.of_list (List.map (Syntax.mk_const srk) preserved_symbols))
        in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"

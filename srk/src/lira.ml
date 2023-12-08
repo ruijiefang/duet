@@ -886,7 +886,7 @@ end = struct
       LatticePolyhedron.local_project_cooper
         (IntFracValuation.value_of int_frac_m)
         ~eliminate:(BatArray.of_enum (IntSet.enum ints_to_elim))
-        ~round_lower_bound:(round_lower_bound binding)
+        (`RoundLowerBound (round_lower_bound binding))
         ( poly_after_real
         , (IntLattice.hermitize (BatList.of_enum all_int_constraints))
         )

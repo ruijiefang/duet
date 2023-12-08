@@ -91,9 +91,17 @@ let of_formula ctx phi =
   in
   Formula.eval ctx alg phi
 
-let free_vars_for_int_hull (qf, phi) =
+let free_vars_and_existential_reals (qf, phi) =
   if List.exists (fun (q, _) -> q = `Forall) qf then
     failwith "universal quantification not supported";
+  let pp_quantifier_prefix fmt prefix =
+    let (prefix, symbol) = prefix in
+    match prefix with
+    | `Forall -> Format.fprintf fmt "forall @[%a@]" (Syntax.pp_symbol srk) symbol
+    | `Exists -> Format.fprintf fmt "exists @[%a@]" (Syntax.pp_symbol srk) symbol
+  in
+  Format.printf "Quantifiers are: @[%a@]@;"
+    (Format.pp_print_list ~pp_sep:Format.pp_print_space pp_quantifier_prefix) qf;
   let quantified_int =
     BatList.filter_map (fun (_, sym) ->
         match typ_symbol srk sym with
@@ -106,6 +114,9 @@ let free_vars_for_int_hull (qf, phi) =
   let preserved_symbols =
     List.filter (fun sym -> not (Symbol.Set.mem sym quantified_int))
       symbol_list in
+  Format.printf "free variables are: @[%a@]@;"
+    (Format.pp_print_list ~pp_sep:Format.pp_print_space
+       (Syntax.pp_symbol srk)) preserved_symbols;
   preserved_symbols
 
 let compare_convex_hull file =
@@ -197,10 +208,52 @@ let spec_list = [
    Arg.String compare_convex_hull,
    "Compare convex hulls computed by local projection and abstract");
 
-  ("-int-hull-by-cone",
+  ("-local-hull-and-project",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
+       let hull = LatticePolyhedron.abstract_by_local_hull_and_project srk phi
+                    (Array.of_list (List.map (Syntax.mk_const srk) preserved_symbols))
+       in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the lattice hull of an existential formula by model-based projection of recession cones");
+
+  ("-local-project-and-hull",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
+       let hull = LatticePolyhedron.abstract_by_local_project_and_hull srk phi
+                    (Array.of_list (List.map (Syntax.mk_const srk) preserved_symbols))
+       in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the lattice hull of an existential formula by model-based projection of recession cones");
+
+  ("-lira-project",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
+       let hull = Lira.project srk phi
+                    (Array.of_list (List.map (Syntax.mk_const srk) preserved_symbols))
+       in
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (DD.pp (fun fmt i ->
+              if i = Linear.const_dim then
+                Format.pp_print_int fmt i
+              else pp_symbol srk fmt (symbol_of_int i))) hull),
+   " Compute the lattice hull of an existential formula by model-based projection of recession cones");
+
+  ("-int-hull-by-cone-deprecated",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
        let hull = SymbolicAbstraction.integer_hull_by_recession_cone srk phi preserved_symbols in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
          (DD.pp (fun fmt i ->
@@ -209,10 +262,10 @@ let spec_list = [
               else pp_symbol srk fmt (symbol_of_int i))) hull),
    " Compute the integer hull of an existential formula by model-based projection of recession cones");
 
-  ("-int-hull-by-standard",
+  ("-int-hull-by-standard-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
        let hull = SymbolicAbstraction.integer_hull_standard srk phi preserved_symbols in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
          (DD.pp (fun fmt i ->
@@ -221,10 +274,10 @@ let spec_list = [
               else pp_symbol srk fmt (symbol_of_int i))) hull),
    " Compute the integer hull of an existential formula by model-based projection of polyhedra directly");
 
-  ("-int-hull-by-cooper",
+  ("-int-hull-by-cooper-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let preserved_symbols = free_vars_for_int_hull (qf, phi) in
+       let preserved_symbols = free_vars_and_existential_reals (qf, phi) in
        let (hull, _) = SymbolicAbstraction.integer_hull_by_cooper srk phi preserved_symbols in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
          (DD.pp (fun fmt i ->

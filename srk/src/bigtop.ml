@@ -114,7 +114,7 @@ let free_vars_and_existential_reals (quantifiers, phi) =
   let preserved_symbols =
     Symbol.Set.filter (fun sym -> not (Symbol.Set.mem sym quantified_ints))
       (Syntax.symbols phi) in
-  Format.printf "free variables are: @[%a@]@;"
+  Format.printf "variables to preserve are: @[%a@]@;"
     (Format.pp_print_list ~pp_sep:Format.pp_print_space
        (Syntax.pp_symbol srk)) (Symbol.Set.to_list preserved_symbols);
   (quantified_ints, preserved_symbols)
@@ -152,9 +152,9 @@ let check_abstract phi terms abstracted =
   in
   Smt.StdSolver.add solver [phi; negated_abstracted];
   match Smt.StdSolver.get_model solver with
-  | `Sat _ -> Format.printf "Result: Soundness check: bug"
-  | `Unsat -> Format.printf "Result: Soundness check: success"
-  | `Unknown -> Format.printf "Result: Soundness check: unknown"
+  | `Sat _ -> Format.printf "Result: fail (soundness check)"
+  | `Unsat -> Format.printf "Result: success"
+  | `Unknown -> Format.printf "Result: unknown"
 
 let run_eliminate_integers abstract file =
   let (quantifiers, phi) = Quantifier.normalize srk (load_formula file) in
@@ -199,7 +199,7 @@ let run_eliminate_integers abstract file =
     in
     check_abstract phi' terms hull
   with LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
-    Format.printf "Result: fail to convert strict inequality @[%a@], dimension %d is real@;"
+    Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
       (Linear.QQVector.pp_term Format.pp_print_int) v dim
 
 let compare_integer_hull file =

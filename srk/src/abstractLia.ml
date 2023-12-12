@@ -261,7 +261,7 @@ module CooperProjection (Target : Target)
       (Format.pp_print_list Format.pp_print_int) dimensions_to_eliminate;
     let (projected_p, projected_l, _) =
       LatticePolyhedron.local_project_cooper (valuation interp)
-        ~eliminate:(Array.of_list dimensions_to_eliminate) `AssumeVariablesIntegral
+        ~eliminate:(Array.of_list dimensions_to_eliminate) `NonstrictIneqsOnly
         (p, l) in
     logf "Polyhedron after projection: %a@."
       (Polyhedron.pp pp_dim) projected_p;

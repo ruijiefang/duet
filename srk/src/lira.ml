@@ -35,6 +35,8 @@ include Log.Make(struct let name = "srk.lira" end)
 module IntMap = SrkUtil.Int.Map
 module IntSet = SrkUtil.Int.Set
 
+let () = my_verbosity_level := `trace
+
 let bounds_for_frac_dim frac_dim =
   let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
   let upper_bound = (`Pos,
@@ -589,10 +591,12 @@ end = struct
             let r1 = qq_of v1 in
             (conjoin phi1 phi2, Linear.const_linterm (QQ.modulo r1 r2))
          | `Unop (`Floor, (phi, v)) ->
-            logf ~level:`trace "flooring v = %a@;" Linear.QQVector.pp v;
+            logf ~level:`trace "flooring v = %a@;"
+              (Linear.QQVector.pp_term Format.pp_print_int) v;
             let (floor_phi, v') =
               floor (Context.dimension_binding context) m (fold_vector v) in
-            logf ~level:`trace "floored v = %a@;" Linear.QQVector.pp v;
+            logf ~level:`trace "floored v = %a@;"
+              (Linear.QQVector.pp_term Format.pp_print_int) v;
             (conjoin floor_phi phi, (unfold_vector v'))
          | `Unop (`Neg, (phi, v)) ->
             (phi, Linear.QQVector.negate v)
@@ -646,15 +650,29 @@ end = struct
       Linear.QQVector.sub (unfold_vector linear2) (unfold_vector linear1)
       |> fold_vector
     in
-    logf ~level:`trace "Linearized result: @[%a@]@;" Linear.QQVector.pp
-      (unfold_vector v);
-    let cond = LinearizeTerm.conjoin cond1 cond2 in
-    let constrnt = match rel with
-      | `Lt -> (`Pos, v)
-      | `Leq -> (`Nonneg, v)
-      | `Eq -> (`Zero, v)
+    let kind = match rel with
+      | `Lt -> `Pos
+      | `Leq -> `Nonneg
+      | `Eq -> `Zero
     in
-    (constrnt :: cond.inequalities, cond.integral)
+    logf ~level:`trace "Linearized inequality @[%a %a %a@]@; to @[%a %a@]@;"
+      (Syntax.ArithTerm.pp srk) t1
+      (fun fmt rel -> match rel with
+                      | `Lt -> Format.fprintf fmt "<"
+                      | `Leq -> Format.fprintf fmt "<="
+                      | `Eq -> Format.fprintf fmt "=")
+      rel
+      (Syntax.ArithTerm.pp srk) t2
+      (Linear.QQVector.pp_term Format.pp_print_int)
+      (unfold_vector v)
+      (fun fmt cnstr_kind -> match cnstr_kind with
+                             | `Pos -> Format.fprintf fmt "> 0"
+                             | `Nonneg -> Format.fprintf fmt ">= 0"
+                             | `Zero -> Format.fprintf fmt "= 0"
+      )
+      kind;
+    let cond = LinearizeTerm.conjoin cond1 cond2 in
+    ((kind, v) :: cond.inequalities, cond.integral)
 
   let purify_implicant srk binding interp implicant =
     logf ~level:`trace
@@ -910,7 +928,8 @@ end = struct
 
   let define_original binding original_dim =
     let (x_int, x_frac) =
-      DimensionBinding.int_frac_dim_of original_dim binding in
+      DimensionBinding.int_frac_dim_of original_dim binding
+    in
     (`Zero, Linear.QQVector.of_list
               [ (QQ.one, original_dim)
               ; (QQ.of_int (-1), x_int)
@@ -918,15 +937,15 @@ end = struct
 
   let collect_dimensions pred f cnstrs =
     BatEnum.fold
-      (fun original_dims (_, v) ->
+      (fun dims (_, v) ->
         (Linear.QQVector.fold
-           (fun dim _ original_dims ->
+           (fun dim _ dims ->
              if dim <> Linear.const_dim && pred dim then
-               let original_dims' =
-                 IntSet.add (f dim) original_dims
-               in original_dims'
-             else original_dims)
-           v original_dims
+               let dims' =
+                 IntSet.add (f dim) dims
+               in dims'
+             else dims)
+           v dims
         )
       )
       IntSet.empty
@@ -1096,6 +1115,18 @@ end = struct
        | Some implicant ->
           logf ~level:`trace "Lira: of_model: binding: @[%a@]@;"
             DimensionBinding.pp (Context.dimension_binding binding);
+
+          let () =
+            Syntax.Symbol.Set.iter
+              (fun symbol ->
+                logf ~level:`trace "Lira: Binding @[%a@]:@[%a@] to original dimension %d@;"
+                  (Syntax.pp_symbol srk) symbol
+                  Syntax.pp_typ (Syntax.typ_symbol srk symbol)
+                  (Context.dim_of_symbol binding symbol)
+              )
+              (Syntax.symbols phi)
+          in
+
           let implicant =
             (* Int(1) is always implicit *)
             Syntax.mk_is_int srk (Syntax.mk_real srk QQ.one) :: implicant
@@ -1154,7 +1185,7 @@ end = struct
     in
     let term = Syntax.mk_add srk summands in
     logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
-      Linear.QQVector.pp v
+      (Linear.QQVector.pp_term Format.pp_print_int) v
       (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
       terms
       (Syntax.ArithTerm.pp srk) term;

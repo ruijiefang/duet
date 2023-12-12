@@ -35,8 +35,6 @@ include Log.Make(struct let name = "srk.lira" end)
 module IntMap = SrkUtil.Int.Map
 module IntSet = SrkUtil.Int.Set
 
-let () = my_verbosity_level := `trace
-
 let bounds_for_frac_dim frac_dim =
   let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
   let upper_bound = (`Pos,
@@ -355,8 +353,6 @@ module LinearizeTerm: sig
    *)
   type lincond = linear_formula
 
-  exception Nonlinear
-
   (** Given a [term] whose symbols are in the domain of [binding],
       [linearize srk binding term m = (phi, v)] implies
       [m |= phi |= term = v], where the interpretation of [phi] and [v] is
@@ -401,8 +397,6 @@ end = struct
     ; integral = List.rev_append phi1.integral phi2.integral
     }
 
-  exception Nonlinear
-
   let multiply_vectors v1 v2 =
     Linear.QQVector.fold (fun dim2 scalar2 outer_sop ->
         if dim2 = Linear.const_dim then
@@ -413,7 +407,7 @@ end = struct
               if dim1 = Linear.const_dim then
                 Linear.QQVector.add_term (QQ.mul scalar1 scalar2) dim2 inner_sop
               else
-                raise Nonlinear
+                raise Linear.Nonlinear
             )
             v1
             outer_sop

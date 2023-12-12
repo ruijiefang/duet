@@ -11,8 +11,8 @@
     that includes a bijection [symbol_binding] between symbols and original
     dimensions.
 
-    At the high level, these details are unnecessary: [project] computes, 
-    for a LIRA formula [F], the strongest set of conjunctive non-strict 
+    At the high level, these details are unnecessary: [project] computes,
+    for a LIRA formula [F], the strongest set of conjunctive non-strict
     inequality consequences that are linear in a given set of terms [T].
     When working with polyhedra representations or with formulas themselves,
     the appropriate common context should be created.
@@ -64,7 +64,7 @@ val local_project_int_frac:
     - [m] satisfies [P' /\ L'], where each original dimension [x] is
       interpreted as [x_int + x_frac].
     - If [aX >= b] is an inequality that is in only original dimensions and
-      [P /\ L /\ Int(X_int) /\ 0 <= X_frac < 1 /\ X = X_int + X_frac] 
+      [P /\ L /\ Int(X_int) /\ 0 <= X_frac < 1 /\ X = X_int + X_frac]
       implies [aX >= b], then [(P', L') |= aX >= b].
       (The inequality must be non-strict.)
  *)

@@ -25,6 +25,9 @@ val local_mixed_lattice_hull:
       [ax >= b] of [P].
     - For all [ax >= b] that is implied by [\/ (P_i /\ Li)],
       [P |= ax >= b].
+
+    Ambient dimension should be at least as large as the maximum dimension
+    occurring in the formula (computed via [dim_of_symbol]) + 1.
  *)
 val mixed_lattice_hull:
   'a Syntax.context ->

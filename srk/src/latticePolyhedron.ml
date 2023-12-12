@@ -46,9 +46,11 @@ module FormulaVectorInterface: sig
 
   val collect_dimensions: (P.t * L.t) -> IntSet.t
 
+  (*
   val vector_of_term:
     'a Syntax.context -> dim_of_symbol:(Syntax.symbol -> int) ->
     'a Syntax.arith_term -> V.t
+   *)
 
   (** Lift a local abstraction procedure for a polyhedron-lattice pair into an
       local abstraction procedure for a formula.
@@ -72,9 +74,9 @@ module FormulaVectorInterface: sig
   val bindings_for_term_abstraction:
     'a Syntax.arith_term array -> 'a bindings
 
-  val term_definitions:
+  val term_definitions_and_dimensions_in_terms:
     'a Syntax.context -> 'a Syntax.arith_term Array.t ->
-    (P.constraint_kind * V.t) BatEnum.t
+    (P.constraint_kind * V.t) BatEnum.t * IntSet.t
 
   (* Given a local projection algorithm [proj] that eliminates variables,
      [project_onto_terms terms proj = proj']
@@ -290,24 +292,30 @@ end = struct
     ; dim_of_sym = dim_of_symbol
     }
 
-  let term_definitions srk terms =
+  let term_definitions_and_dimensions_in_terms srk terms =
     let base = Array.length terms in
       Array.fold_left
-        (fun (vs, idx) term ->
+        (fun (vs, dims_in_terms, idx) term ->
           let v = vector_of_term srk
                     ~dim_of_symbol:(fun sym -> base + Syntax.int_of_symbol sym)
                     term in
+          let dimensions =
+            collect_dimensions_from_constraints (fun x -> x) (BatList.enum [v])
+          in
           let equality = (`Zero, V.add_term (QQ.of_int (-1)) idx v) in
-          (equality :: vs, idx + 1)
+          (equality :: vs, IntSet.union dimensions dims_in_terms, idx + 1)
         )
-        ([], 0) terms
-      |> fst
-      |> BatList.enum
+        ([], IntSet.empty, 0) terms
+      |> (fun (vs, dims, _) -> (BatList.enum vs, dims))
 
   let project_onto_terms srk terms projection =
-    let term_equalities = term_definitions srk terms in
+    let (term_equalities, dimensions_in_terms) =
+      term_definitions_and_dimensions_in_terms srk terms in
     let project_onto_terms projection m (p, l) =
-      let eliminate = collect_dimensions (p, l) |> IntSet.to_list in
+      let eliminate = collect_dimensions (p, l)
+                      |> IntSet.union dimensions_in_terms
+                      |> IntSet.to_list
+      in
       let p_with_terms = Polyhedron.of_constraints term_equalities
                          |> Polyhedron.meet p in
       projection ~eliminate m (p_with_terms, l)
@@ -794,6 +802,9 @@ end = struct
   let local_project m ~eliminate
         round_lower_bound
         (p, l) =
+    logf "local_project: eliminating @[%a@]@;"
+      (Format.pp_print_list ~pp_sep:Format.pp_print_space Format.pp_print_int)
+      (Array.to_list eliminate);
     let (rounded_p, round_lower_bound) =
       match round_lower_bound with
       | `NonstrictIneqsOnly -> (p, all_variables_are_integral_and_no_strict_ineqs)
@@ -1073,10 +1084,13 @@ end = struct
     in
     let abstract m (p, l) =
       let abstracted = abstract_terms m (p, l) in
-      logf ~level:`debug "Abstracted: @[%a@]@; ambient dimension = %d@;"
+      logf ~level:`debug "abstract_terms: Abstracted: @[%a@]@; ambient dimension = %d@;"
         (Polyhedron.pp Format.pp_print_int) abstracted
         ambient_dim;
-      Polyhedron.dd_of ambient_dim abstracted
+      let dd = Polyhedron.dd_of ambient_dim abstracted in
+      logf ~level:`debug "abstract_terms: abstracted DD: @[%a@]@;"
+        (DD.pp Format.pp_print_int) dd;
+      dd
     in
     let domain: ('a, 'b) Abstract.domain =
       {
@@ -1115,21 +1129,16 @@ end = struct
     print_symbol_dimension_bindings srk dim_of_sym phi ();
 
     let abstract m (p, l) =
-      let term_dimensions =
-        Array.map (FVI.vector_of_term srk ~dim_of_symbol:dim_of_sym)
-          terms
-        |> BatArray.enum
-        |> FVI.collect_dimensions_from_constraints (fun x -> x)
-      in
+      let (term_definitions, dimensions_in_terms) =
+        FVI.term_definitions_and_dimensions_in_terms srk terms in
       let original_dimensions =
         FVI.collect_dimensions (p, l)
       in
-      let eliminate = IntSet.diff original_dimensions term_dimensions
+      let eliminate = IntSet.diff original_dimensions dimensions_in_terms
                       |> IntSet.to_list in
       let projected = proj_alg m ~eliminate round_lower_bound (p, l) in
-      let p' = P.meet projected
-                 (P.of_constraints (FVI.term_definitions srk terms)) in
-      Polyhedron.local_project m (IntSet.to_list term_dimensions) p'
+      let p' = P.meet projected (P.of_constraints term_definitions) in
+      Polyhedron.local_project m (IntSet.to_list dimensions_in_terms) p'
       |> Polyhedron.dd_of ambient_dim
     in
     let domain: ('a, 'b) Abstract.domain =

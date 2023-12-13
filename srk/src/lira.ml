@@ -528,7 +528,7 @@ end = struct
     let qq_of term =
       let (k, rest) = Linear.QQVector.pivot Linear.const_dim term in
       if Linear.QQVector.equal rest Linear.QQVector.zero then k
-      else invalid_arg "linearize: not a constant; term is possibly nonlinear"
+      else raise Linear.Nonlinear
     in
     let nonzero_qq_of term =
       let qq = qq_of term in

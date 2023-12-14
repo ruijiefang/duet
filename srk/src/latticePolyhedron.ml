@@ -15,6 +15,11 @@ module FormulaVectorInterface: sig
   (* TODO: Generalize [of_linterm] etc. to not assume standard
      symbol-dimension binding; then remove translation here. *)
 
+  val formula_of_dd:
+    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) -> DD.closed DD.t ->
+    'a Syntax.formula
+
   val formula_of_polyhedron:
     'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
     ?term_of_dim:(int -> 'a Syntax.arith_term option) -> P.t ->
@@ -115,13 +120,20 @@ end = struct
   let to_is_int srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) v =
     Syntax.mk_is_int srk (term_of_vector srk ~symbol_of_dim ~term_of_dim v)
 
-  let formula_of_polyhedron srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) p =
+  let formula_of_p_constraints srk ~symbol_of_dim ?(term_of_dim = fun _ -> None)
+        enum_constraints p =
     BatEnum.fold
       (fun l (ckind, v) ->
         to_inequality srk ~symbol_of_dim ~term_of_dim (ckind, v) :: l)
       []
-      (P.enum_constraints p)
+      (enum_constraints p)
     |> Syntax.mk_and srk
+
+  let formula_of_polyhedron srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) p =
+    formula_of_p_constraints srk ~symbol_of_dim ~term_of_dim P.enum_constraints p
+
+  let formula_of_dd srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) dd =
+    formula_of_p_constraints srk ~symbol_of_dim ~term_of_dim DD.enum_constraints dd
     
   let formula_of_lattice srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) l =
     List.fold_left (fun fml v ->
@@ -488,8 +500,7 @@ end = struct
     projected
 
   let formula_of srk ~symbol_of_dim dd =
-    FormulaVectorInterface.formula_of_polyhedron srk ~symbol_of_dim
-      (P.of_dd dd)
+    FormulaVectorInterface.formula_of_dd srk ~symbol_of_dim dd
 
   let mixed_lattice_hull
         srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) ~dim_of_symbol ~ambient_dim conjuncts =

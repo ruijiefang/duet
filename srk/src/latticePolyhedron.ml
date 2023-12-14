@@ -25,29 +25,12 @@ module FormulaVectorInterface: sig
     ?term_of_dim:(int -> 'a Syntax.arith_term option) -> L.t ->
     'a Syntax.formula
 
-  val make_conjunct:
-    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    P.t * L.t -> 'a Syntax.formula
-
   val ambient_dim: (P.t * L.t) list -> except:int list -> int
 
   val collect_dimensions_from_constraints:
     ('a -> V.t) -> 'a BatEnum.t -> IntSet.t
 
   val collect_dimensions: (P.t * L.t) -> IntSet.t
-
-  (*
-  val vector_of_term:
-    'a Syntax.context -> dim_of_symbol:(Syntax.symbol -> int) ->
-    'a Syntax.arith_term -> V.t
-   *)
-
-  (*
-  val term_of_vector:
-    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-    V.t -> 'a Syntax.arith_term
-   *)
 
   (** Lift a local abstraction procedure for a polyhedron-lattice pair into an
       local abstraction procedure for a formula.
@@ -176,22 +159,6 @@ end = struct
       | _ -> assert false
     in
     List.fold_left collect ([], []) atoms
-
-  let make_conjunct srk ~symbol_of_dim (p, l) =
-    let inequalities =
-      BatEnum.fold
-        (fun l (ckind, v) -> to_inequality srk ~symbol_of_dim (ckind, v) :: l)
-        []
-        (P.enum_constraints p)
-    in
-    let integral =
-      List.fold_left
-        (fun ints v ->
-          let term = term_of_vector srk ~symbol_of_dim v in
-          Syntax.mk_is_int srk term :: ints)
-        []
-        (L.basis l)
-    in Syntax.mk_and srk (List.rev_append integral inequalities)
 
   let collect_dimensions_from_constraints to_vector cnstrs =
     BatEnum.fold
@@ -415,6 +382,7 @@ module Hull: sig
   val mixed_lattice_hull:
     'a Syntax.context ->
     symbol_of_dim:(int -> Syntax.symbol option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
     dim_of_symbol:(Syntax.symbol -> int) ->
     ambient_dim: int ->
     (P.t * L.t) list -> DD.closed DD.t
@@ -463,7 +431,7 @@ end = struct
   let subspace_restriction var_to_ray_var l m =
     (* Int(cx + d) --> c (x - r) = c x0 *)
     let constraints = BatEnum.empty () in
-    logf ~level:`trace "lattice constraints: @[%a@]@;"
+    logf ~level:`trace "subspace_restriction: lattice constraints: @[%a@]@;"
       (Format.pp_print_list (V.pp_term Format.pp_print_int))
       (L.basis l);
     BatList.iter
@@ -496,13 +464,13 @@ end = struct
     let subspace = subspace_restriction (ray_dim_of_dim start) l m in
     let abstraction = P.meet pre_abstraction subspace
     in
-    logf ~level:`debug "local_mixed_lattice_hull: input: @[%a@]@; start of recession dims: %d"
+    logf ~level:`trace "local_mixed_lattice_hull: input: @[%a@]@; start of recession dims: %d"
       (P.pp Format.pp_print_int) p start;
-    logf ~level:`debug "local_mixed_lattice_hull: extension: @[%a@]@;"
+    logf ~level:`trace "local_mixed_lattice_hull: extension: @[%a@]@;"
       (P.pp Format.pp_print_int) pre_abstraction;
-    logf ~level:`debug "local_mixed_lattice_hull: subspace: @[%a@]@;"
+    logf ~level:`trace "local_mixed_lattice_hull: subspace: @[%a@]@;"
       (P.pp Format.pp_print_int) subspace;
-    logf ~level:`debug "local_mixed_lattice_hull, before projection: @[%a@]@;"
+    logf ~level:`trace "local_mixed_lattice_hull, before projection: @[%a@]@;"
       (P.pp Format.pp_print_int) abstraction;
     let projected =
       (* Local projection diverges if we do local projection here! *)
@@ -513,9 +481,9 @@ end = struct
       P.project (BatList.of_enum (BatEnum.(--^) start (2 * start)))
         abstraction
     in
-    logf ~level:`debug "after projection: @[%a@]@;"
+    logf ~level:`trace "after projection: @[%a@]@;"
       (P.pp Format.pp_print_int) projected;
-    logf ~level:`debug "max constrained dimension: %d"
+    logf ~level:`trace "max constrained dimension: %d"
       (P.max_constrained_dim projected);
     projected
 
@@ -523,11 +491,16 @@ end = struct
     FormulaVectorInterface.formula_of_polyhedron srk ~symbol_of_dim
       (P.of_dd dd)
 
-  let mixed_lattice_hull srk ~symbol_of_dim ~dim_of_symbol ~ambient_dim conjuncts =
-    let phi =
-      Syntax.mk_or srk (List.map (FVI.make_conjunct srk ~symbol_of_dim) conjuncts)
+  let mixed_lattice_hull
+        srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) ~dim_of_symbol ~ambient_dim conjuncts =
+    let module FVI = FormulaVectorInterface in
+    let make_conjunct (p, l) =
+      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
+      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      in
+      Syntax.mk_and srk [p_phi; l_phi]
     in
-    (* let ambient_dim = ambient_dim conjuncts ~except:[] in *)
+    let phi = Syntax.mk_and srk (List.map make_conjunct conjuncts) in
     let of_model =
       let abstract m (p, l) =
         let hull = local_mixed_lattice_hull m (p, l) in
@@ -552,14 +525,6 @@ end = struct
     Abstract.Solver.abstract solver domain
 
   let abstract srk ~how ~symbol_of_dim ~dim_of_symbol ~ambient_dim phi =
-    (*
-    let ambient_dim =
-      let dims = Syntax.Symbol.Set.fold
-                   (fun sym dims -> IntSet.add (dim_of_symbol sym) dims)
-                   (Syntax.symbols phi) IntSet.empty in
-      (IntSet.max_elt dims) + 1
-    in
-     *)
     logf ~level:`debug "ambient dimension is %d@;" ambient_dim;
     let alg =
       match how with
@@ -616,7 +581,7 @@ module CooperProjection : sig
       values. A ceiling can be provided to make local projection image-finite.
 
       - [`NonstrictIneqsOnly] corresponds to a ceiling (the identity) that is
-        sound when only non-strict inequalities occur, so that (i) --- (iii) hold,
+        sound when only non-strict inequalities occur, i.e. (i) --- (iii) hold,
         but may not be image-finite unless [P /\ L |= Int(x)] for all variables [x].
       - When strict inequalities are present and all variables are integer-valued,
         [`RoundStrictWhenVariablesIntegral] can be used to heuristically convert
@@ -646,7 +611,9 @@ module CooperProjection : sig
 
   val project:
     'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
+    symbol_of_dim:(int -> Syntax.symbol option) ->
+    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
+    dim_of_symbol:(Syntax.symbol -> int) ->
     eliminate: int list ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
     (P.t * L.t) list ->
@@ -869,11 +836,14 @@ end = struct
            begin match real_dim with
            | None ->
               BatEnum.push cnstrs (clear_strict_asssuming_integral (ckind, v))
-           | Some dim ->
+           | Some _dim ->
+              (*
               begin
                 logf ~level:`debug "normalize_strict_ineqs: unsound to normalize > into >=";
                 raise (PositiveIneqOverRealVar (v, dim))
               end
+               *)
+              BatEnum.push cnstrs (clear_strict_asssuming_integral (ckind, v))
            end
         | _ -> BatEnum.push cnstrs (ckind, v)
       )
@@ -933,12 +903,17 @@ end = struct
     logf ~level:`debug "project_cooper: blocking @[%a@]@;" (Syntax.Formula.pp srk) fml;
     fml
 
-  let project srk ~symbol_of_dim ~dim_of_symbol ~eliminate
-        round_lower_bound
-        conjuncts =
-    let open FormulaVectorInterface in
-    let phi = Syntax.mk_or srk (List.map (make_conjunct srk ~symbol_of_dim) conjuncts) in
-    let ambient_dim = ambient_dim conjuncts ~except:eliminate in
+  let project srk ~symbol_of_dim ?(term_of_dim = fun _ -> None)
+        ~dim_of_symbol ~eliminate round_lower_bound conjuncts =
+    let module FVI = FormulaVectorInterface in
+    let make_conjunct (p, l) =
+      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
+      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      in
+      Syntax.mk_and srk [p_phi; l_phi]
+    in
+    let phi = Syntax.mk_or srk (List.map make_conjunct conjuncts) in
+    let ambient_dim = FVI.ambient_dim conjuncts ~except:eliminate in
     let eliminate = Array.of_list eliminate in
     let abstract m (p, l) =
       let (p', l', _) = local_project m ~eliminate round_lower_bound (p, l) in
@@ -947,7 +922,7 @@ end = struct
     let domain: ('a, 'b) Abstract.domain =
       {
         join
-      ; of_model = abstract_implicant srk ~symbol_of_dim ~dim_of_symbol
+      ; of_model = FVI.abstract_implicant srk ~symbol_of_dim ~dim_of_symbol
                      ~abstract phi
       ; formula_of = formula_of srk ~symbol_of_dim
       ; top = top ambient_dim
@@ -1096,13 +1071,19 @@ end = struct
   let bottom ambient_dim = P.dd_of ambient_dim P.bottom
 
   let saturate
-        srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bound
-        op conjuncts =
-    let open FormulaVectorInterface in
-    let phi = Syntax.mk_or srk
-                (List.map (make_conjunct srk ~symbol_of_dim) conjuncts)
+        srk ~symbol_of_dim ?(term_of_dim= fun _ -> None) ~dim_of_symbol
+        ~eliminate round_lower_bound op conjuncts =
+    let module FVI = FormulaVectorInterface in
+    let make_conjunct (p, l) =
+      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
+      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      in
+      Syntax.mk_and srk [p_phi; l_phi]
     in
-    let ambient_dim = ambient_dim conjuncts ~except:eliminate in
+    let phi = Syntax.mk_or srk
+                (List.map make_conjunct conjuncts)
+    in
+    let ambient_dim = FVI.ambient_dim conjuncts ~except:eliminate in
     let abstract m (p, l) =
       op m ~eliminate round_lower_bound (p, l)
       |> P.dd_of ambient_dim
@@ -1198,17 +1179,6 @@ end = struct
     Testing.print_symbol_dimension_bindings srk dim_of_sym phi ();
 
     let abstract m (p, l) =
-      (* t = ay + b
-         F |= et + f >= 0
-         F |= G strongest, therefore G |= et + f >= 0.
-         Want G to be in terms of t.
-         G /\ z = ay + b |= z = ay + b /\ et + f >= 0, z fresh
-         iff G /\ z = ay + b |= ez + f >= 0
-         iff (exists x. G /\ z = ay + b) |= ez + f >= 0
-         
-         exists x1. Ax >= b, A'x > b', Cx + d in Z, C'x + d' notin Z 
-       *)
-      
       let (term_definitions, dimensions_in_terms) =
         FVI.term_definitions_and_dimensions_in_terms srk terms in
       let original_dimensions =
@@ -1219,13 +1189,15 @@ end = struct
       let projected = proj_alg m ~eliminate round_lower_bound (p, l) in
       let p' = P.meet projected (P.of_constraints (BatList.enum term_definitions)) in
       let () =
-        if !my_verbosity_level = `debug then
+        if Log.level_leq !my_verbosity_level `debug then
           match Testing.test_implications srk sym_of_dim term_of_dim m (p, l) p'
           with
           | Some model_err, _, Some projection_err ->
-             logf "%s@;%s@;" model_err projection_err
-          | Some model_err, _, None -> logf "%s" model_err
-          | None, _, Some projection_err -> logf "%s" projection_err
+             failwith (Format.asprintf "%s@;%s@;" model_err projection_err)
+          | Some model_err, _, None ->
+             failwith (Format.asprintf "%s" model_err)
+          | None, _, Some projection_err ->
+             failwith (Format.asprintf "%s" projection_err)
           | None, _, None -> ()
         else
           ()
@@ -1235,9 +1207,6 @@ end = struct
         (Format.pp_print_list ~pp_sep:Format.pp_print_space Format.pp_print_int)
         (IntSet.to_list dimensions_in_terms)
         (P.pp Format.pp_print_int) p';
-      logf ~level:`debug
-        "abstract_terms_by_project_and_real_qe: lattice ignored in real QE is @[%a@]@;"
-        (L.pp Format.pp_print_int) l;
       P.local_project m (IntSet.to_list dimensions_in_terms) p'
       |> P.dd_of ambient_dim
     in

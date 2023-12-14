@@ -32,6 +32,7 @@ val local_mixed_lattice_hull:
 val mixed_lattice_hull:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
+  ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
   ambient_dim: int ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
@@ -114,6 +115,7 @@ exception PositiveIneqOverRealVar of Linear.QQVector.t * int
 
 val project_cooper:
   'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
+  ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
   dim_of_symbol:(Syntax.symbol -> int) -> eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list ->

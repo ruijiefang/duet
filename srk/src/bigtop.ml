@@ -156,8 +156,8 @@ let check_abstract phi terms abstracted =
   | `Unsat -> Format.printf "Result: success"
   | `Unknown -> Format.printf "Result: unknown"
 
-let run_eliminate_integers abstract file =
-  let (quantifiers, phi) = Quantifier.normalize srk (load_formula file) in
+let integer_qe abstract phi =
+  let (quantifiers, phi) = Quantifier.normalize srk phi in
   Format.printf "Abstracting @[%a@]@;" (Syntax.Formula.pp srk) phi;
   let (_quantified_ints, preserved_symbols) =
     free_vars_and_existential_reals (quantifiers, phi) in
@@ -179,28 +179,36 @@ let run_eliminate_integers abstract file =
       )
       (symbols phi) []
   in
-  let phi' = Syntax.mk_and srk (phi :: lattice_constraints) in
+  let phi_with_int_constraints =
+    Syntax.mk_and srk (phi :: lattice_constraints) in
   let () = Format.printf "phi with lattice constraints: @[%a@]@;"
-             (Syntax.Formula.pp srk) phi'
+             (Syntax.Formula.pp srk) phi_with_int_constraints
   in
+  let hull = abstract phi_with_int_constraints terms in
+  let () =
+    Format.printf "Abstracted @[%a@] (with lattice constraints) to:@\n @[<v 0>%a@]@\n"
+      (Syntax.Formula.pp srk) phi_with_int_constraints
+      (DD.pp (fun fmt i ->
+           if i = Linear.const_dim then
+             Format.pp_print_int fmt i
+           else
+             pp_symbol srk fmt
+               (Array.get (Symbol.Set.to_array preserved_symbols) i)))
+      hull
+  in
+  (phi_with_int_constraints, terms, hull)
+
+let run_eliminate_integers abstract file =
+  let phi = load_formula file in
   try
-    let hull = abstract phi' terms
-    in
-    let () =
-      Format.printf "Abstracted @[%a@] (with lattice constraints) to:@\n @[<v 0>%a@]@\n"
-        (Syntax.Formula.pp srk) phi'
-        (DD.pp (fun fmt i ->
-             if i = Linear.const_dim then
-               Format.pp_print_int fmt i
-             else
-               pp_symbol srk fmt
-                 (Array.get (Symbol.Set.to_array preserved_symbols) i)))
-        hull
-    in
-    check_abstract phi' terms hull
-  with LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
-    Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
-      (Linear.QQVector.pp_term Format.pp_print_int) v dim
+    let (phi_with_int_constraints, terms, hull) = integer_qe abstract phi in
+    check_abstract phi_with_int_constraints terms hull
+  with
+  | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
+     Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
+       (Linear.QQVector.pp_term Format.pp_print_int) v dim
+  | Linear.Nonlinear ->
+     Format.printf "Result: unknown (nonlinear)"
 
 let compare_integer_hull file =
   let (_quantifiers, phi) = Quantifier.normalize srk (load_formula file) in
@@ -283,6 +291,40 @@ let compare_convex_hull file =
   else Format.printf "unequal@\n";
   ()
 
+let compare_projection file =
+  let phi = load_formula file in
+  try
+    (*
+    let hull_and_project_real_qe =
+      LatticePolyhedron.abstract_by_local_hull_and_project srk
+        `ProjectThenRealQe `RoundStrictWhenVariablesIntegral in
+     *)
+    let hull_and_project_define_terms =
+      LatticePolyhedron.abstract_by_local_hull_and_project srk
+        `DefineThenProject `RoundStrictWhenVariablesIntegral in
+    let lira_project =
+      Lira.project srk in
+    let (_, _, hull_real_qe) =
+      integer_qe hull_and_project_define_terms phi in
+    let (_, _, hull_lira) =
+      integer_qe lira_project phi in
+    if DD.equal hull_real_qe hull_lira then
+      Format.printf "Result: success"
+    else
+      begin
+        Format.printf "hull_real_qe: @[%a@]@;"
+          (DD.pp Format.pp_print_int) hull_real_qe;
+        Format.printf "hull_lira: @[%a@]@;"
+          (DD.pp Format.pp_print_int) hull_lira;
+        Format.printf "Result: fail (hulls are not equal)"
+      end
+  with
+  | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
+     Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
+       (Linear.QQVector.pp_term Format.pp_print_int) v dim
+  | Linear.Nonlinear ->
+     Format.printf "Result: unknown (nonlinear)"  
+
 let spec_list = [
   ("-simsat",
    Arg.String (fun file ->
@@ -312,27 +354,48 @@ let spec_list = [
 
   ("-compare-integer-hull",
    Arg.String compare_integer_hull,
-   "Compare integer hulls computed by Gomory-Chvatal, Normaliz, and recession cone generalization");
+   "Compare integer hulls computed by Gomory-Chvatal, Normaliz, and recession cone generalization");  
 
   ("-compare-convex-hull",
    Arg.String compare_convex_hull,
    "Compare convex hulls computed by local projection and abstract");
 
-  ("-local-hull-and-project"
+  ("-compare-projection",
+   Arg.String compare_projection,
+   "Compare projected hulls computed by model-based hull-and-project and by LIRA");
+
+  ("-local-hull-and-project-define-terms"
   , Arg.String
       (run_eliminate_integers
          (LatticePolyhedron.abstract_by_local_hull_and_project srk
             `DefineThenProject
             `RoundStrictWhenVariablesIntegral))
+  , " May be unsound due to Cooper elimination applied to real-valued variables (and also diverge because of unsound blocking)"
+  );
+
+  ("-local-hull-and-project"
+  , Arg.String
+      (run_eliminate_integers
+         (LatticePolyhedron.abstract_by_local_hull_and_project srk
+            `ProjectThenRealQe
+            `RoundStrictWhenVariablesIntegral))
+  , " May diverge when formula contains real-valued variables (why?)"
+  );
+
+  ("-local-project-and-hull-define-terms"
+  , Arg.String (run_eliminate_integers
+                  (LatticePolyhedron.abstract_by_local_hull_and_project srk
+                     `ProjectThenRealQe
+                     `RoundStrictWhenVariablesIntegral))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
   ("-local-project-and-hull"
   , Arg.String (run_eliminate_integers
-                  (LatticePolyhedron.abstract_by_local_hull_and_project srk
-                     `DefineThenProject
+                  (LatticePolyhedron.abstract_by_local_project_and_hull srk
+                     `ProjectThenRealQe
                      `RoundStrictWhenVariablesIntegral))
-  , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
+  , " May diverge when formula contains real-valued variables"
   );
 
   ("-lira-project"

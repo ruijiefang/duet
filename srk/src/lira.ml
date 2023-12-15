@@ -35,7 +35,7 @@ include Log.Make(struct let name = "srk.lira" end)
 module IntMap = SrkUtil.Int.Map
 module IntSet = SrkUtil.Int.Set
 
-let () = my_verbosity_level := `trace
+(* let () = my_verbosity_level := `trace *)
 
 module DimensionBinding : sig
   (** A dimension binding associates a dimension [n] ("original dimension")
@@ -1056,27 +1056,13 @@ end = struct
     else None
 
   let term_of srk terms v =
-    let mk_multiple coeff term =
-      if QQ.equal coeff QQ.zero then []
-      else if QQ.equal coeff QQ.one then [term]
-      else [Syntax.mk_mul srk [Syntax.mk_real srk coeff; term]]
-    in
-    let summands =
-      Linear.QQVector.fold (fun dim coeff l ->
-          if dim >= 0 && dim < Array.length terms
-          then mk_multiple coeff (Array.get terms dim) @ l
-          else if dim = Linear.const_dim then
-            Syntax.mk_real srk coeff :: l
-          else assert false
-        ) v []
-    in
-    let term = Syntax.mk_add srk summands in
-    logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
-      (Linear.QQVector.pp_term Format.pp_print_int) v
-      (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
-      terms
-      (Syntax.ArithTerm.pp srk) term;
-    term
+    Linear.term_of_vec srk
+      (fun dim ->
+        if dim >= 0 && dim < Array.length terms
+        then Array.get terms dim
+        else if dim = Linear.const_dim then Syntax.mk_real srk QQ.one
+        else assert false)
+      v
 
   let formula_of_constraints srk terms cnstrs =
     let cnstrs = BatList.of_enum cnstrs in

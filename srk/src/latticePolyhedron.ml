@@ -8,7 +8,7 @@ module IntMap = SrkUtil.Int.Map
 
 include Log.Make(struct let name = "srk.latticePolyhedron" end)
 
-let () = my_verbosity_level := `trace
+(* let () = my_verbosity_level := `trace *)
 
 module FormulaVectorInterface: sig
 
@@ -86,26 +86,22 @@ end = struct
 
   let term_of_vector srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) v =
     let open Syntax in
-    let summands =
-      V.fold (fun dim coeff l ->
-          if dim = Linear.const_dim then
-            mk_real srk coeff :: l
-          else
-            match symbol_of_dim dim with
-            | Some s ->
-               mk_mul srk [mk_real srk coeff; mk_const srk s] :: l
-            | None ->
-               begin match term_of_dim dim with
-               | Some term -> mk_mul srk [ mk_real srk coeff ; term ] :: l
-               | None ->
-                  failwith
-                    (Format.sprintf
-                       "cannot translate dimension %d to a symbol or term" dim)
-               end
-        ) v []
-      |> List.rev
-    in
-    mk_add srk summands
+    Linear.term_of_vec srk
+      (fun dim ->
+        if dim = Linear.const_dim then mk_real srk QQ.one
+        else
+          match symbol_of_dim dim with
+          | Some s -> mk_const srk s
+          | None ->
+             begin match term_of_dim dim with
+             | Some term -> term
+             | None ->
+                failwith
+                  (Format.sprintf
+                     "cannot translate dimension %d to a symbol or term" dim)
+             end
+      )
+      v
 
   let to_inequality srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) (ckind, v) =
     let zero = Syntax.mk_zero srk in
@@ -134,7 +130,7 @@ end = struct
 
   let formula_of_dd srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) dd =
     formula_of_p_constraints srk ~symbol_of_dim ~term_of_dim DD.enum_constraints dd
-    
+
   let formula_of_lattice srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) l =
     List.fold_left (fun fml v ->
         to_is_int srk ~symbol_of_dim ~term_of_dim v :: fml)
@@ -354,7 +350,7 @@ module Testing = struct
            (Format.asprintf "model @[%a@] does not satisfy @[%a@]@;"
               (Syntax.Formula.pp srk) formula_of_model
               (Syntax.Formula.pp srk) alpha)
-        
+
       | `Unsat -> None
       | `Unknown -> Some "unknown"
     in check_model
@@ -368,7 +364,7 @@ module Testing = struct
                (Syntax.Formula.pp srk) phi1
                (Syntax.Formula.pp srk) phi2)
     | `Unsat -> None
-    | `Unknown -> Some "unknown"    
+    | `Unknown -> Some "unknown"
 
   let _abstraction_implies_implicant
         srk symbol_of_dim term_of_dim (p, l) abstraction =
@@ -1078,12 +1074,12 @@ module ProjectHull : sig
 
 end = struct
 
-  (** 
+  (**
       F := (Ax + b >= 0 /\ Int(Cx + d) /\ Int(y))
       local_project_cooper(F) |= exists y. F.
       The procedure may diverge when there are real-valued variables in the
       formula.
-      
+
       If F |= ez + f >= 0, (exists y. F) |= ez + f >= 0, so
       local_project_cooper(F) |= ez + f >= 0.
       So local_hull(local_project_cooper(F)) |= ez + f >= 0.
@@ -1095,16 +1091,16 @@ end = struct
         (p, l) in
     local_mixed_lattice_hull m (projected_p, projected_l)
 
-  (** 
+  (**
       F := (Ax + b >= 0 /\ Int(Cx + d) /\ Int(y)) |= local_hull(F)
       For all ex + f >= 0, if F |= ex + f >= 0, local_hull(F) |= ex + f >= 0.
 
-      local_project_cooper(local_hull(F), Int(Cx + d), Int(y)) 
+      local_project_cooper(local_hull(F), Int(Cx + d), Int(y))
       |= exists y. local_hull(F) /\ Int(Cx + d) /\ Int(y).
 
       If F |= ez + f >= 0, then G |= ez + f >= 0 (and G is free of y).
       F |= ez + f >= 0 implies local_hull(F) |= ez + f >= 0.
-      Since RHS is free of y, 
+      Since RHS is free of y,
       (exists y. local_hull(F)) |= ez + f >= 0,
       and
       (exists y. local_hull(F) /\ Int(Cx + d) /\ Int(y)) |= ez + f >= 0.
@@ -1224,7 +1220,7 @@ end = struct
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     logf "phi: @[%a@]@;" (Syntax.pp_smtlib2 srk) phi;
     ignore (Abstract.Solver.get_model solver);
-    Abstract.Solver.abstract solver domain    
+    Abstract.Solver.abstract solver domain
 
   let abstract_terms_by_project_and_real_qe
         srk proj_alg round_lower_bound phi terms =

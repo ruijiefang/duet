@@ -326,13 +326,11 @@ module Testing = struct
       )
       (Syntax.symbols phi)
 
-  let test_implications srk symbol_of_dim term_of_dim m (p, l) abstraction =
+  let model_satisfies srk symbol_of_dim term_of_dim m (p, l) abstraction =
     let open FormulaVectorInterface in
     let solver = Smt.StdSolver.make srk in
-    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-    let l_phis = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l in
-    let phi = Syntax.mk_and srk [p_phi; l_phis] in
-    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim abstraction in
+    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim
+                  abstraction in
     let formula_of_model =
       let dimensions = FormulaVectorInterface.collect_dimensions (p, l) in
       IntSet.fold (fun dim conjuncts ->
@@ -359,30 +357,45 @@ module Testing = struct
         
       | `Unsat -> None
       | `Unknown -> Some "unknown"
+    in check_model
+
+  let test_implication srk err phi1 phi2 =
+    let solver = Smt.StdSolver.make srk in
+    Smt.StdSolver.add solver [phi1; Syntax.mk_not srk phi2];
+    match Smt.StdSolver.get_model solver with
+    | `Sat _ ->
+       Some (Format.asprintf err
+               (Syntax.Formula.pp srk) phi1
+               (Syntax.Formula.pp srk) phi2)
+    | `Unsat -> None
+    | `Unknown -> Some "unknown"    
+
+  let _abstraction_implies_implicant
+        srk symbol_of_dim term_of_dim (p, l) abstraction =
+    let open FormulaVectorInterface in
+    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
+    let l_phis = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l in
+    let phi = Syntax.mk_and srk [p_phi; l_phis] in
+    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim abstraction
     in
-    Smt.StdSolver.reset solver;
-    let abstraction_subset_phi =
-      Smt.StdSolver.add solver [alpha; Syntax.mk_not srk phi];
-      match Smt.StdSolver.get_model solver with
-      | `Sat _ ->
-         Some (Format.asprintf "Fail: Abstraction @[%a@] is not a subset of @[%a@]@;"
-                 (Syntax.Formula.pp srk) alpha
-                 (Syntax.Formula.pp srk) phi)
-      | `Unsat -> None
-      | `Unknown -> Some "unknown"
+    test_implication srk
+      "Fail: abstraction @[%a@] does not imply implicant @[%a@]@;"
+      alpha phi
+
+  (* Can only be used to test (the final result of) projection,
+     not local projection.
+   *)
+  let _implies_abstraction
+        srk symbol_of_dim term_of_dim (p, l) abstraction =
+    let open FormulaVectorInterface in
+    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
+    let l_phis = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l in
+    let phi = Syntax.mk_and srk [p_phi; l_phis] in
+    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim abstraction
     in
-    Smt.StdSolver.reset solver;
-    let phi_subset_abstraction =
-      Smt.StdSolver.add solver [phi; Syntax.mk_not srk alpha];
-      match Smt.StdSolver.get_model solver with
-      | `Sat _ ->
-         Some (Format.asprintf "Fail: @[%a@] is not a subset of abstraction @[%a@]@;"
-                 (Syntax.Formula.pp srk) phi
-                 (Syntax.Formula.pp srk) alpha)
-      | `Unsat -> None
-      | `Unknown -> Some "unknown"
-    in
-    (check_model, abstraction_subset_phi, phi_subset_abstraction)
+    test_implication srk
+      "Fail: @[%a@] does not imply abstraction @[%a@]@;"
+      phi alpha
 
 end
 
@@ -1004,13 +1017,18 @@ module ProjectHull : sig
     (P.t * L.t) list ->
     DD.closed DD.t
 
-  val hull_and_project:
+  val hull_and_project_cooper:
     'a Syntax.context ->
     symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
     eliminate: int list ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
     (P.t * L.t) list ->
     DD.closed DD.t
+
+  val hull_and_project:
+    'a Syntax.context ->
+    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
+    eliminate: int list -> (P.t * L.t) list -> DD.closed DD.t
 
   (** When projecting onto terms using variable elimination, one has to be
       careful about what variables get eliminated.
@@ -1042,10 +1060,14 @@ module ProjectHull : sig
         Cooper projection requires care if they are implicit.)
    *)
 
-  val abstract_by_local_hull_and_project:
+  val abstract_by_local_hull_and_project_cooper:
     'a Syntax.context ->
     [`DefineTerms | `RealQe] ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
+    'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
+
+  val abstract_by_local_hull_and_project:
+    'a Syntax.context ->
     'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
 
   val abstract_by_local_project_and_hull:
@@ -1056,6 +1078,16 @@ module ProjectHull : sig
 
 end = struct
 
+  (** 
+      F := (Ax + b >= 0 /\ Int(Cx + d) /\ Int(y))
+      local_project_cooper(F) |= exists y. F.
+      The procedure may diverge when there are real-valued variables in the
+      formula.
+      
+      If F |= ez + f >= 0, (exists y. F) |= ez + f >= 0, so
+      local_project_cooper(F) |= ez + f >= 0.
+      So local_hull(local_project_cooper(F)) |= ez + f >= 0.
+   *)
   let local_project_and_hull m ~eliminate round_lower_bound (p, l) =
     let eliminate = Array.of_list eliminate in
     let (projected_p, projected_l, _terms) =
@@ -1063,12 +1095,32 @@ end = struct
         (p, l) in
     local_mixed_lattice_hull m (projected_p, projected_l)
 
-  let local_hull_and_project m ~eliminate round_lower_bound (p, l) =
+  (** 
+      F := (Ax + b >= 0 /\ Int(Cx + d) /\ Int(y)) |= local_hull(F)
+      For all ex + f >= 0, if F |= ex + f >= 0, local_hull(F) |= ex + f >= 0.
+
+      local_project_cooper(local_hull(F), Int(Cx + d), Int(y)) 
+      |= exists y. local_hull(F) /\ Int(Cx + d) /\ Int(y).
+
+      If F |= ez + f >= 0, then G |= ez + f >= 0 (and G is free of y).
+      F |= ez + f >= 0 implies local_hull(F) |= ez + f >= 0.
+      Since RHS is free of y, 
+      (exists y. local_hull(F)) |= ez + f >= 0,
+      and
+      (exists y. local_hull(F) /\ Int(Cx + d) /\ Int(y)) |= ez + f >= 0.
+      So local_project_cooper(local_hull(F), Int(Cx + d), Int(y)) |= ez + f >= 0.
+   *)
+  let local_hull_and_project_cooper m ~eliminate round_lower_bound (p, l) =
     let hulled = local_mixed_lattice_hull m (p, l) in
     let eliminate = Array.of_list eliminate in
     let (projected, _, _) =
       local_project_cooper m ~eliminate round_lower_bound (hulled, l)
     in
+    projected
+
+  let local_hull_and_project m ~eliminate (p, l) =
+    let hulled = local_mixed_lattice_hull m (p, l) in
+    let projected = Polyhedron.local_project m eliminate hulled in
     projected
 
   let formula_of srk symbol_of_dim ?(term_of_dim=(fun _ -> None)) dd =
@@ -1119,10 +1171,14 @@ end = struct
     saturate srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bound
       local_project_and_hull
 
-  let hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate
+  let hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol ~eliminate
         round_lower_bound =
     saturate srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bound
-      local_hull_and_project
+      local_hull_and_project_cooper
+
+  let hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate =
+    saturate srk ~symbol_of_dim ~dim_of_symbol ~eliminate None
+      (fun m ~eliminate _ (p, l) -> local_hull_and_project m ~eliminate (p, l))
 
   let abstract_terms_by_define_then_project
         srk proj_alg round_lower_bound phi terms =
@@ -1168,17 +1224,7 @@ end = struct
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     logf "phi: @[%a@]@;" (Syntax.pp_smtlib2 srk) phi;
     ignore (Abstract.Solver.get_model solver);
-    Abstract.Solver.abstract solver domain
-
-  let abstract_by_local_project_and_hull_and_by_define_then_project
-        srk round_lower_bound phi terms =
-    abstract_terms_by_define_then_project
-      srk local_project_and_hull round_lower_bound phi terms
-
-  let abstract_by_local_hull_and_project_and_by_define_then_project
-        srk round_lower_bound phi terms =
-    abstract_terms_by_define_then_project
-      srk local_hull_and_project round_lower_bound phi terms
+    Abstract.Solver.abstract solver domain    
 
   let abstract_terms_by_project_and_real_qe
         srk proj_alg round_lower_bound phi terms =
@@ -1201,15 +1247,13 @@ end = struct
       let p' = P.meet projected (P.of_constraints (BatList.enum term_definitions)) in
       let () =
         if Log.level_leq !my_verbosity_level `debug then
-          match Testing.test_implications srk sym_of_dim term_of_dim m (p, l) p'
+          match Testing.model_satisfies srk sym_of_dim term_of_dim m (p, l) p'
           with
-          | Some model_err, _, Some projection_err ->
-             failwith (Format.asprintf "%s@;%s@;" model_err projection_err)
-          | Some model_err, _, None ->
-             failwith (Format.asprintf "%s" model_err)
-          | None, _, Some projection_err ->
-             failwith (Format.asprintf "%s" projection_err)
-          | None, _, None -> ()
+          | Some model_err ->
+             let s = Format.asprintf "%s" model_err in
+             logf "%s" s;
+             failwith s
+          | None -> ()
         else
           ()
       in
@@ -1238,25 +1282,31 @@ end = struct
     ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
 
-  let abstract_by_local_project_and_hull_and_real_qe
-        srk round_lower_bound phi terms =
-    abstract_terms_by_project_and_real_qe
-      srk local_project_and_hull round_lower_bound phi terms
-
-  let abstract_by_local_hull_and_project_and_real_qe
-        srk round_lower_bound phi terms =
-    abstract_terms_by_project_and_real_qe
-      srk local_hull_and_project round_lower_bound phi terms
-
-  let abstract_by_local_hull_and_project srk how =
+  let abstract_by_local_hull_and_project_cooper
+        srk how round_lower_bound phi terms =
     match how with
-    | `DefineTerms -> abstract_by_local_hull_and_project_and_by_define_then_project srk
-    | `RealQe -> abstract_by_local_hull_and_project_and_real_qe srk
+    | `DefineTerms ->
+       abstract_terms_by_define_then_project srk
+         local_hull_and_project_cooper round_lower_bound phi terms
+    | `RealQe ->
+       abstract_terms_by_project_and_real_qe srk
+         local_hull_and_project_cooper round_lower_bound phi terms
 
-  let abstract_by_local_project_and_hull srk how =
+  let abstract_by_local_hull_and_project srk phi terms =
+    abstract_terms_by_project_and_real_qe srk
+      (fun m ~eliminate _ (p, l) -> local_hull_and_project m ~eliminate (p, l))
+      None
+      phi terms
+
+  let abstract_by_local_project_and_hull srk how round_lower_bound phi terms =
     match how with
-    | `DefineTerms -> abstract_by_local_project_and_hull_and_by_define_then_project srk
-    | `RealQe -> abstract_by_local_project_and_hull_and_real_qe srk
+    | `DefineTerms ->
+       abstract_terms_by_define_then_project srk
+         local_project_and_hull round_lower_bound phi terms
+    | `RealQe ->
+       abstract_terms_by_project_and_real_qe srk
+         local_project_and_hull round_lower_bound
+         phi terms
 
 end
 
@@ -1270,16 +1320,22 @@ let project_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bo
   ProjectHull.project_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate
     round_lower_bound
 
-let hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bound =
-  ProjectHull.hull_and_project srk ~symbol_of_dim ~dim_of_symbol ~eliminate
-    round_lower_bound
+let hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol ~eliminate
+      round_lower_bound =
+  ProjectHull.hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol
+    ~eliminate round_lower_bound
 
-let abstract_by_local_hull_and_project srk how =
+let hull_and_project = ProjectHull.hull_and_project
+
+let abstract_by_local_hull_and_project_cooper srk how =
   match how with
   | `DefineThenProject ->
-     ProjectHull.abstract_by_local_hull_and_project srk `DefineTerms
+     ProjectHull.abstract_by_local_hull_and_project_cooper srk `DefineTerms
   | `ProjectThenRealQe ->
-     ProjectHull.abstract_by_local_hull_and_project srk `RealQe
+     ProjectHull.abstract_by_local_hull_and_project_cooper srk `RealQe
+
+let abstract_by_local_hull_and_project =
+  ProjectHull.abstract_by_local_hull_and_project
 
 let abstract_by_local_project_and_hull srk how =
   match how with

@@ -137,7 +137,7 @@ val project_and_hull:
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
-(** [hull_and_project elim round phis] computes the set of non-strict
+(** [hull_and_project_cooper elim round phis] computes the set of non-strict
     inequalities in dimensions not in [elim] that are implied by [phis].
     This is done by local hulling ([local_mixed_lattice_hull])
     followed by local projection ([local_project_cooper]), until a fixed point
@@ -145,12 +145,19 @@ val project_and_hull:
     This may diverge when variables in [elim] can be real-valued, but should
     converge otherwise.
  *)
-val hull_and_project:
+val hull_and_project_cooper:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
   eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
+  (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
+
+val hull_and_project:
+  'a Syntax.context ->
+  symbol_of_dim:(int -> Syntax.symbol option) ->
+  dim_of_symbol:(Syntax.symbol -> int) ->
+  eliminate: int list ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val abstract_by_local_project_and_hull:
@@ -160,6 +167,10 @@ val abstract_by_local_project_and_hull:
   'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
 
 val abstract_by_local_hull_and_project:
+  'a Syntax.context -> 'a Syntax.formula -> ('a Syntax.arith_term) array ->
+  DD.closed DD.t
+
+val abstract_by_local_hull_and_project_cooper:
   'a Syntax.context ->
   [`DefineThenProject | `ProjectThenRealQe] ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->

@@ -294,18 +294,17 @@ let compare_convex_hull file =
 let compare_projection file =
   let phi = load_formula file in
   try
-    (*
     let hull_and_project_real_qe =
-      LatticePolyhedron.abstract_by_local_hull_and_project srk
-        `ProjectThenRealQe `RoundStrictWhenVariablesIntegral in
-     *)
+      LatticePolyhedron.abstract_by_local_hull_and_project srk in
+    (*
     let hull_and_project_define_terms =
-      LatticePolyhedron.abstract_by_local_hull_and_project srk
-        `DefineThenProject `RoundStrictWhenVariablesIntegral in
+    LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
+    `DefineThenProject `RoundStrictWhenVariablesIntegral in
+     *)
     let lira_project =
       Lira.project srk in
     let (_, _, hull_real_qe) =
-      integer_qe hull_and_project_define_terms phi in
+      integer_qe hull_and_project_real_qe phi in
     let (_, _, hull_lira) =
       integer_qe lira_project phi in
     if DD.equal hull_real_qe hull_lira then
@@ -367,7 +366,7 @@ let spec_list = [
   ("-local-hull-and-project-define-terms"
   , Arg.String
       (run_eliminate_integers
-         (LatticePolyhedron.abstract_by_local_hull_and_project srk
+         (LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
             `DefineThenProject
             `RoundStrictWhenVariablesIntegral))
   , " May be unsound due to Cooper elimination applied to real-valued variables (and also diverge because of unsound blocking)"
@@ -376,15 +375,18 @@ let spec_list = [
   ("-local-hull-and-project"
   , Arg.String
       (run_eliminate_integers
+         (*
          (LatticePolyhedron.abstract_by_local_hull_and_project srk
             `ProjectThenRealQe
             `RoundStrictWhenVariablesIntegral))
+          *)
+         (LatticePolyhedron.abstract_by_local_hull_and_project srk))
   , " May diverge when formula contains real-valued variables (why?)"
   );
 
   ("-local-project-and-hull-define-terms"
   , Arg.String (run_eliminate_integers
-                  (LatticePolyhedron.abstract_by_local_hull_and_project srk
+                  (LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
                      `ProjectThenRealQe
                      `RoundStrictWhenVariablesIntegral))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"

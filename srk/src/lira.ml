@@ -1052,14 +1052,14 @@ end = struct
 
   let term_of_dim terms i =
     if i >= 0 && i < Array.length terms then
-      Some (Array.get terms i)
+      Some (terms.(i))
     else None
 
   let term_of srk terms v =
     Linear.term_of_vec srk
       (fun dim ->
         if dim >= 0 && dim < Array.length terms
-        then Array.get terms dim
+        then terms.(dim)
         else if dim = Linear.const_dim then Syntax.mk_real srk QQ.one
         else assert false)
       v

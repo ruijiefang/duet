@@ -270,7 +270,7 @@ end = struct
     in
     let term_of_dim dim =
       if 0 <= dim && dim < base then
-        Some (Array.get terms dim)
+        Some (terms.(dim))
       else None
     in
     { sym_of_dim = symbol_of_dim

@@ -35,13 +35,7 @@ include Log.Make(struct let name = "srk.lira" end)
 module IntMap = SrkUtil.Int.Map
 module IntSet = SrkUtil.Int.Set
 
-let bounds_for_frac_dim frac_dim =
-  let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
-  let upper_bound = (`Pos,
-                     Linear.QQVector.of_term (QQ.of_int (-1)) frac_dim
-                     |> Linear.QQVector.add_term QQ.one Linear.const_dim)
-  in
-  [lower_bound; upper_bound]
+let () = my_verbosity_level := `trace
 
 module DimensionBinding : sig
   (** A dimension binding associates a dimension [n] ("original dimension")
@@ -161,6 +155,14 @@ end = struct
           ())
       t ();
     cnstrs
+
+  let bounds_for_frac_dim frac_dim =
+    let lower_bound = (`Nonneg, Linear.QQVector.of_term QQ.one frac_dim) in
+    let upper_bound = (`Pos,
+                       Linear.QQVector.of_term (QQ.of_int (-1)) frac_dim
+                       |> Linear.QQVector.add_term QQ.one Linear.const_dim)
+    in
+    [lower_bound; upper_bound]
 
   let inequalities_for select t =
     fold (fun bds ~original_dim ~int_dim:_ ~frac_dim ->
@@ -1053,6 +1055,61 @@ end = struct
       Some (Array.get terms i)
     else None
 
+  let term_of srk terms v =
+    let mk_multiple coeff term =
+      if QQ.equal coeff QQ.zero then []
+      else if QQ.equal coeff QQ.one then [term]
+      else [Syntax.mk_mul srk [Syntax.mk_real srk coeff; term]]
+    in
+    let summands =
+      Linear.QQVector.fold (fun dim coeff l ->
+          if dim >= 0 && dim < Array.length terms
+          then mk_multiple coeff (Array.get terms dim) @ l
+          else if dim = Linear.const_dim then
+            Syntax.mk_real srk coeff :: l
+          else assert false
+        ) v []
+    in
+    let term = Syntax.mk_add srk summands in
+    logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
+      (Linear.QQVector.pp_term Format.pp_print_int) v
+      (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
+      terms
+      (Syntax.ArithTerm.pp srk) term;
+    term
+
+  let formula_of_constraints srk terms cnstrs =
+    let cnstrs = BatList.of_enum cnstrs in
+    logf ~level:`trace "formula_of: blocking: %a"
+      (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
+         (fun fmt (ckind, v) ->
+           let pp_vector = Linear.QQVector.pp_term Format.pp_print_int in
+           match ckind with
+           | `Zero -> Format.fprintf fmt "@[%a = 0@]" pp_vector v
+           | `Nonneg -> Format.fprintf fmt "@[%a >= 0@]" pp_vector v
+           | `Pos -> Format.fprintf fmt "@[%a > 0@]" pp_vector v
+         )
+      )
+      cnstrs;
+    let inequalities =
+      BatList.map
+        (fun (ckind, v) ->
+          let rhs = term_of srk terms v in
+          let zero = Syntax.mk_real srk QQ.zero in
+          match ckind with
+          | `Zero -> Syntax.mk_eq srk zero rhs
+          | `Nonneg -> Syntax.mk_leq srk zero rhs
+          | `Pos -> Syntax.mk_lt srk zero rhs
+        )
+        cnstrs
+    in
+    let phi = Syntax.mk_and srk inequalities in
+    logf ~level:`debug "formula_of: result: @[%a@]@;" (Syntax.Formula.pp srk) phi;
+    phi
+
+  let formula_of srk terms dd =
+    formula_of_constraints srk terms (DD.enum_constraints dd)
+
   let make_binding phi terms =
     (* Reserve |terms| dimensions in both the original-dimension space and
        in the integer-fractional space.
@@ -1101,6 +1158,36 @@ end = struct
       (Linearized.tru, 0) terms
     |> fst
 
+  let symbols_in_terms terms =
+    Array.fold_left
+      (fun symbols term -> Syntax.Symbol.Set.union symbols (Syntax.symbols term))
+      Syntax.Symbol.Set.empty
+      terms
+
+  let model_satisfies srk terms interp p =
+    let term_symbols = symbols_in_terms terms in
+    let solver = Smt.StdSolver.make srk in
+    let formula_of_model =
+      Syntax.Symbol.Set.fold (fun symbol conjuncts ->
+          let r = Interpretation.real interp symbol in
+          Syntax.mk_eq srk (Syntax.mk_const srk symbol) (Syntax.mk_real srk r) :: conjuncts)
+        term_symbols []
+      |> Syntax.mk_and srk
+    in
+    let phi = formula_of_constraints srk terms (Polyhedron.enum_constraints p) in
+    Smt.StdSolver.add solver [formula_of_model; Syntax.mk_not srk phi];
+    let check_model = match Smt.StdSolver.get_model solver with
+      | `Sat _ ->
+         Some
+           (Format.asprintf "model @[%a@] does not satisfy @[%a@]@;"
+              (Syntax.Formula.pp srk) formula_of_model
+              (Syntax.Formula.pp srk) phi)
+        
+      | `Unsat -> None
+      | `Unknown -> Some "unknown"
+    in
+    check_model
+
   let of_model srk binding terms phi = function
     | `LIRA interp ->
        let implicant = Interpretation.select_implicant interp phi in
@@ -1134,7 +1221,7 @@ end = struct
           let term_constraints = define_terms srk binding terms interp in
           let (inequalities, integral) =
             Linearized.unfold_linear_formula term_constraints in
-          let linset =
+          let linset_with_term_definitions =
             ( Polyhedron.meet
                 (Polyhedron.of_constraints
                    (BatList.enum inequalities)) p
@@ -1151,65 +1238,22 @@ end = struct
             IntSet.pp onto_original;
           let dim_binding = Context.dimension_binding binding in
           let valuation = Context.valuation_of binding interp in
-          let (p, _l) =
+          let (result, _l) =
             LocalProject.lira_project dim_binding valuation ~onto_original
-              linset
+              linset_with_term_definitions
             |> LocalProject.project_linset_onto_original dim_binding valuation
           in
-          let dd = Polyhedron.dd_of (Array.length terms) p
+          let () =
+            if Log.level_leq !my_verbosity_level `debug then
+              match model_satisfies srk terms interp result with
+              | Some err -> failwith err
+              | None -> ()
+          in
+          let dd = Polyhedron.dd_of (Array.length terms) result
           in
           dd
        end
     | _ -> assert false
-
-  let term_of srk terms v =
-    let mk_multiple coeff term =
-      if QQ.equal coeff QQ.zero then []
-      else if QQ.equal coeff QQ.one then [term]
-      else [Syntax.mk_mul srk [Syntax.mk_real srk coeff; term]]
-    in
-    let summands =
-      Linear.QQVector.fold (fun dim coeff l ->
-          if dim >= 0 && dim < Array.length terms
-          then mk_multiple coeff (Array.get terms dim) @ l
-          else if dim = Linear.const_dim then
-            Syntax.mk_real srk coeff :: l
-          else assert false
-        ) v []
-    in
-    let term = Syntax.mk_add srk summands in
-    logf ~level:`debug "term_of: v: %a@; terms were: %a@; result: %a@;"
-      (Linear.QQVector.pp_term Format.pp_print_int) v
-      (fun fmt arr -> Array.iter (fun t -> Syntax.ArithTerm.pp srk fmt t) arr)
-      terms
-      (Syntax.ArithTerm.pp srk) term;
-    term
-
-  let formula_of srk terms p =
-    logf ~level:`trace "formula_of: blocking: %a" (DD.pp Format.pp_print_int) p;
-    let inequalities =
-      BatEnum.map
-        (fun (ckind, v) ->
-          let rhs = term_of srk terms v in
-          let zero = Syntax.mk_real srk QQ.zero in
-          match ckind with
-          | `Zero -> Syntax.mk_eq srk zero rhs
-          | `Nonneg -> Syntax.mk_leq srk zero rhs
-          | `Pos -> Syntax.mk_lt srk zero rhs
-        )
-        (DD.enum_constraints p)
-      |> BatList.of_enum
-    in
-    (*
-    let integrality =
-      List.map (fun v -> Syntax.mk_is_int srk (term_of srk terms v))
-        (IntLattice.basis l)
-    in
-    let phi = Syntax.mk_and srk (List.rev_append integrality inequalities) in
-     *)
-    let phi = Syntax.mk_and srk inequalities in
-    logf ~level:`debug "formula_of: result: @[%a@]@;" (Syntax.Formula.pp srk) phi;
-    phi
 
   let project (srk: 'a Syntax.context) phi terms =
     let binding = make_binding phi terms in

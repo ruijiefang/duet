@@ -119,42 +119,42 @@ let free_vars_and_existential_reals (quantifiers, phi) =
        (Syntax.pp_symbol srk)) (Symbol.Set.to_list preserved_symbols);
   (quantified_ints, preserved_symbols)
 
+let term_of_vector terms v =
+  Linear.term_of_vec srk (fun dim ->
+      if dim = Linear.const_dim then mk_real srk QQ.one
+      else terms.(dim))
+    v
+
+let formula_of_dd terms dd =
+  let zero = Syntax.mk_real srk QQ.zero in
+  let conjuncts =
+    BatEnum.fold (fun l (ckind, v) ->
+        let t = match ckind with
+          | `Nonneg ->
+             Syntax.mk_leq srk zero (term_of_vector terms v)
+          | `Pos -> Syntax.mk_lt srk zero (term_of_vector terms v)
+          | `Zero -> Syntax.mk_eq srk zero (term_of_vector terms v)
+        in
+        t :: l
+      )
+      []
+      (DD.enum_constraints dd)
+  in
+  if conjuncts = [] then Syntax.mk_false srk
+  else Syntax.mk_and srk conjuncts
+
 let check_abstract phi terms abstracted =
   let solver = Smt.StdSolver.make srk in
-  let term_of_vector v =
-    Linear.QQVector.fold
-      (fun dim coeff l ->
-        if dim = Linear.const_dim then
-          mk_real srk coeff :: l
-        else
-          Syntax.mk_mul srk [Syntax.mk_real srk coeff ; Array.get terms dim] :: l
-      ) v []
-    |> List.rev
-    |> Syntax.mk_add srk
-  in
-  let zero = Syntax.mk_real srk QQ.zero in
-  let negated_abstracted =
-    let conjuncts =
-      BatEnum.fold (fun l (ckind, v) ->
-          let t = match ckind with
-            | `Nonneg ->
-               Syntax.mk_leq srk zero (term_of_vector v)
-            | `Pos -> Syntax.mk_lt srk zero (term_of_vector v)
-            | `Zero -> Syntax.mk_eq srk zero (term_of_vector v)
-          in
-          t :: l
-        )
-        []
-        (DD.enum_constraints abstracted)
-    in
-    if conjuncts = [] then Syntax.mk_false srk
-    else Syntax.mk_and srk conjuncts |> Syntax.mk_not srk
-  in
+  let negated_abstracted = Syntax.mk_not srk (formula_of_dd terms abstracted) in
   Smt.StdSolver.add solver [phi; negated_abstracted];
   match Smt.StdSolver.get_model solver with
   | `Sat _ -> Format.printf "Result: fail (soundness check)"
   | `Unsat -> Format.printf "Result: success"
   | `Unknown -> Format.printf "Result: unknown"
+
+let check_subset terms p1 p2 =
+  let phi1 = formula_of_dd terms p1 in
+  check_abstract phi1 terms p2
 
 let integer_qe abstract phi =
   let (quantifiers, phi) = Quantifier.normalize srk phi in
@@ -215,7 +215,7 @@ let compare_integer_hull file =
   let ambient_dim = Syntax.int_of_symbol
                       (Syntax.Symbol.Set.max_elt (Syntax.symbols phi)) + 1 in
   Format.printf "Computing mixed hull@;";
-  
+
   let mixed_hull =
     LatticePolyhedron.abstract_lattice_hull srk ~how:`Mixed
       ~symbol_of_dim:(fun dim -> Some (Syntax.symbol_of_int dim))
@@ -294,27 +294,27 @@ let compare_convex_hull file =
 let compare_projection file =
   let phi = load_formula file in
   try
-    let hull_and_project_real_qe =
-      LatticePolyhedron.abstract_by_local_hull_and_project srk in
-    (*
-    let hull_and_project_define_terms =
-    LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
-    `DefineThenProject `RoundStrictWhenVariablesIntegral in
-     *)
+    let (_, terms, real_conv_hull) = integer_qe (Abstract.conv_hull srk) phi in
     let lira_project =
       Lira.project srk in
-    let (_, _, hull_real_qe) =
-      integer_qe hull_and_project_real_qe phi in
+    (*
+    let (_, _, hull_and_project_real_qe) =
+      integer_qe (LatticePolyhedron.abstract_by_local_hull_and_project srk) phi in
+     *)
     let (_, _, hull_lira) =
       integer_qe lira_project phi in
-    if DD.equal hull_real_qe hull_lira then
+    if (* DD.equal hull_and_project_real_qe hull_lira && *)
+      DD.equal real_conv_hull hull_lira then
       Format.printf "Result: success"
     else
       begin
-        Format.printf "hull_real_qe: @[%a@]@;"
-          (DD.pp Format.pp_print_int) hull_real_qe;
+        Format.printf "real_conv_hull: @[%a@]@;"
+          (DD.pp Format.pp_print_int) real_conv_hull;
+        (*Format.printf "hull_and_project_real_qe: @[%a@]@;"
+          (DD.pp Format.pp_print_int) hull_and_project_real_qe; *)
         Format.printf "hull_lira: @[%a@]@;"
           (DD.pp Format.pp_print_int) hull_lira;
+        check_subset terms hull_lira real_conv_hull;
         Format.printf "Result: fail (hulls are not equal)"
       end
   with
@@ -322,7 +322,7 @@ let compare_projection file =
      Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
        (Linear.QQVector.pp_term Format.pp_print_int) v dim
   | Linear.Nonlinear ->
-     Format.printf "Result: unknown (nonlinear)"  
+     Format.printf "Result: unknown (nonlinear)"
 
 let spec_list = [
   ("-simsat",
@@ -353,7 +353,7 @@ let spec_list = [
 
   ("-compare-integer-hull",
    Arg.String compare_integer_hull,
-   "Compare integer hulls computed by Gomory-Chvatal, Normaliz, and recession cone generalization");  
+   "Compare integer hulls computed by Gomory-Chvatal, Normaliz, and recession cone generalization");
 
   ("-compare-convex-hull",
    Arg.String compare_convex_hull,
@@ -405,6 +405,10 @@ let spec_list = [
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
+  ("-project-by-real-conv-hull"
+  , Arg.String (run_eliminate_integers (Abstract.conv_hull srk))
+  , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
+
   ("-int-hull-by-cone-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
@@ -444,42 +448,6 @@ let spec_list = [
               else pp_symbol srk fmt (symbol_of_int i))) hull),
    " Compute the integer hull of an existential formula by model-based Cooper");
 
-  ("-int-hull-by-abstract",
-   Arg.String (fun file ->
-       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       if List.exists (fun (q, _) -> q = `Forall) qf then
-         failwith "universal quantification not supported";
-       let exists v =
-         not (List.exists (fun (_, x) -> x = v && typ_symbol srk x == `TyInt) qf)
-       in
-       let polka = Polka.manager_alloc_strict () in
-       let pp_hull formatter hull =
-         if !generator_rep then begin
-           let env = SrkApron.get_env hull in
-           let dim = SrkApron.Env.dimension env in
-           Format.printf "Symbols:   [%a]@\n@[<v 0>"
-             (SrkUtil.pp_print_enum (Syntax.pp_symbol srk)) (SrkApron.Env.vars env);
-           SrkApron.generators hull
-           |> List.iter (fun (generator, typ) ->
-               Format.printf "%s [@[<hov 1>"
-                 (match typ with
-                  | `Line    -> "line:     "
-                  | `Vertex  -> "vertex:   "
-                  | `Ray     -> "ray:      "
-                  | `LineMod -> "line mod: "
-                  | `RayMod  -> "ray mod:  ");
-               for i = 0 to dim - 2 do
-                 Format.printf "%a@;" QQ.pp (Linear.QQVector.coeff i generator)
-               done;
-               Format.printf "%a]@]@;" QQ.pp (Linear.QQVector.coeff (dim - 1) generator));
-           Format.printf "@]"
-         end else
-           SrkApron.pp formatter hull
-       in
-       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         pp_hull (Abstract.abstract ~exists srk polka phi)),
-   " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
-
   ("-convex-hull",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
@@ -515,7 +483,7 @@ let spec_list = [
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
          pp_hull (Abstract.abstract ~exists srk polka phi)),
    " Compute the convex hull of an existential linear arithmetic formula");
-  
+
   ("-wedge-hull",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
@@ -611,8 +579,8 @@ let spec_list = [
        let open Iteration in
        let fp = Chc.Fp.create () in
        let fp = load_chc fp file in
-       let pd = 
-         (module Product(LossyTranslation)(PolyhedronGuard) : PreDomain) 
+       let pd =
+         (module Product(LossyTranslation)(PolyhedronGuard) : PreDomain)
        in (*TODO: let user pick iter operation*)
        let rels = Chc.Fp.get_relations_used fp in
        let sln = Chc.Fp.solve srk fp pd in

@@ -606,6 +606,8 @@ module CooperProjection : sig
       - When strict inequalities are present and all variables are integer-valued,
         [`RoundStrictWhenVariablesIntegral] can be used to heuristically convert
         the strict inequality into a non-strict one.
+        For [local-hull-and-project], if Cooper projection is used, we may
+        possibly use LW's epsilon virtual substitution to handle strict inequalities.
 
       Notes:
       - [P /\ L |= Int(elim)] is more general than [L |= Int(elim)]; we don't
@@ -618,10 +620,9 @@ module CooperProjection : sig
         be used as the Loos-Weispfenning term; we have to use the original
         lower bound instead.
 
-        TODO: write a [local_project_general] that dispatches to LW first
-        if [elim] is not in [L]. Check if LW still works in this more general
-        setting (the language includes Int() constraints), and whether it
-        works whether [P /\ L] entails [Int(elim)] or not.
+      - A heuristic may be to use LW if [elim] is not in [L]. But this is not
+        sound, e.g., eliminating x from Int(2x) /\ 1/3 <= x <= 1 using LW is
+        unsound.
    *)
   val local_project:
     (int -> QQ.t) -> eliminate: int Array.t ->

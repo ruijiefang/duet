@@ -795,19 +795,19 @@ end = struct
 
   let round_value ckind v =
     match ckind with
-    | `Nonneg -> QQ.of_zz (QQ.ceiling v)
-    | `Pos -> QQ.add (QQ.of_zz (QQ.floor v)) QQ.one
+    | `Leq -> QQ.of_zz (QQ.ceiling v)
+    | `Lt -> QQ.add (QQ.of_zz (QQ.floor v)) QQ.one
 
   let round_term binding cnstr_kind lower_bound m =
     let int_frac_m = IntFracValuation.of_assignment m in
     let ((inequalities, integral), rounded_term) =
       match cnstr_kind with
-      | `Nonneg ->
+      | `Leq ->
          let (cond, v) = LinearizeTerm.ceiling binding int_frac_m
                            (fold_vector lower_bound)
          in
          (unfold_linear_formula cond, unfold_vector v)
-      | `Pos ->
+      | `Lt ->
          let (cond, floored) = LinearizeTerm.floor binding int_frac_m
                                  (fold_vector lower_bound) in
          let v = unfold_vector floored
@@ -1168,7 +1168,7 @@ end = struct
            (Format.asprintf "model @[%a@] does not satisfy @[%a@]@;"
               (Syntax.Formula.pp srk) formula_of_model
               (Syntax.Formula.pp srk) phi)
-        
+
       | `Unsat -> None
       | `Unknown -> Some "unknown"
     in

@@ -91,7 +91,11 @@ let of_formula ctx phi =
   in
   Formula.eval ctx alg phi
 
-let free_vars_and_existential_reals (quantifiers, phi) =
+let int_quantifiers_only (_q, sym) = match typ_symbol srk sym with
+  | `TyInt -> true
+  | _ -> false
+
+let free_vars_and_existentials keep_quantified (quantifiers, phi) =
   if List.exists (fun (q, _) -> q = `Forall) quantifiers then
     failwith "universal quantification not supported";
   let pp_quantifier_prefix fmt prefix =
@@ -103,21 +107,18 @@ let free_vars_and_existential_reals (quantifiers, phi) =
   Format.printf "Quantifiers are: @[%a@]@;"
     (Format.pp_print_list ~pp_sep:Format.pp_print_space pp_quantifier_prefix)
     quantifiers;
-  let quantified_ints =
-    BatList.filter_map (fun (_, sym) ->
-        match typ_symbol srk sym with
-        | `TyInt -> Some sym
-        | _ -> None) (* Drop existential quantifiers over real-typed variables *)
-      quantifiers
+  let quantified_vars =
+    List.filter keep_quantified quantifiers
+    |> List.map (fun (_, sym) -> sym)
     |> Symbol.Set.of_list
   in
   let preserved_symbols =
-    Symbol.Set.filter (fun sym -> not (Symbol.Set.mem sym quantified_ints))
+    Symbol.Set.filter (fun sym -> not (Symbol.Set.mem sym quantified_vars))
       (Syntax.symbols phi) in
   Format.printf "variables to preserve are: @[%a@]@;"
     (Format.pp_print_list ~pp_sep:Format.pp_print_space
        (Syntax.pp_symbol srk)) (Symbol.Set.to_list preserved_symbols);
-  (quantified_ints, preserved_symbols)
+  (quantified_vars, preserved_symbols)
 
 let term_of_vector terms v =
   Linear.term_of_vec srk (fun dim ->
@@ -156,11 +157,11 @@ let check_subset terms p1 p2 =
   let phi1 = formula_of_dd terms p1 in
   check_abstract phi1 terms p2
 
-let integer_qe abstract phi =
+let do_qe keep_quantifiers abstract phi =
   let (quantifiers, phi) = Quantifier.normalize srk phi in
   Format.printf "Abstracting @[%a@]@;" (Syntax.Formula.pp srk) phi;
   let (_quantified_ints, preserved_symbols) =
-    free_vars_and_existential_reals (quantifiers, phi) in
+    free_vars_and_existentials keep_quantifiers (quantifiers, phi) in
   let terms = BatArray.of_enum
                 (BatEnum.map (Syntax.mk_const srk)
                    (Symbol.Set.enum preserved_symbols))
@@ -201,12 +202,22 @@ let integer_qe abstract phi =
 let run_eliminate_integers abstract file =
   let phi = load_formula file in
   try
-    let (phi_with_int_constraints, terms, hull) = integer_qe abstract phi in
+    let (phi_with_int_constraints, terms, hull) =
+      do_qe int_quantifiers_only abstract phi in
     check_abstract phi_with_int_constraints terms hull
   with
   | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
      Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
        (Linear.QQVector.pp_term Format.pp_print_int) v dim
+  | Linear.Nonlinear ->
+     Format.printf "Result: unknown (nonlinear)"
+
+let run_eliminate_all_quantifiers abstract file =
+  let phi = load_formula file in
+  try
+    let (phi_with_int_constraints, terms, hull) = do_qe (fun _ -> true) abstract phi in
+    check_abstract phi_with_int_constraints terms hull
+  with
   | Linear.Nonlinear ->
      Format.printf "Result: unknown (nonlinear)"
 
@@ -294,15 +305,16 @@ let compare_convex_hull file =
 let compare_projection file =
   let phi = load_formula file in
   try
-    let (_, terms, real_conv_hull) = integer_qe (Abstract.conv_hull srk) phi in
+    let do_qe = do_qe (fun _ -> true) in
+    let (_, terms, real_conv_hull) = do_qe (Abstract.conv_hull srk) phi
+    in
     let lira_project =
       Lira.project srk in
     (*
     let (_, _, hull_and_project_real_qe) =
       integer_qe (LatticePolyhedron.abstract_by_local_hull_and_project srk) phi in
      *)
-    let (_, _, hull_lira) =
-      integer_qe lira_project phi in
+    let (_, _, hull_lira) = do_qe lira_project phi in
     if (* DD.equal hull_and_project_real_qe hull_lira && *)
       DD.equal real_conv_hull hull_lira then
       Format.printf "Result: success"
@@ -363,6 +375,14 @@ let spec_list = [
    Arg.String compare_projection,
    "Compare projected hulls computed by model-based hull-and-project and by LIRA");
 
+  ("-local-hull-and-project"
+  , Arg.String
+      (run_eliminate_integers
+         (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim))
+  , " May diverge when formula contains real-valued variables (why?)"
+  );
+
+  (*
   ("-local-hull-and-project-define-terms"
   , Arg.String
       (run_eliminate_integers
@@ -370,18 +390,6 @@ let spec_list = [
             `DefineThenProject
             `RoundStrictWhenVariablesIntegral))
   , " May be unsound due to Cooper elimination applied to real-valued variables (and also diverge because of unsound blocking)"
-  );
-
-  ("-local-hull-and-project"
-  , Arg.String
-      (run_eliminate_integers
-         (*
-         (LatticePolyhedron.abstract_by_local_hull_and_project srk
-            `ProjectThenRealQe
-            `RoundStrictWhenVariablesIntegral))
-          *)
-         (LatticePolyhedron.abstract_by_local_hull_and_project srk))
-  , " May diverge when formula contains real-valued variables (why?)"
   );
 
   ("-local-project-and-hull-define-terms"
@@ -399,6 +407,7 @@ let spec_list = [
                      `RoundStrictWhenVariablesIntegral))
   , " May diverge when formula contains real-valued variables"
   );
+   *)
 
   ("-lira-project"
   , Arg.String (run_eliminate_integers (Lira.project srk))
@@ -412,7 +421,7 @@ let spec_list = [
   ("-int-hull-by-cone-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existential_reals (qf, phi) in
+       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
        let hull = SymbolicAbstraction.integer_hull_by_recession_cone
                     srk phi (Symbol.Set.to_list preserved_symbols) in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
@@ -425,7 +434,7 @@ let spec_list = [
   ("-int-hull-by-standard-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existential_reals (qf, phi) in
+       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
        let hull = SymbolicAbstraction.integer_hull_standard srk phi
                     (Symbol.Set.to_list preserved_symbols) in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
@@ -438,7 +447,7 @@ let spec_list = [
   ("-int-hull-by-cooper-deprecated",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existential_reals (qf, phi) in
+       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
        let (hull, _) = SymbolicAbstraction.integer_hull_by_cooper srk phi
                          (Symbol.Set.to_list preserved_symbols) in
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"

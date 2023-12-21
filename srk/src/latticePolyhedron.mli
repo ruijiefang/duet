@@ -55,9 +55,9 @@ val abstract_lattice_hull:
 (** A ceiling (f, g) is such that
     - The image of [f] is a lattice of QQ that contains ZZ.
       (This is needed for [local_project_cooper] to be sound and image-finite.)
-    - [f `Nonneg x = y] only if [y] is the smallest number in the image of [f]
+    - [f `Leq x = y] only if [y] is the smallest number in the image of [f]
       that is at least [x].
-    - [f `Pos x = y] only if [y] is the smallest number in the image of [f]
+    - [f `Lt x = y] only if [y] is the smallest number in the image of [f]
       that is strictly greater than [x].
     - [g ckind lower_bound m = (t, ineqs, ints)] only if
       + [m |= ineqs /\ ints]
@@ -67,9 +67,9 @@ val abstract_lattice_hull:
  *)
 type ceiling =
   {
-    round_value: [`Nonneg | `Pos] -> QQ.t -> QQ.t
+    round_value: [`Leq | `Lt] -> QQ.t -> QQ.t
   ; round_term:
-      [`Nonneg | `Pos] -> Linear.QQVector.t -> (int -> QQ.t) ->
+      [`Leq | `Lt] -> Linear.QQVector.t -> (int -> QQ.t) ->
       Linear.QQVector.t * (Polyhedron.constraint_kind * Linear.QQVector.t) list *
         Linear.QQVector.t list
   }
@@ -129,7 +129,7 @@ val project_cooper:
     This diverges in general when some variable is real-valued (whether
     the variable is to be eliminated or not).
  *)
-val project_and_hull:
+val project_cooper_and_hull:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
@@ -150,28 +150,37 @@ val hull_and_project_cooper:
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
   eliminate: int list ->
-  [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
+  [ `RoundLowerBound of ceiling
+  | `NonstrictIneqsOnly
+  | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
-val hull_and_project:
+val hull_and_project_real:
   'a Syntax.context ->
   symbol_of_dim:(int -> Syntax.symbol option) ->
   dim_of_symbol:(Syntax.symbol -> int) ->
   eliminate: int list ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
-val abstract_by_local_project_and_hull:
+val abstract_by_local_project_cooper_and_hull:
   'a Syntax.context ->
-  [`DefineThenProject | `ProjectThenRealQe] ->
-  [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
+  [`OnePhaseElim | `TwoPhaseElim] ->
+  [ `RoundLowerBound of ceiling
+  | `NonstrictIneqsOnly
+  | `RoundStrictWhenVariablesIntegral] ->
   'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
-
-val abstract_by_local_hull_and_project:
-  'a Syntax.context -> 'a Syntax.formula -> ('a Syntax.arith_term) array ->
-  DD.closed DD.t
 
 val abstract_by_local_hull_and_project_cooper:
   'a Syntax.context ->
-  [`DefineThenProject | `ProjectThenRealQe] ->
-  [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
-  'a Syntax.formula -> ('a Syntax.arith_term) array -> DD.closed DD.t
+  [`OnePhaseElim | `TwoPhaseElim] ->
+  [ `NonstrictIneqsOnly
+  | `RoundLowerBound of ceiling
+  | `RoundStrictWhenVariablesIntegral ] ->
+  'a Syntax.formula -> ('a Syntax.arith_term) array ->
+  DD.closed DD.t
+
+val abstract_by_local_hull_and_project_real:
+  'a Syntax.context ->
+  [`OnePhaseElim | `TwoPhaseElim] ->
+  'a Syntax.formula -> ('a Syntax.arith_term) array ->
+  DD.closed DD.t

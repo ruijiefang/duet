@@ -302,10 +302,10 @@ let compare_convex_hull file =
   else Format.printf "unequal@\n";
   ()
 
-let compare_projection file =
+let compare_projection keep_quantifiers file =
   let phi = load_formula file in
   try
-    let do_qe = do_qe (fun _ -> true) in
+    let do_qe = do_qe keep_quantifiers in
     let (_, terms, real_conv_hull) = do_qe (Abstract.conv_hull srk) phi
     in
     let lira_project =
@@ -372,12 +372,12 @@ let spec_list = [
    "Compare convex hulls computed by local projection and abstract");
 
   ("-compare-projection",
-   Arg.String compare_projection,
+   Arg.String (compare_projection (fun _ -> true)),
    "Compare projected hulls computed by model-based hull-and-project and by LIRA");
 
   ("-local-hull-and-project"
   , Arg.String
-      (run_eliminate_integers
+      (run_eliminate_all_quantifiers
          (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim))
   , " May diverge when formula contains real-valued variables (why?)"
   );
@@ -410,12 +410,12 @@ let spec_list = [
    *)
 
   ("-lira-project"
-  , Arg.String (run_eliminate_integers (Lira.project srk))
+  , Arg.String (run_eliminate_all_quantifiers (Lira.project srk))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
   ("-project-by-real-conv-hull"
-  , Arg.String (run_eliminate_integers (Abstract.conv_hull srk))
+  , Arg.String (run_eliminate_all_quantifiers (Abstract.conv_hull srk))
   , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
 
   ("-int-hull-by-cone-deprecated",

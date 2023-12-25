@@ -149,13 +149,16 @@ let check_abstract phi terms abstracted =
   let negated_abstracted = Syntax.mk_not srk (formula_of_dd terms abstracted) in
   Smt.StdSolver.add solver [phi; negated_abstracted];
   match Smt.StdSolver.get_model solver with
-  | `Sat _ -> Format.printf "Result: fail (soundness check)"
-  | `Unsat -> Format.printf "Result: success"
-  | `Unknown -> Format.printf "Result: unknown"
+  | `Sat _ -> `Fail
+  | `Unsat -> `Success
+  | `Unknown -> `Unknown
 
 let check_subset terms p1 p2 =
   let phi1 = formula_of_dd terms p1 in
-  check_abstract phi1 terms p2
+  match check_abstract phi1 terms p2 with
+  | `Fail -> false
+  | `Success -> true
+  | `Unknown -> assert false
 
 let do_qe keep_quantifiers abstract phi =
   let (quantifiers, phi) = Quantifier.normalize srk phi in
@@ -204,7 +207,10 @@ let run_eliminate_integers abstract file =
   try
     let (phi_with_int_constraints, terms, hull) =
       do_qe int_quantifiers_only abstract phi in
-    check_abstract phi_with_int_constraints terms hull
+    match check_abstract phi_with_int_constraints terms hull with
+    | `Success -> Format.printf "Result: success" 
+    | `Fail -> Format.printf "Result: fail (soundness check)"
+    | `Unknown -> Format.printf "Result: unknown"
   with
   | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
      Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
@@ -216,7 +222,10 @@ let run_eliminate_all_quantifiers abstract file =
   let phi = load_formula file in
   try
     let (phi_with_int_constraints, terms, hull) = do_qe (fun _ -> true) abstract phi in
-    check_abstract phi_with_int_constraints terms hull
+    match check_abstract phi_with_int_constraints terms hull with
+    | `Success -> Format.printf "Result: success" 
+    | `Fail -> Format.printf "Result: fail (soundness check)"
+    | `Unknown -> Format.printf "Result: unknown"
   with
   | Linear.Nonlinear ->
      Format.printf "Result: unknown (nonlinear)"
@@ -227,19 +236,17 @@ let compare_integer_hull file =
                       (Syntax.Symbol.Set.max_elt (Syntax.symbols phi)) + 1 in
   Format.printf "Computing mixed hull@;";
 
+  let binding = LatticePolyhedron.mk_binding srk
+                  ~symbol_of_dim:(fun dim -> Some (Syntax.symbol_of_int dim))
+                  ~term_of_adjoined_dim:(fun _ -> None)
+                  ~dim_of_symbol:Syntax.int_of_symbol in
   let mixed_hull =
-    LatticePolyhedron.abstract_lattice_hull srk ~how:`Mixed
-      ~symbol_of_dim:(fun dim -> Some (Syntax.symbol_of_int dim))
-      ~dim_of_symbol:Syntax.int_of_symbol
-      ~ambient_dim
-      phi in
+    LatticePolyhedron.abstract_lattice_hull binding `Mixed
+      ~ambient_dim phi in
   Format.printf "Computing pure hull@;";
   let pure_hull =
-    LatticePolyhedron.abstract_lattice_hull srk ~how:`PureGomoryChvatal
-      ~symbol_of_dim:(fun dim -> Some (Syntax.symbol_of_int dim))
-      ~dim_of_symbol:Syntax.int_of_symbol
-      ~ambient_dim
-      phi in
+    LatticePolyhedron.abstract_lattice_hull binding `PureGomoryChvatal
+      ~ambient_dim phi in
   Format.printf "Mixed hull: @[%a@]@;" (DD.pp Format.pp_print_int) mixed_hull;
   Format.printf "Pure hull: @[%a@]@;" (DD.pp Format.pp_print_int) pure_hull
 
@@ -306,28 +313,40 @@ let compare_projection keep_quantifiers file =
   let phi = load_formula file in
   try
     let do_qe = do_qe keep_quantifiers in
-    let (_, terms, real_conv_hull) = do_qe (Abstract.conv_hull srk) phi
-    in
-    let lira_project =
-      Lira.project srk in
+    let (_, terms, real_conv_hull) = do_qe (Abstract.conv_hull srk) phi in
+    let (_, _, lira_hull) = do_qe (Lira.project srk) phi in
     (*
-    let (_, _, hull_and_project_real_qe) =
-      integer_qe (LatticePolyhedron.abstract_by_local_hull_and_project srk) phi in
+    let (_, _, hull_and_projected_hull) =
+      do_qe
+        (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim)
+        phi in
      *)
-    let (_, _, hull_lira) = do_qe lira_project phi in
-    if (* DD.equal hull_and_project_real_qe hull_lira && *)
-      DD.equal real_conv_hull hull_lira then
-      Format.printf "Result: success"
+    let lira_vs_h_and_p = (* DD.equal lira_hull hull_and_projected_hull *) true in
+    let lira_vs_real_hull = DD.equal lira_hull real_conv_hull in
+    if lira_vs_h_and_p && lira_vs_real_hull then
+      Format.printf "Result: all hulls equal"
+    else if not lira_vs_h_and_p then
+      begin
+        Format.printf "lira_hull: @[%a@]@;"
+          (DD.pp Format.pp_print_int) lira_hull;
+
+        (* Format.printf "hull_and_project: @[%a@]@;"
+          (DD.pp Format.pp_print_int) hull_and_projected_hull;
+         *)
+        Format.printf "Result: unsound (LIRA and hull-and-project not equal)"
+      end
     else
       begin
+        Format.printf "lira_hull: @[%a@]@;"
+          (DD.pp Format.pp_print_int) lira_hull;
         Format.printf "real_conv_hull: @[%a@]@;"
           (DD.pp Format.pp_print_int) real_conv_hull;
-        (*Format.printf "hull_and_project_real_qe: @[%a@]@;"
-          (DD.pp Format.pp_print_int) hull_and_project_real_qe; *)
-        Format.printf "hull_lira: @[%a@]@;"
-          (DD.pp Format.pp_print_int) hull_lira;
-        check_subset terms hull_lira real_conv_hull;
-        Format.printf "Result: fail (hulls are not equal)"
+        let lira_smaller = check_subset terms lira_hull real_conv_hull in
+        let real_smaller = check_subset terms real_conv_hull lira_hull in
+        if real_smaller then
+          Format.printf "Result: unsound (real is smaller than lira)"
+        else if lira_smaller then
+          Format.printf "Result: lira is smaller than real"
       end
   with
   | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
@@ -377,8 +396,10 @@ let spec_list = [
 
   ("-local-hull-and-project"
   , Arg.String
-      (run_eliminate_all_quantifiers
-         (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim))
+      (fun s ->
+        ignore
+          (run_eliminate_all_quantifiers
+             (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim) s))
   , " May diverge when formula contains real-valued variables (why?)"
   );
 
@@ -410,12 +431,12 @@ let spec_list = [
    *)
 
   ("-lira-project"
-  , Arg.String (run_eliminate_all_quantifiers (Lira.project srk))
+  , Arg.String (fun s -> ignore (run_eliminate_all_quantifiers (Lira.project srk) s))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
   ("-project-by-real-conv-hull"
-  , Arg.String (run_eliminate_all_quantifiers (Abstract.conv_hull srk))
+  , Arg.String (fun s -> ignore (run_eliminate_all_quantifiers (Abstract.conv_hull srk) s))
   , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
 
   ("-int-hull-by-cone-deprecated",

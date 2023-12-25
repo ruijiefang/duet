@@ -8,27 +8,39 @@ module IntMap = SrkUtil.Int.Map
 
 include Log.Make(struct let name = "srk.latticePolyhedron" end)
 
-(* let () = my_verbosity_level := `trace *)
+let () = my_verbosity_level := `trace
+
+let debug ?(level=`debug) f default =
+    if Log.level_leq !my_verbosity_level level then
+      f
+    else
+      (fun _ -> default)
 
 module FormulaVectorInterface: sig
 
-  (* TODO: Generalize [of_linterm] etc. to not assume standard
-     symbol-dimension binding; then remove translation here. *)
+  type 'a binding
 
-  val formula_of_dd:
-    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) -> DD.closed DD.t ->
-    'a Syntax.formula
+  (** [symbol_of_dim] and [term_of_adjoined_dim] need to have disjoint domains,
+      and [symbol_of_dim (dim_of_symbol s) = s] for all symbols [s].
+   *)
+  val mk_binding:
+    'a Syntax.context ->
+    symbol_of_dim: (int -> Syntax.symbol option) ->
+    term_of_adjoined_dim: (int -> 'a Syntax.arith_term option) ->
+    dim_of_symbol: (Syntax.symbol -> int) -> 'a binding
 
-  val formula_of_polyhedron:
-    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) -> P.t ->
-    'a Syntax.formula
+  val pp_symbol_to_dimension:
+    Syntax.Symbol.Set.t -> Format.formatter -> 'a binding -> unit
 
-  val formula_of_lattice:
-    'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) -> L.t ->
-    'a Syntax.formula
+  val context_in: 'a binding -> 'a Syntax.context
+
+  val formula_of_dd: 'a binding -> DD.closed DD.t -> 'a Syntax.formula
+
+  val formula_of_polyhedron: 'a binding -> P.t -> 'a Syntax.formula
+
+  val formula_of_lattice: 'a binding -> L.t -> 'a Syntax.formula
+
+  val formula_of_point: 'a binding -> Linear.QQVector.t -> 'a Syntax.formula
 
   val ambient_dim: (P.t * L.t) list -> except:int list -> int
 
@@ -39,134 +51,74 @@ module FormulaVectorInterface: sig
 
   (** Lift a local abstraction procedure for a polyhedron-lattice pair into an
       local abstraction procedure for a formula.
+      All symbols in the formula must be in the domain of [dim_of_symbol]
+      in [binding].
    *)
   val abstract_implicant:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-    dim_of_symbol:(Syntax.symbol -> int) ->
-    abstract: ((int -> Q.t) -> P.t * L.t -> 'b) ->
-    'a Syntax.formula ->
+    'a binding ->
+    abstract: ((int -> Q.t) -> P.t * L.t -> 'b) -> 'a Syntax.formula ->
     [> `LIRA of 'a Interpretation.interpretation ] -> 'b
 
-  type 'a bindings =
-    {
-      sym_of_dim: int -> Syntax.symbol option
-    ; term_of_dim: int -> 'a Syntax.arith_term option
-    ; dim_of_sym: Syntax.symbol -> int
-    }
-
-  val bindings_for_term_abstraction:
-    'a Syntax.arith_term array -> 'a bindings
-
-  val term_definitions_and_dimensions_in_terms:
-    'a Syntax.context -> 'a Syntax.arith_term Array.t ->
-    (P.constraint_kind * V.t) List.t * IntSet.t
-
-  (* Given a local projection algorithm [proj] that eliminates variables,
-     [project_onto_terms terms proj = proj']
-     where [proj'] is a local projection algorithm that projects its input
-     that are (must be) in dimensions >= length(terms) onto dimensions
-     [0 ... length(terms)] corresponding to [terms].
-     That is, the output is the abstraction of the input in terms of [terms].
+  (** A term context consists of a binding and auxiliary data for term
+      projection
    *)
-  val project_onto_terms:
-    'a Syntax.context ->
-    'a Syntax.arith_term array ->
-    (eliminate:int list -> (int -> QQ.t) -> P.t * L.t -> 'c) ->
+  type 'a term_context
+
+  val put_terms_in_initial_segment:
+    'a Syntax.context -> 'a Syntax.arith_term array -> 'a term_context
+
+  val binding_in: 'a term_context -> 'a binding
+  val dimensions_in_terms: 'a term_context -> IntSet.t
+  val constraints_defining_terms:
+    'a term_context -> (P.constraint_kind * V.t) list
+
+  val extend_assignment_to_adjoined_dimensions:
+    'a term_context -> (int -> QQ.t) -> (int -> QQ.t)
+
+  (** Given a local projection algorithm [proj] that eliminates variables,
+      [project_onto_terms term_context proj = proj']
+      where [proj'] is a local projection algorithm that projects its input,
+      whose constrained dimensions are in the image of [dim_of_symbol] in
+      [term_context], onto the dimensions of the terms ([term_of_adjoined_dim])
+      in [term_context].
+   *)
+  val project_onto_terms: 'a term_context ->
+    (eliminate: int list -> (int -> QQ.t) -> P.t * L.t -> 'c) ->
     ((int -> QQ.t) -> P.t * L.t -> 'c)
+
+  val check_point_in_p:
+    ?level:Log.level -> 'a binding -> (int -> Q.t) -> P.t -> unit
 
 end = struct
 
-  let substitute f v =
-    BatEnum.fold (fun v (coeff, dim) ->
-        V.add v (V.scalar_mul coeff (f dim)))
-      V.zero
-      (V.enum v)
+  type 'a binding =
+    {
+      context: 'a Syntax.context
+    ; symbol_of_dim: int -> Syntax.symbol option
+    ; term_of_adjoined_dim: int -> 'a Syntax.arith_term option
+    ; dim_of_symbol: Syntax.symbol -> int
+    }
 
-  let term_of_vector srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) v =
-    let open Syntax in
-    Linear.term_of_vec srk
-      (fun dim ->
-        if dim = Linear.const_dim then mk_real srk QQ.one
-        else
-          match symbol_of_dim dim with
-          | Some s -> mk_const srk s
-          | None ->
-             begin match term_of_dim dim with
-             | Some term -> term
-             | None ->
-                failwith
-                  (Format.sprintf
-                     "cannot translate dimension %d to a symbol or term" dim)
-             end
+  let mk_binding srk ~symbol_of_dim ~term_of_adjoined_dim ~dim_of_symbol =
+    { context = srk
+    ; symbol_of_dim
+    ; term_of_adjoined_dim
+    ; dim_of_symbol
+    }
+
+  let pp_symbol_to_dimension symbols fmt binding =
+    let srk = binding.context in
+    let dim_of_symbol = binding.dim_of_symbol in
+    Syntax.Symbol.Set.iter
+      (fun symbol ->
+        Format.fprintf fmt "binding @[%a@]:@[%a@] to %d@;"
+          (Syntax.pp_symbol srk) symbol
+          Syntax.pp_typ (Syntax.typ_symbol srk symbol)
+          (dim_of_symbol symbol)
       )
-      v
+      symbols
 
-  let to_inequality srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) (ckind, v) =
-    let zero = Syntax.mk_zero srk in
-    let op = match ckind with
-      | `Zero -> Syntax.mk_eq srk zero
-      | `Nonneg -> Syntax.mk_leq srk zero
-      | `Pos -> Syntax.mk_lt srk zero
-    in
-    let term = term_of_vector srk ~symbol_of_dim ~term_of_dim v in
-    op term
-
-  let to_is_int srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) v =
-    Syntax.mk_is_int srk (term_of_vector srk ~symbol_of_dim ~term_of_dim v)
-
-  let formula_of_p_constraints srk ~symbol_of_dim ?(term_of_dim = fun _ -> None)
-        enum_constraints p =
-    BatEnum.fold
-      (fun l (ckind, v) ->
-        to_inequality srk ~symbol_of_dim ~term_of_dim (ckind, v) :: l)
-      []
-      (enum_constraints p)
-    |> Syntax.mk_and srk
-
-  let formula_of_polyhedron srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) p =
-    formula_of_p_constraints srk ~symbol_of_dim ~term_of_dim P.enum_constraints p
-
-  let formula_of_dd srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) dd =
-    formula_of_p_constraints srk ~symbol_of_dim ~term_of_dim DD.enum_constraints dd
-
-  let formula_of_lattice srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) l =
-    List.fold_left (fun fml v ->
-        to_is_int srk ~symbol_of_dim ~term_of_dim v :: fml)
-      []
-      (L.basis l)
-    |> Syntax.mk_and srk
-
-  let vector_of_term srk ~dim_of_symbol t =
-    let dim_of_original_dim orig_dim =
-      if orig_dim = Linear.const_dim then
-        Linear.const_linterm QQ.one
-      else
-        dim_of_symbol (Syntax.symbol_of_int orig_dim)
-        |> V.of_term QQ.one
-    in
-    Linear.linterm_of srk t |> substitute dim_of_original_dim
-
-  let constraints_of_implicant srk ~dim_of_symbol atoms =
-    let collect (pcons, lcons) literal =
-      match Syntax.Formula.destruct srk literal with
-      | `Atom (`Arith (sign, t1, t2)) ->
-         let (v1, v2) =
-           ( vector_of_term srk ~dim_of_symbol t1
-           , vector_of_term srk ~dim_of_symbol t2 )
-         in
-         let v = V.sub v2 v1 in
-         let cnstr = match sign with
-           | `Eq -> (`Zero, v)
-           | `Leq -> (`Nonneg, v)
-           | `Lt -> (`Pos, v) in
-         (cnstr :: pcons, lcons)
-      | `Atom (`IsInt t) ->
-         (pcons, vector_of_term srk ~dim_of_symbol t :: lcons)
-      | _ -> assert false
-    in
-    List.fold_left collect ([], []) atoms
+  let context_in binding = binding.context
 
   let collect_dimensions_from_constraints to_vector cnstrs =
     BatEnum.fold
@@ -192,6 +144,122 @@ end = struct
     in
     IntSet.union p_dims l_dims
 
+  let substitute f v =
+    BatEnum.fold (fun v (coeff, dim) ->
+        V.add v (V.scalar_mul coeff (f dim)))
+      V.zero
+      (V.enum v)
+
+  (* TODO: Generalize [of_linterm] etc. to not assume standard
+     symbol-dimension binding; then remove translation here. *)
+  let vector_of_term srk ~dim_of_symbol t =
+    let dim_of_original_dim orig_dim =
+      if orig_dim = Linear.const_dim then
+        Linear.const_linterm QQ.one
+      else
+        dim_of_symbol (Syntax.symbol_of_int orig_dim)
+        |> V.of_term QQ.one
+    in
+    Linear.linterm_of srk t |> substitute dim_of_original_dim
+
+  let term_of_dimension binding dim =
+    let srk = binding.context in
+    let symbol_of_dim = binding.symbol_of_dim in
+    let term_of_adjoined_dim = binding.term_of_adjoined_dim in
+    if dim = Linear.const_dim then Syntax.mk_real srk QQ.one
+    else
+      match symbol_of_dim dim with
+      | Some s -> Syntax.mk_const srk s
+      | None ->
+         begin match term_of_adjoined_dim dim with
+         | Some term -> term
+         | None ->
+            failwith
+              (Format.sprintf
+                 "cannot translate dimension %d to a symbol or term" dim)
+         end
+
+  let term_of_vector binding v =
+    Linear.term_of_vec binding.context (term_of_dimension binding) v
+
+  let to_inequality binding (ckind, v) =
+    let srk = binding.context in
+    let zero = Syntax.mk_zero srk in
+    let op = match ckind with
+      | `Zero -> Syntax.mk_eq srk zero
+      | `Nonneg -> Syntax.mk_leq srk zero
+      | `Pos -> Syntax.mk_lt srk zero
+    in
+    let term = term_of_vector binding v in
+    op term
+
+  let to_is_int binding v =
+    Syntax.mk_is_int binding.context (term_of_vector binding v)
+
+  let formula_of_p_constraints binding enum_constraints p =
+    BatEnum.fold
+      (fun l (ckind, v) ->
+        to_inequality binding (ckind, v) :: l)
+      []
+      (enum_constraints p)
+    |> Syntax.mk_and binding.context
+
+  let formula_of_polyhedron binding p =
+    formula_of_p_constraints binding P.enum_constraints p
+
+  let formula_of_dd binding dd =
+    formula_of_p_constraints binding DD.enum_constraints dd
+
+  let formula_of_lattice binding l =
+    List.fold_left (fun fml v -> to_is_int binding v :: fml) []
+      (L.basis l)
+    |> Syntax.mk_and binding.context
+
+  let formula_of_point binding v =
+    let srk = binding.context in
+    let symbol_of_dim = binding.symbol_of_dim in
+    let term_of_adjoined_dim = binding.term_of_adjoined_dim in
+    let conjuncts =
+      V.fold
+        (fun dim scalar conjuncts ->
+          let r = Syntax.mk_real srk scalar in
+          let s = match symbol_of_dim dim with
+            | Some s -> Syntax.mk_const srk s
+            | None -> begin match term_of_adjoined_dim dim with
+                      | Some term -> term
+                      | None -> assert false
+                      end
+          in
+          Syntax.mk_eq srk s r :: conjuncts)
+        v []
+    in
+    Syntax.mk_and srk conjuncts
+
+  let formula_of_model binding dimensions m =
+    let v = IntSet.fold (fun dim v -> V.add_term (m dim) dim v) dimensions V.zero
+    in
+    formula_of_point binding v
+
+  let constraints_of_implicant srk ~dim_of_symbol atoms =
+    let collect (pcons, lcons) literal =
+      match Syntax.Formula.destruct srk literal with
+      | `Atom (`Arith (sign, t1, t2)) ->
+         let (v1, v2) =
+           ( vector_of_term srk ~dim_of_symbol t1
+           , vector_of_term srk ~dim_of_symbol t2 )
+         in
+         let v = V.sub v2 v1 in
+         let cnstr = match sign with
+           | `Eq -> (`Zero, v)
+           | `Leq -> (`Nonneg, v)
+           | `Lt -> (`Pos, v) in
+         (cnstr :: pcons, lcons)
+      | `Atom (`IsInt t) ->
+         (pcons, vector_of_term srk ~dim_of_symbol t :: lcons)
+      | _ -> assert false
+    in
+    List.fold_left collect ([], []) atoms
+
   let ambient_dim conjuncts ~except =
     let except = IntSet.of_list except in
     List.fold_left (fun curr_max (p, l) ->
@@ -208,9 +276,21 @@ end = struct
       0
       conjuncts
 
-  let abstract_implicant
-        srk ~symbol_of_dim ?(term_of_dim = fun _ -> None) ~dim_of_symbol
-        ~abstract phi model =
+  let mk_assignment binding interp dim =
+    let symbol_of_dim = binding.symbol_of_dim in
+    let term_of_adjoined_dim = binding.term_of_adjoined_dim in
+    if dim = Linear.const_dim then QQ.one
+    else
+      match symbol_of_dim dim, term_of_adjoined_dim dim with
+      | None, None ->
+         failwith
+           (Format.sprintf "Cannot translate dimension %d to a symbol for evaluation" dim)
+      | Some s, _ -> Interpretation.real interp s
+      | _, Some t ->
+         Interpretation.evaluate_term interp t
+
+  let abstract_implicant binding ~abstract phi model =
+    let srk = binding.context in
     match model with
     | `LIRA interp ->
        logf ~level:`debug "abstract_implicant: model is: @[%a@]@;"
@@ -230,18 +310,9 @@ end = struct
              symbols
          )
          interp;
-       let m dim =
-         if dim = Linear.const_dim then QQ.one
-         else
-           match symbol_of_dim dim, term_of_dim dim with
-           | None, None ->
-              failwith
-                (Format.sprintf "Cannot translate dimension %d to a symbol for evaluation" dim)
-           | Some s, _ -> Interpretation.real interp s
-           | _, Some t ->
-              Interpretation.evaluate_term interp t
-       in
+       let m = mk_assignment binding interp in
        let implicant = Interpretation.select_implicant interp phi in
+       let dim_of_symbol = binding.dim_of_symbol in
        let (pcons, lcons) = match implicant with
          | None -> assert false
          | Some atoms -> constraints_of_implicant srk ~dim_of_symbol atoms
@@ -253,14 +324,26 @@ end = struct
        abstract m (p, l)
     | _ -> assert false
 
-  type 'a bindings =
-    {
-      sym_of_dim: int -> Syntax.symbol option
-    ; term_of_dim: int -> 'a Syntax.arith_term option
-    ; dim_of_sym: Syntax.symbol -> int
+  type 'a term_context =
+    { terms: 'a Syntax.arith_term Array.t
+    ; binding: 'a binding
+    ; dimensions_in_terms: IntSet.t
+    ; term_definitions: V.t IntMap.t
     }
 
-  let bindings_for_term_abstraction terms =
+  let binding_in context = context.binding
+  let dimensions_in_terms term_context = term_context.dimensions_in_terms
+
+  let definition_to_constraint (dim, v) =
+    (`Zero, V.add_term (QQ.of_int (-1)) dim v)
+
+  let constraints_defining_terms term_ctx =
+    IntMap.fold (fun dim v l ->
+        definition_to_constraint (dim, v) :: l)
+      term_ctx.term_definitions
+      []
+
+  let put_terms_in_initial_segment srk terms =
     let base = Array.length terms in
     let dim_of_symbol sym = base + (Syntax.int_of_symbol sym) in
     let symbol_of_dim dim =
@@ -268,38 +351,46 @@ end = struct
         Some (Syntax.symbol_of_int (dim - base))
       else None
     in
-    let term_of_dim dim =
+    let term_of_adjoined_dim dim =
       if 0 <= dim && dim < base then
         Some (terms.(dim))
       else None
     in
-    { sym_of_dim = symbol_of_dim
-    ; term_of_dim
-    ; dim_of_sym = dim_of_symbol
-    }
-
-  let term_definitions_and_dimensions_in_terms srk terms =
-    let base = Array.length terms in
+    let binding = { context = srk
+                  ; symbol_of_dim
+                  ; term_of_adjoined_dim
+                  ; dim_of_symbol
+                  }
+    in
+    let (term_definitions, dimensions_in_terms, _) =
       Array.fold_left
-        (fun (vs, dims_in_terms, idx) term ->
-          let v = vector_of_term srk
-                    ~dim_of_symbol:(fun sym -> base + Syntax.int_of_symbol sym)
-                    term in
+        (fun (defs, dims_in_terms, idx) term ->
+          let v = vector_of_term srk ~dim_of_symbol term in
           let dimensions =
             collect_dimensions_from_constraints (fun x -> x) (BatList.enum [v])
           in
-          let equality = (`Zero, V.add_term (QQ.of_int (-1)) idx v) in
-          (equality :: vs, IntSet.union dimensions dims_in_terms, idx + 1)
+          (IntMap.add idx v defs, IntSet.union dimensions dims_in_terms, idx + 1)
         )
-        ([], IntSet.empty, 0) terms
-      |> (fun (vs, dims, _) -> (vs, dims))
+        (IntMap.empty, IntSet.empty, 0) terms
+    in
+    { terms
+    ; binding
+    ; dimensions_in_terms
+    ; term_definitions
+    }
 
-  let project_onto_terms srk terms projection =
-    let (term_equalities, dimensions_in_terms) =
-      term_definitions_and_dimensions_in_terms srk terms in
+  let extend_assignment_to_adjoined_dimensions term_context m dim =
+    try
+      let v = IntMap.find dim term_context.term_definitions in
+      Linear.evaluate_affine m v
+    with
+    | Not_found -> m dim
+
+  let project_onto_terms term_ctx projection =
+    let term_equalities = constraints_defining_terms term_ctx in
     let project_onto_terms projection m (p, l) =
       let eliminate = collect_dimensions (p, l)
-                      |> IntSet.union dimensions_in_terms
+                      |> IntSet.union term_ctx.dimensions_in_terms
                       |> IntSet.to_list
       in
       let p_with_terms = P.of_constraints (BatList.enum term_equalities)
@@ -308,90 +399,17 @@ end = struct
     in
     project_onto_terms projection
 
-end
-
-module Testing = struct
-
-  let print_symbol_dimension_bindings srk dim_of_sym phi () =
-    Syntax.Symbol.Set.iter
-      (fun symbol ->
-        logf ~level:`trace "Binding @[%a@]:@[%a@] to %d@;"
-          (Syntax.pp_symbol srk) symbol
-          Syntax.pp_typ (Syntax.typ_symbol srk symbol)
-          (dim_of_sym symbol);
-      )
-      (Syntax.symbols phi)
-
-  let model_satisfies srk symbol_of_dim term_of_dim m (p, l) abstraction =
-    let open FormulaVectorInterface in
-    let solver = Smt.StdSolver.make srk in
-    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim
-                  abstraction in
-    let formula_of_model =
-      let dimensions = FormulaVectorInterface.collect_dimensions (p, l) in
-      IntSet.fold (fun dim conjuncts ->
-          let r = Syntax.mk_real srk (m dim) in
-          let s = match symbol_of_dim dim with
-            | Some s -> Syntax.mk_const srk s
-            | None -> begin match term_of_dim dim with
-                      | Some term -> term
-                      | None -> assert false
-                      end
-          in
-          Syntax.mk_eq srk s r :: conjuncts)
-        dimensions []
-      |> Syntax.mk_and srk
-    in
-    Smt.StdSolver.add solver [formula_of_model; Syntax.mk_not srk alpha];
-    let check_model =
-      match Smt.StdSolver.get_model solver with
-      | `Sat _ ->
-         Some
-           (Format.asprintf "model @[%a@] does not satisfy @[%a@]@;"
-              (Syntax.Formula.pp srk) formula_of_model
-              (Syntax.Formula.pp srk) alpha)
-
-      | `Unsat -> None
-      | `Unknown -> Some "unknown"
-    in check_model
-
-  let test_implication srk err phi1 phi2 =
-    let solver = Smt.StdSolver.make srk in
-    Smt.StdSolver.add solver [phi1; Syntax.mk_not srk phi2];
-    match Smt.StdSolver.get_model solver with
-    | `Sat _ ->
-       Some (Format.asprintf err
-               (Syntax.Formula.pp srk) phi1
-               (Syntax.Formula.pp srk) phi2)
-    | `Unsat -> None
-    | `Unknown -> Some "unknown"
-
-  let _abstraction_implies_implicant
-        srk symbol_of_dim term_of_dim (p, l) abstraction =
-    let open FormulaVectorInterface in
-    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-    let l_phis = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l in
-    let phi = Syntax.mk_and srk [p_phi; l_phis] in
-    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim abstraction
-    in
-    test_implication srk
-      "Fail: abstraction @[%a@] does not imply implicant @[%a@]@;"
-      alpha phi
-
-  (* Can only be used to test (the final result of) projection,
-     not local projection.
-   *)
-  let _implies_abstraction
-        srk symbol_of_dim term_of_dim (p, l) abstraction =
-    let open FormulaVectorInterface in
-    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-    let l_phis = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l in
-    let phi = Syntax.mk_and srk [p_phi; l_phis] in
-    let alpha = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim abstraction
-    in
-    test_implication srk
-      "Fail: @[%a@] does not imply abstraction @[%a@]@;"
-      phi alpha
+  let check_point_in_p ?(level=`debug) binding m p =
+    let srk = binding.context in
+    let dimensions = collect_dimensions (p, IntLattice.bottom) in
+    if (debug ~level (Polyhedron.mem m) true) p then
+      ()
+    else
+      let alpha = formula_of_polyhedron binding p in
+      let mphi = formula_of_model binding dimensions m in
+      logf ~level "model @[%a@] does not satisfy @[%a@]@;"
+        (Syntax.Formula.pp srk) mphi
+        (Syntax.Formula.pp srk) alpha
 
 end
 
@@ -400,29 +418,72 @@ module Hull: sig
   val local_mixed_lattice_hull:
     (int -> QQ.t) -> P.t * L.t -> P.t
 
+  (** Ambient dimension has to be at least the maximum constrained dimension
+      (computed via dim_of_symbol in binding) + 1.
+   *)
   val mixed_lattice_hull:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-    dim_of_symbol:(Syntax.symbol -> int) ->
-    ambient_dim: int ->
+    'a FormulaVectorInterface.binding -> ambient_dim: int ->
     (P.t * L.t) list -> DD.closed DD.t
+
+  val partition_vertices_by_integrality:
+    DD.closed DD.t -> L.t -> (V.t list * V.t list)
 
   (** `PureGomoryChvatal is guaranteed to work only when all variables are
       implied to be integer-valued, but this is not checked.
       Ambient dimension should be at least as large as the maximum dimension
       occurring in the formula (computed via [dim_of_symbol]) + 1.
    *)
-  val abstract:
-    'a Syntax.context ->
-    how:[`Mixed | `PureGomoryChvatal] ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
-    ambient_dim:int ->
-    'a Syntax.formula -> DD.closed DD.t
+  val abstract: 'a FormulaVectorInterface.binding ->
+                [`Mixed | `PureGomoryChvatal] -> ambient_dim:int ->
+                'a Syntax.formula -> DD.closed DD.t
 
 end = struct
 
   module FVI = FormulaVectorInterface
+
+  let partition_vertices_by_integrality dd l =
+    BatEnum.fold (fun (integral, non_integral) (gkind, v) ->
+        match gkind with
+        | `Vertex ->
+           if IntLattice.member v l then (v :: integral, non_integral)
+           else (integral, v :: non_integral)
+        | `Ray -> (integral, non_integral)
+        | `Line -> (integral, non_integral)
+      ) ([], []) (DD.enum_generators dd)
+
+  let check_hull ?(level=`debug) ?binding p l =
+    let ambient = P.max_constrained_dim p + 1 in
+    let dd = P.dd_of ambient p in
+    let (_, non_integral) =
+      debug ~level (partition_vertices_by_integrality dd) ([], []) l in
+    match non_integral with
+    | [] -> ()
+    | _ ->
+       begin
+         match binding with
+         | Some binding ->
+            let srk = FVI.context_in binding in
+            logf ~level:`debug "check_hull: lattice is: @[%a@]@;"
+              (Syntax.Formula.pp srk)
+              (FVI.formula_of_lattice binding l);
+            List.iter
+              (fun v ->
+                logf ~level:`debug
+                  "Vertex @[%a@] is not in the lattice"
+                  (Syntax.Formula.pp srk) (FVI.formula_of_point binding v)
+              )
+              non_integral
+         | None ->
+            logf ~level:`debug "check_hull: lattice is: @[%a@]"
+              (IntLattice.pp Format.pp_print_int) l;
+            List.iter
+              (fun v ->
+                logf ~level:`debug
+                  "Vertex @[%a@] is not in the lattice"
+                  (Linear.QQVector.pp_term Format.pp_print_int) v
+              )
+              non_integral
+       end
 
   let remap_vector f v =
     BatEnum.fold (fun v (coeff, dim) ->
@@ -506,21 +567,20 @@ end = struct
       (P.pp Format.pp_print_int) projected;
     logf ~level:`trace "max constrained dimension: %d"
       (P.max_constrained_dim projected);
+    check_hull ~level:`trace p l;
     projected
 
-  let formula_of srk ~symbol_of_dim dd =
-    FormulaVectorInterface.formula_of_dd srk ~symbol_of_dim dd
-
-  let mixed_lattice_hull
-        srk ~symbol_of_dim ?(term_of_dim=fun _ -> None) ~dim_of_symbol ~ambient_dim conjuncts =
+  let mixed_lattice_hull binding ~ambient_dim conjuncts =
     let module FVI = FormulaVectorInterface in
+    let srk = FVI.context_in binding in
     let make_conjunct (p, l) =
-      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      let p_phi = FVI.formula_of_polyhedron binding p in
+      let l_phi = FVI.formula_of_lattice binding l
       in
       Syntax.mk_and srk [p_phi; l_phi]
     in
-    let phi = Syntax.mk_and srk (List.map make_conjunct conjuncts) in
+    let phi = Syntax.mk_and srk (List.map make_conjunct conjuncts)
+    in
     let of_model =
       let abstract m (p, l) =
         let hull = local_mixed_lattice_hull m (p, l) in
@@ -528,13 +588,13 @@ end = struct
           (P.pp Format.pp_print_int) hull ambient_dim;
         P.dd_of ambient_dim hull
       in
-      FVI.abstract_implicant srk ~symbol_of_dim ~dim_of_symbol ~abstract phi
+      FVI.abstract_implicant binding ~abstract phi
     in
     let domain: ('a, DD.closed DD.t) Abstract.domain =
       {
         join = DD.join
       ; of_model
-      ; formula_of = formula_of srk ~symbol_of_dim
+      ; formula_of = (FVI.formula_of_dd binding)
       ; top = P.dd_of ambient_dim P.top
       ; bottom = P.dd_of ambient_dim P.bottom
       }
@@ -542,9 +602,23 @@ end = struct
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     logf ~level:`debug "phi: @[%a@]@;" (Syntax.pp_smtlib2 srk) phi;
     ignore (Abstract.Solver.get_model solver);
-    Abstract.Solver.abstract solver domain
+    let hull = Abstract.Solver.abstract solver domain in
+    debug ~level:`trace
+      (fun hull_phi ->
+        match Smt.entails srk phi hull_phi with
+        | `Yes ->
+           logf "mixed_lattice_hull: formula @[%a@] entails hull formula @[%a@]@;"
+             (Syntax.Formula.pp srk) phi (Syntax.Formula.pp srk) hull_phi
+        | `No ->
+           logf "mixed_lattice_hull: formula @[%a@] does not entail hull formula @[%a@]@;"
+             (Syntax.Formula.pp srk) phi
+             (Syntax.Formula.pp srk) hull_phi
+        | `Unknown -> logf "mixed_lattice_hull: unknown"
+      )
+      () (FVI.formula_of_dd binding hull);
+    hull
 
-  let abstract srk ~how ~symbol_of_dim ~dim_of_symbol ~ambient_dim phi =
+  let abstract binding how ~ambient_dim phi =
     logf ~level:`debug "ambient dimension is %d@;" ambient_dim;
     let alg =
       match how with
@@ -562,16 +636,30 @@ end = struct
       {
         join = DD.join
       ; of_model =
-          FVI.abstract_implicant srk ~symbol_of_dim ~dim_of_symbol
-            ~abstract phi
-      ; formula_of = formula_of srk ~symbol_of_dim
+          FVI.abstract_implicant binding ~abstract phi
+      ; formula_of = FVI.formula_of_dd binding
       ; top = P.dd_of ambient_dim P.top
       ; bottom = P.dd_of ambient_dim P.bottom
       }
     in
+    let srk = FVI.context_in binding in
     let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
     ignore (Abstract.Solver.get_model solver);
-    Abstract.Solver.abstract solver domain
+    let hull = Abstract.Solver.abstract solver domain in
+    debug ~level:`trace
+      (fun hull_phi ->
+        match Smt.entails srk phi hull_phi with
+        | `Yes ->
+           logf "mixed_lattice_hull: formula @[%a@] entails hull formula @[%a@]@;"
+             (Syntax.Formula.pp srk) phi (Syntax.Formula.pp srk) hull_phi
+        | `No ->
+           logf "mixed_lattice_hull: formula @[%a@] does not entail hull formula @[%a@]@;"
+             (Syntax.Formula.pp srk) phi
+             (Syntax.Formula.pp srk) hull_phi
+        | `Unknown -> logf "mixed_lattice_hull: unknown"
+      )
+      () (FVI.formula_of_dd binding hull);
+    hull
 
 end
 
@@ -630,24 +718,10 @@ module CooperProjection : sig
     P.t * L.t ->
     P.t * L.t * [`MinusInfinity | `PlusInfinity | `Term of V.t] Array.t
 
-  val project:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) ->
-    ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-    dim_of_symbol:(Syntax.symbol -> int) ->
-    eliminate: int list ->
+  val project: 'a FormulaVectorInterface.binding -> eliminate: int list ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
     (P.t * L.t) list ->
     DD.closed DD.t * L.t
-
-  (* TODO: Eliminating original variables may not be sound because they may be
-     real-valued.
-  val abstract:
-    'a Syntax.context ->
-    [`RoundLowerBound of ceiling | `NoRounding | `RoundStrictWhenVariablesIntegral] ->
-    'a Syntax.formula -> ('a Syntax.arith_term) array ->
-    DD.closed DD.t * L.t
-   *)
 
   (** Identity ceiling. When all variables are guaranteed to be integer-valued
       (e.g., of integer type within a syntactic context), and all inequalities
@@ -871,9 +945,7 @@ end = struct
       (P.enum_constraints p);
     P.of_constraints cnstrs
 
-  let local_project m ~eliminate
-        round_lower_bound
-        (p, l) =
+  let local_project m ~eliminate round_lower_bound (p, l) =
     logf "local_project_cooper: eliminating @[%a@] from @[%a@]@; and @[%a@]@;@;"
       (Format.pp_print_list ~pp_sep:Format.pp_print_space Format.pp_print_int)
       (Array.to_list eliminate)
@@ -914,22 +986,21 @@ end = struct
   let join (p1, l1) (p2, l2) =
     (DD.join p1 p2, L.intersect l1 l2)
 
-  let formula_of ~symbol_of_dim ?(term_of_dim=fun _ -> None) srk (dd, l) =
-    let open FormulaVectorInterface in
-    let p_phi = formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim (P.of_dd dd)
-    in
-    let l_phi = formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
-    in
+  let formula_of binding (dd, l) =
+    let module FVI = FormulaVectorInterface in
+    let p_phi = FVI.formula_of_dd binding dd in
+    let l_phi = FVI.formula_of_lattice binding l in
+    let srk = FVI.context_in binding in
     let fml = Syntax.mk_and srk [p_phi; l_phi] in
     logf ~level:`debug "project_cooper: blocking @[%a@]@;" (Syntax.Formula.pp srk) fml;
     fml
 
-  let project srk ~symbol_of_dim ?(term_of_dim = fun _ -> None)
-        ~dim_of_symbol ~eliminate round_lower_bound conjuncts =
+  let project binding ~eliminate round_lower_bound conjuncts =
     let module FVI = FormulaVectorInterface in
+    let srk = FVI.context_in binding in
     let make_conjunct (p, l) =
-      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      let p_phi = FVI.formula_of_polyhedron binding p in
+      let l_phi = FVI.formula_of_lattice binding l
       in
       Syntax.mk_and srk [p_phi; l_phi]
     in
@@ -943,9 +1014,8 @@ end = struct
     let domain: ('a, 'b) Abstract.domain =
       {
         join
-      ; of_model = FVI.abstract_implicant srk ~symbol_of_dim ~dim_of_symbol
-                     ~abstract phi
-      ; formula_of = formula_of srk ~symbol_of_dim
+      ; of_model = FVI.abstract_implicant binding ~abstract phi
+      ; formula_of = formula_of binding
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }
@@ -955,46 +1025,13 @@ end = struct
     ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
 
-  (*
-  let abstract srk round_lower_bound phi terms =
-    let module FVI = FormulaVectorInterface in
-    let ambient_dim = Array.length terms in
-    let FVI.{sym_of_dim ; term_of_dim; dim_of_sym} =
-      FVI.bindings_for_term_abstraction terms
-    in
-    let abstract_terms =
-      let variable_projection ~eliminate m (p, l) =
-        let eliminate = Array.of_list eliminate in
-        local_project m ~eliminate round_lower_bound (p, l)
-      in
-      FVI.project_onto_terms srk terms variable_projection
-    in
-    let abstract m (p, l) =
-      let (p', l', _) = abstract_terms m (p, l) in
-      (P.dd_of ambient_dim p', l')
-    in
-    let domain: ('a, 'b) Abstract.domain =
-      {
-        join
-      ; of_model =
-          FVI.abstract_implicant srk ~symbol_of_dim:sym_of_dim
-            ~term_of_dim ~dim_of_symbol:dim_of_sym
-            ~abstract phi
-      ; formula_of = formula_of srk ~symbol_of_dim:sym_of_dim ~term_of_dim
-      ; top = top ambient_dim
-      ; bottom = bottom ambient_dim
-      }
-    in
-    let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
-    ignore (Abstract.Solver.get_model solver);
-    Abstract.Solver.abstract solver domain
-  *)
-
 end
 
 let local_mixed_lattice_hull = Hull.local_mixed_lattice_hull
 let mixed_lattice_hull = Hull.mixed_lattice_hull
 let abstract_lattice_hull = Hull.abstract
+let partition_vertices_by_integrality = Hull.partition_vertices_by_integrality
+
 let local_project_cooper = CooperProjection.local_project
 let project_cooper = CooperProjection.project
 
@@ -1007,27 +1044,22 @@ module ProjectHull : sig
    *)
 
   val project_cooper_and_hull:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
-    eliminate: int list ->
+    'a FormulaVectorInterface.binding -> eliminate: int list ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
     (P.t * L.t) list ->
     DD.closed DD.t
 
   val hull_and_project_cooper:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
-    eliminate: int list ->
+    'a FormulaVectorInterface.binding -> eliminate: int list ->
     [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
     (P.t * L.t) list ->
     DD.closed DD.t
 
   val hull_and_project_real:
-    'a Syntax.context ->
-    symbol_of_dim:(int -> Syntax.symbol option) -> dim_of_symbol:(Syntax.symbol -> int) ->
+    'a FormulaVectorInterface.binding ->
     eliminate: int list -> (P.t * L.t) list -> DD.closed DD.t
 
-  (** When projecting onto terms using variable elimination and Cooper's method, 
+  (** When projecting onto terms using variable elimination and Cooper's method,
       one has to be careful about what variables get eliminated.
 
       - [`OnePhaseElim]: Abstract by first defining terms, i.e., by adding a new
@@ -1128,9 +1160,9 @@ end = struct
     let projected = Polyhedron.local_project m eliminate hulled in
     projected
 
-  let formula_of srk symbol_of_dim ?(term_of_dim=(fun _ -> None)) dd =
-    let p_phi = FVI.formula_of_polyhedron
-                  srk ~symbol_of_dim ~term_of_dim (P.of_dd dd) in
+  let formula_of binding dd =
+    let p_phi = FVI.formula_of_polyhedron binding (P.of_dd dd) in
+    let srk = FVI.context_in binding in
     logf ~level:`debug "ProjectHull: blocking @[%a@]@;"
       (Syntax.Formula.pp srk) p_phi;
     p_phi
@@ -1138,12 +1170,11 @@ end = struct
   let top ambient_dim = P.dd_of ambient_dim P.top
   let bottom ambient_dim = P.dd_of ambient_dim P.bottom
 
-  let saturate
-        srk ~symbol_of_dim ?(term_of_dim= fun _ -> None) ~dim_of_symbol
-        ambient_dim op conjuncts =
+  let saturate binding ambient_dim op conjuncts =
+    let srk = FVI.context_in binding in
     let make_conjunct (p, l) =
-      let p_phi = FVI.formula_of_polyhedron srk ~symbol_of_dim ~term_of_dim p in
-      let l_phi = FVI.formula_of_lattice srk ~symbol_of_dim ~term_of_dim l
+      let p_phi = FVI.formula_of_polyhedron binding p in
+      let l_phi = FVI.formula_of_lattice binding l
       in
       Syntax.mk_and srk [p_phi; l_phi]
     in
@@ -1154,9 +1185,8 @@ end = struct
     let domain: ('a, 'b) Abstract.domain =
       {
         join = DD.join
-      ; of_model = FormulaVectorInterface.abstract_implicant srk
-                     ~symbol_of_dim ~dim_of_symbol ~abstract phi
-      ; formula_of = formula_of srk symbol_of_dim
+      ; of_model = FVI.abstract_implicant binding ~abstract phi
+      ; formula_of = formula_of binding
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }
@@ -1166,22 +1196,20 @@ end = struct
     ignore (Abstract.Solver.get_model solver);
     Abstract.Solver.abstract solver domain
 
-  let project_cooper_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate
-        round_lower_bound conjuncts =
+  let project_cooper_and_hull binding ~eliminate round_lower_bound conjuncts =
     let ambient_dim = FVI.ambient_dim conjuncts ~except:eliminate in
     let op m (p, l) = local_project_cooper_and_hull m ~eliminate round_lower_bound (p, l) in
-    saturate srk ~symbol_of_dim ~dim_of_symbol ambient_dim op conjuncts
+    saturate binding ambient_dim op conjuncts
 
-  let hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol ~eliminate
-        round_lower_bound conjuncts =
+  let hull_and_project_cooper binding ~eliminate round_lower_bound conjuncts =
     let ambient_dim = FVI.ambient_dim conjuncts ~except:eliminate in
     let op m (p, l) = local_hull_and_project_cooper m ~eliminate round_lower_bound (p, l) in
-    saturate srk ~symbol_of_dim ~dim_of_symbol ambient_dim op conjuncts
+    saturate binding ambient_dim op conjuncts
 
-  let hull_and_project_real srk ~symbol_of_dim ~dim_of_symbol ~eliminate conjuncts =
+  let hull_and_project_real binding ~eliminate conjuncts =
     let ambient_dim = FVI.ambient_dim conjuncts ~except:eliminate in
     let op m (p, l) = local_hull_and_project_real m ~eliminate (p, l) in
-    saturate srk ~symbol_of_dim ~dim_of_symbol ambient_dim op conjuncts
+    saturate binding ambient_dim op conjuncts
 
   let abstract_terms_by_one_phase_elim srk proj_alg phi terms =
     let ambient_dim = Array.length terms in
@@ -1189,15 +1217,16 @@ end = struct
       (Format.pp_print_list ~pp_sep:Format.pp_print_space (Syntax.ArithTerm.pp srk))
       (Array.to_list terms)
       (Array.length terms);
-    let FVI.{ sym_of_dim; term_of_dim; dim_of_sym } =
-      FVI.bindings_for_term_abstraction terms in
+    let term_context = FVI.put_terms_in_initial_segment srk terms in
+    let binding = FVI.binding_in term_context in
 
-    Testing.print_symbol_dimension_bindings srk dim_of_sym phi ();
+    logf ~level:`debug "Symbol to dimensions: @[%a@]"
+      (FVI.pp_symbol_to_dimension (Syntax.symbols phi)) binding;
 
-    let abstract_terms =
+    let abstract_terms m (p, l) =
       let proj ~eliminate m (p, l) = proj_alg m ~eliminate (p, l)
       in
-      FVI.project_onto_terms srk terms proj
+      FVI.project_onto_terms term_context proj m (p, l)
     in
     let abstract m (p, l) =
       let abstracted = abstract_terms m (p, l) in
@@ -1212,11 +1241,8 @@ end = struct
     let domain: ('a, 'b) Abstract.domain =
       {
         join = DD.join
-      ; of_model = FVI.abstract_implicant srk
-                     ~symbol_of_dim:sym_of_dim
-                     ~term_of_dim
-                     ~dim_of_symbol:dim_of_sym ~abstract phi
-      ; formula_of = formula_of srk sym_of_dim ~term_of_dim
+      ; of_model = FVI.abstract_implicant binding ~abstract phi
+      ; formula_of = formula_of binding
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }
@@ -1230,49 +1256,43 @@ end = struct
         srk proj_alg phi terms =
     let module FVI = FormulaVectorInterface in
     let ambient_dim = Array.length terms in
-    let FVI.{ sym_of_dim; term_of_dim; dim_of_sym } =
-      FVI.bindings_for_term_abstraction terms in
+    let term_context = FVI.put_terms_in_initial_segment srk terms in
+    let binding = FVI.binding_in term_context in
+    let dimensions_in_terms = FVI.dimensions_in_terms term_context in
 
-    Testing.print_symbol_dimension_bindings srk dim_of_sym phi ();
+    logf ~level:`debug "Symbol to dimensions: @[%a@]"
+      (FVI.pp_symbol_to_dimension (Syntax.symbols phi)) binding;
 
     let abstract m (p, l) =
-      let (term_definitions, dimensions_in_terms) =
-        FVI.term_definitions_and_dimensions_in_terms srk terms in
-      let original_dimensions =
-        FVI.collect_dimensions (p, l)
-      in
-      let eliminate = IntSet.diff original_dimensions dimensions_in_terms
+      let original_dimensions = FVI.collect_dimensions (p, l) in
+      let eliminate = IntSet.diff original_dimensions
+                        (FVI.dimensions_in_terms term_context)
                       |> IntSet.to_list in
       let projected = proj_alg m ~eliminate (p, l) in
-      let p' = P.meet projected (P.of_constraints (BatList.enum term_definitions)) in
-      let () =
-        if Log.level_leq !my_verbosity_level `debug then
-          match Testing.model_satisfies srk sym_of_dim term_of_dim m (p, l) p'
-          with
-          | Some model_err ->
-             let s = Format.asprintf "%s" model_err in
-             logf "%s" s;
-             failwith s
-          | None -> ()
-        else
-          ()
+      let term_definitions = FVI.constraints_defining_terms term_context in
+      let p' = P.meet projected (P.of_constraints (BatList.enum term_definitions))
       in
+      let extended_m =
+        FVI.extend_assignment_to_adjoined_dimensions term_context m in
+
+      let () = FVI.check_point_in_p ~level:`debug binding extended_m p' in
       logf ~level:`debug
         "abstract_terms_by_two_phase_elim: Eliminating dimensions @[%a@] using real QE for @[%a@]@;"
         (Format.pp_print_list ~pp_sep:Format.pp_print_space Format.pp_print_int)
         (IntSet.to_list dimensions_in_terms)
         (P.pp Format.pp_print_int) p';
-      P.local_project m (IntSet.to_list dimensions_in_terms) p'
+
+      (* Previously: P.local_project m (IntSet.to_list dimensions_in_terms) p'
+         without extending model; that should have been a bug
+       *)
+      P.local_project extended_m (IntSet.to_list dimensions_in_terms) p'
       |> P.dd_of ambient_dim
     in
     let domain: ('a, 'b) Abstract.domain =
       {
         join = DD.join
-      ; of_model = FVI.abstract_implicant srk
-                     ~symbol_of_dim:sym_of_dim
-                     ~term_of_dim
-                     ~dim_of_symbol:dim_of_sym ~abstract phi
-      ; formula_of = formula_of srk sym_of_dim ~term_of_dim
+      ; of_model = FVI.abstract_implicant binding ~abstract phi
+      ; formula_of = formula_of binding
       ; top = top ambient_dim
       ; bottom = bottom ambient_dim
       }
@@ -1311,7 +1331,7 @@ end = struct
        abstract_terms_by_one_phase_elim srk
          (fun m ~eliminate (p, l) ->
            local_project_cooper_and_hull m ~eliminate round_lower_bound (p, l))
-         phi terms      
+         phi terms
     | `TwoPhaseElim ->
        abstract_terms_by_two_phase_elim srk
          (fun m ~eliminate (p, l) ->
@@ -1320,20 +1340,16 @@ end = struct
 
 end
 
-(*
-let local_project_and_hull m ~eliminate
-      ?(round_lower_bound = CooperProjection.all_variables_are_integral_and_no_strict_ineqs) =
-  ProjectHull.local_project_and_hull m ~eliminate ~round_lower_bound
- *)
+type 'a binding = 'a FormulaVectorInterface.binding
 
-let project_cooper_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate round_lower_bound =
-  ProjectHull.project_cooper_and_hull srk ~symbol_of_dim ~dim_of_symbol ~eliminate
-    round_lower_bound
+let mk_binding = FormulaVectorInterface.mk_binding
 
-let hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol ~eliminate
+let project_cooper_and_hull binding ~eliminate round_lower_bound =
+  ProjectHull.project_cooper_and_hull binding ~eliminate round_lower_bound
+
+let hull_and_project_cooper binding ~eliminate
       round_lower_bound =
-  ProjectHull.hull_and_project_cooper srk ~symbol_of_dim ~dim_of_symbol
-    ~eliminate round_lower_bound
+  ProjectHull.hull_and_project_cooper binding ~eliminate round_lower_bound
 
 let hull_and_project_real = ProjectHull.hull_and_project_real
 
@@ -1345,3 +1361,5 @@ let abstract_by_local_hull_and_project_real =
 
 let abstract_by_local_project_cooper_and_hull =
   ProjectHull.abstract_by_local_project_cooper_and_hull
+
+let _formula_of_point = FormulaVectorInterface.formula_of_point

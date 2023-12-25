@@ -35,7 +35,7 @@ include Log.Make(struct let name = "srk.lira" end)
 module IntMap = SrkUtil.Int.Map
 module IntSet = SrkUtil.Int.Set
 
-(* let () = my_verbosity_level := `trace *)
+let () = my_verbosity_level := `trace
 
 module DimensionBinding : sig
   (** A dimension binding associates a dimension [n] ("original dimension")

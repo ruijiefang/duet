@@ -10,6 +10,20 @@
     explicitly.
  *)
 
+(** A binding consists a map that interprets symbols as dimensions and a map
+    that interprets dimensions as symbols and terms.
+*)
+type 'a binding
+
+(** [symbol_of_dim] and [term_of_adjoined_dim] need to have disjoint domains,
+    and [symbol_of_dim (dim_of_symbol s) = s] for all symbols [s].
+ *)
+val mk_binding:
+  'a Syntax.context ->
+  symbol_of_dim: (int -> Syntax.symbol option) ->
+  term_of_adjoined_dim: (int -> 'a Syntax.arith_term option) ->
+  dim_of_symbol: (Syntax.symbol -> int) -> 'a binding
+
 (** Given a point [m] in the intersection of [P] and [L],
     [local_mixed_lattice_hull m P L = P'] is a subpolyhedron in the lattice hull
     of [P] with respect to L that contains [m].
@@ -30,11 +44,7 @@ val local_mixed_lattice_hull:
     occurring in the formula (computed via [dim_of_symbol]) + 1.
  *)
 val mixed_lattice_hull:
-  'a Syntax.context ->
-  symbol_of_dim:(int -> Syntax.symbol option) ->
-  ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  ambient_dim: int ->
+  'a binding -> ambient_dim: int ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 (** `PureGomoryChvatal is guaranteed to work only when all variables are
@@ -45,12 +55,11 @@ val mixed_lattice_hull:
     occurring in the formula (computed via [dim_of_symbol]) + 1.
  *)
 val abstract_lattice_hull:
-  'a Syntax.context ->
-  how:[`Mixed | `PureGomoryChvatal] ->
-  symbol_of_dim:(int -> Syntax.symbol option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  ambient_dim:int ->
+  'a binding -> [`Mixed | `PureGomoryChvatal] -> ambient_dim:int ->
   'a Syntax.formula -> DD.closed DD.t
+
+val partition_vertices_by_integrality:
+  DD.closed DD.t -> IntLattice.t -> (Linear.QQVector.t list * Linear.QQVector.t list)
 
 (** A ceiling (f, g) is such that
     - The image of [f] is a lattice of QQ that contains ZZ.
@@ -114,9 +123,7 @@ val local_project_cooper:
 exception PositiveIneqOverRealVar of Linear.QQVector.t * int
 
 val project_cooper:
-  'a Syntax.context -> symbol_of_dim:(int -> Syntax.symbol option) ->
-  ?term_of_dim:(int -> 'a Syntax.arith_term option) ->
-  dim_of_symbol:(Syntax.symbol -> int) -> eliminate: int list ->
+  'a binding -> eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list ->
   DD.closed DD.t * IntLattice.t
@@ -130,10 +137,7 @@ val project_cooper:
     the variable is to be eliminated or not).
  *)
 val project_cooper_and_hull:
-  'a Syntax.context ->
-  symbol_of_dim:(int -> Syntax.symbol option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list ->
+  'a binding -> eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
@@ -146,20 +150,14 @@ val project_cooper_and_hull:
     converge otherwise.
  *)
 val hull_and_project_cooper:
-  'a Syntax.context ->
-  symbol_of_dim:(int -> Syntax.symbol option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list ->
+  'a binding -> eliminate: int list ->
   [ `RoundLowerBound of ceiling
   | `NonstrictIneqsOnly
   | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val hull_and_project_real:
-  'a Syntax.context ->
-  symbol_of_dim:(int -> Syntax.symbol option) ->
-  dim_of_symbol:(Syntax.symbol -> int) ->
-  eliminate: int list ->
+  'a binding -> eliminate: int list ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val abstract_by_local_project_cooper_and_hull:

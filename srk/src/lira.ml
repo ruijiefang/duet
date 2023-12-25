@@ -525,19 +525,19 @@ end = struct
     in
     (cond, (fold_vector (Linear.QQVector.negate (unfold_vector v'))))
 
+  let qq_of term =
+    let (k, rest) = Linear.QQVector.pivot Linear.const_dim term in
+    if Linear.QQVector.equal rest Linear.QQVector.zero then k
+    else raise Linear.Nonlinear
+
+  let nonzero_qq_of term =
+    let qq = qq_of term in
+    if QQ.equal qq QQ.zero then
+      invalid_arg "linearize: division or mod by 0"
+    else qq
+
   let linearize srk context term interp =
     let m = Context.valuation_of context interp in
-    let qq_of term =
-      let (k, rest) = Linear.QQVector.pivot Linear.const_dim term in
-      if Linear.QQVector.equal rest Linear.QQVector.zero then k
-      else raise Linear.Nonlinear
-    in
-    let nonzero_qq_of term =
-      let qq = qq_of term in
-      if QQ.equal qq QQ.zero then
-        invalid_arg "linearize: division or mod by 0"
-      else qq
-    in
     let (lincond, v) =
       Syntax.ArithTerm.eval srk
         (function
@@ -583,9 +583,22 @@ end = struct
             let c = nonzero_qq_of v2 in
             (conjoin phi1 phi2, (Linear.QQVector.scalar_mul (QQ.inverse c) v1))
          | `Binop (`Mod, (phi1, v1), (phi2, v2)) ->
+            (* a mod b = a - b floor(a/b) if b > 0
+               a mod b = a - b ceiling(a/b) if b < 0
+             *)
             let r2 = nonzero_qq_of v2 in
-            let r1 = qq_of v1 in
-            (conjoin phi1 phi2, Linear.const_linterm (QQ.modulo r1 r2))
+            let ratio = Linear.QQVector.scalar_mul (QQ.inverse r2) v1 in
+            let round v =
+              if QQ.lt QQ.zero r2 then
+                floor (Context.dimension_binding context) m (fold_vector v)
+              else
+                ceiling (Context.dimension_binding context) m (fold_vector v)
+            in
+            let (rounding_phi, rounded) = round ratio in
+            let moded = Linear.QQVector.scalar_mul (QQ.negate r2)
+                          (unfold_vector rounded)
+                        |> Linear.QQVector.add v1 in
+            ( conjoin rounding_phi (conjoin phi1 phi2), moded )
          | `Unop (`Floor, (phi, v)) ->
             logf ~level:`trace "flooring v = %a@;"
               (Linear.QQVector.pp_term Format.pp_print_int) v;

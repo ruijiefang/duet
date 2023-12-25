@@ -120,13 +120,13 @@ let free_vars_and_existentials keep_quantified (quantifiers, phi) =
        (Syntax.pp_symbol srk)) (Symbol.Set.to_list preserved_symbols);
   (quantified_vars, preserved_symbols)
 
-let term_of_vector terms v =
-  Linear.term_of_vec srk (fun dim ->
-      if dim = Linear.const_dim then mk_real srk QQ.one
-      else terms.(dim))
-    v
-
 let formula_of_dd terms dd =
+  let term_of_vector terms v =
+    Linear.term_of_vec srk (fun dim ->
+        if dim = Linear.const_dim then mk_real srk QQ.one
+        else terms.(dim))
+      v
+  in
   let zero = Syntax.mk_real srk QQ.zero in
   let conjuncts =
     BatEnum.fold (fun l (ckind, v) ->
@@ -141,24 +141,8 @@ let formula_of_dd terms dd =
       []
       (DD.enum_constraints dd)
   in
-  if conjuncts = [] then Syntax.mk_false srk
+  if conjuncts = [] then Syntax.mk_true srk
   else Syntax.mk_and srk conjuncts
-
-let check_abstract phi terms abstracted =
-  let solver = Smt.StdSolver.make srk in
-  let negated_abstracted = Syntax.mk_not srk (formula_of_dd terms abstracted) in
-  Smt.StdSolver.add solver [phi; negated_abstracted];
-  match Smt.StdSolver.get_model solver with
-  | `Sat _ -> `Fail
-  | `Unsat -> `Success
-  | `Unknown -> `Unknown
-
-let check_subset terms p1 p2 =
-  let phi1 = formula_of_dd terms p1 in
-  match check_abstract phi1 terms p2 with
-  | `Fail -> false
-  | `Success -> true
-  | `Unknown -> assert false
 
 let do_qe keep_quantifiers abstract phi =
   let (quantifiers, phi) = Quantifier.normalize srk phi in
@@ -202,31 +186,22 @@ let do_qe keep_quantifiers abstract phi =
   in
   (phi_with_int_constraints, terms, hull)
 
-let run_eliminate_integers abstract file =
+let run_eliminate (what: [`IntegerQuantifiersOnly | `AllQuantifiers]) abstract file =
+  let filter = match what with
+    | `IntegerQuantifiersOnly -> int_quantifiers_only
+    | `AllQuantifiers -> (fun _ -> true) in
   let phi = load_formula file in
   try
     let (phi_with_int_constraints, terms, hull) =
-      do_qe int_quantifiers_only abstract phi in
-    match check_abstract phi_with_int_constraints terms hull with
-    | `Success -> Format.printf "Result: success" 
-    | `Fail -> Format.printf "Result: fail (soundness check)"
+      do_qe filter abstract phi in
+    match Smt.entails srk phi_with_int_constraints (formula_of_dd terms hull) with
+    | `Yes -> Format.printf "Result: success"
+    | `No -> Format.printf "Result: unsound projection (fail implication check)"
     | `Unknown -> Format.printf "Result: unknown"
   with
   | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
      Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
        (Linear.QQVector.pp_term Format.pp_print_int) v dim
-  | Linear.Nonlinear ->
-     Format.printf "Result: unknown (nonlinear)"
-
-let run_eliminate_all_quantifiers abstract file =
-  let phi = load_formula file in
-  try
-    let (phi_with_int_constraints, terms, hull) = do_qe (fun _ -> true) abstract phi in
-    match check_abstract phi_with_int_constraints terms hull with
-    | `Success -> Format.printf "Result: success" 
-    | `Fail -> Format.printf "Result: fail (soundness check)"
-    | `Unknown -> Format.printf "Result: unknown"
-  with
   | Linear.Nonlinear ->
      Format.printf "Result: unknown (nonlinear)"
 
@@ -309,51 +284,109 @@ let compare_convex_hull file =
   else Format.printf "unequal@\n";
   ()
 
-let compare_projection keep_quantifiers file =
+let compare_projection
+      (algs: [`RealConvHull | `Lira | `HullRealProjectDoubleElim | `HullRealProjectSingleElim] list)
+      (what: [`IntegerQuantifiersOnly | `AllQuantifiers])
+      file =
   let phi = load_formula file in
-  try
-    let do_qe = do_qe keep_quantifiers in
-    let (_, terms, real_conv_hull) = do_qe (Abstract.conv_hull srk) phi in
-    let (_, _, lira_hull) = do_qe (Lira.project srk) phi in
-    (*
-    let (_, _, hull_and_projected_hull) =
-      do_qe
-        (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim)
-        phi in
-     *)
-    let lira_vs_h_and_p = (* DD.equal lira_hull hull_and_projected_hull *) true in
-    let lira_vs_real_hull = DD.equal lira_hull real_conv_hull in
-    if lira_vs_h_and_p && lira_vs_real_hull then
-      Format.printf "Result: all hulls equal"
-    else if not lira_vs_h_and_p then
-      begin
-        Format.printf "lira_hull: @[%a@]@;"
-          (DD.pp Format.pp_print_int) lira_hull;
-
-        (* Format.printf "hull_and_project: @[%a@]@;"
-          (DD.pp Format.pp_print_int) hull_and_projected_hull;
-         *)
-        Format.printf "Result: unsound (LIRA and hull-and-project not equal)"
-      end
-    else
-      begin
-        Format.printf "lira_hull: @[%a@]@;"
-          (DD.pp Format.pp_print_int) lira_hull;
-        Format.printf "real_conv_hull: @[%a@]@;"
-          (DD.pp Format.pp_print_int) real_conv_hull;
-        let lira_smaller = check_subset terms lira_hull real_conv_hull in
-        let real_smaller = check_subset terms real_conv_hull lira_hull in
-        if real_smaller then
-          Format.printf "Result: unsound (real is smaller than lira)"
-        else if lira_smaller then
-          Format.printf "Result: lira is smaller than real"
-      end
-  with
-  | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
-     Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
-       (Linear.QQVector.pp_term Format.pp_print_int) v dim
-  | Linear.Nonlinear ->
-     Format.printf "Result: unknown (nonlinear)"
+  let keep_quantifiers = match what with
+    | `IntegerQuantifiersOnly -> int_quantifiers_only
+    | `AllQuantifiers -> (fun _ -> true)
+  in
+  let do_qe = do_qe keep_quantifiers in
+  let attempt f =
+    try f ()
+    with
+    | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
+       Format.printf "Result: unknown (cannot convert strict inequality @[%a@], dimension %d is real)@;"
+         (Linear.QQVector.pp_term Format.pp_print_int) v dim;
+       assert false
+    | Linear.Nonlinear ->
+       Format.printf "Result: unknown (nonlinear)";
+       assert false
+  in
+  let compute phi = function
+    | `RealConvHull ->
+       (`RealConvHull, attempt (fun () -> do_qe (Abstract.conv_hull srk) phi))
+    | `Lira -> (`Lira, do_qe (Lira.project srk) phi)
+    | `HullRealProjectDoubleElim ->
+       ( `HullRealProjectDoubleElim
+       , attempt
+           (fun () ->
+             do_qe
+               (LatticePolyhedron.abstract_by_local_hull_and_project_real
+                  srk `TwoPhaseElim) phi
+           )
+       )
+    | `HullRealProjectSingleElim ->
+       ( `HullRealProjectSingleElim
+       , attempt
+           (fun () ->
+             do_qe (LatticePolyhedron.abstract_by_local_hull_and_project_real
+                      srk `OnePhaseElim) phi
+           )
+       )
+  in
+  let string_of = function
+    | `RealConvHull -> "real hull"
+    | `Lira -> "lira hull"
+    | `HullRealProjectDoubleElim -> "hull&project-double-elim hull"
+    | `HullRealProjectSingleElim -> "hull&project-single-elim hull"
+  in
+  let expect meth1 meth2 result =
+    match (meth1, meth2, result) with
+    | (`Lira, `HullRealProjectDoubleElim, `Equal)
+      | (`Lira, `HullRealProjectSingleElim, `Equal)
+      | (`Lira, `RealConvHull, `Equal)
+      | (`Lira, `RealConvHull, `Smaller)
+      | (`HullRealProjectDoubleElim, `Lira, `Equal)
+      | (`HullRealProjectDoubleElim, `HullRealProjectSingleElim, `Equal)
+      | (`HullRealProjectDoubleElim, `RealConvHull, `Equal)
+      | (`HullRealProjectDoubleElim, `RealConvHull, `Smaller)
+      | (`HullRealProjectSingleElim, `Lira, `Equal)
+      | (`HullRealProjectSingleElim, `HullRealProjectDoubleElim, `Equal)
+      | (`HullRealProjectSingleElim, `RealConvHull, `Equal)
+      | (`HullRealProjectSingleElim, `RealConvHull, `Smaller) -> true
+    | _ -> false
+  in
+  let hulls = List.map (compute phi) algs in
+  let (_, (_, terms, _)) = List.hd hulls in
+  let rec test_all_pairs test l =
+    match l with
+    | [] -> []
+    | x :: ys ->
+       List.fold_left
+         (fun l y -> test x y :: l)
+         (test_all_pairs test ys) ys
+  in    
+  let test (meth1, (_, _, hull1)) (meth2, (_, _, hull2)) =
+    let hull1_phi, hull2_phi =
+      formula_of_dd terms hull1, formula_of_dd terms hull2 in
+    match Smt.entails srk hull1_phi hull2_phi
+        , Smt.entails srk hull2_phi hull1_phi with
+    | `Yes, `Yes -> (meth1, meth2, `Equal, expect meth1 meth2 `Equal)
+    | `Yes, `No -> (meth1, meth2, `Smaller, expect meth1 meth2 `Smaller)
+    | `No, `Yes -> (meth2, meth1, `Smaller, expect meth2 meth1 `Smaller)
+    | `No, `No -> (meth1, meth2, `Incomparable, false)
+    | `Unknown, _ -> (meth1, meth2, `Incomparable, false)
+    | _, `Unknown -> (meth1, meth2, `Incomparable, false)
+  in
+  let comparisons = test_all_pairs test hulls in
+  let unexpected = List.filter (fun (_, _, _, b) -> not b) comparisons in
+  match unexpected with
+  | [] -> Format.printf "Result: all hulls equal@;"
+  | _ ->
+     List.iter (fun (meth1, meth2, result, _) ->
+         Format.printf "Result: unsound projection (%s is %a %s)@;"
+           (string_of meth1)
+           (fun fmt comparison ->
+             match comparison with
+             | `Equal -> Format.fprintf fmt "equal to"
+             | `Smaller -> Format.fprintf fmt "smaller than"
+             | `Incomparable -> Format.fprintf fmt "incomparable with")
+           result
+           (string_of meth2)
+       ) unexpected
 
 let spec_list = [
   ("-simsat",
@@ -390,15 +423,21 @@ let spec_list = [
    Arg.String compare_convex_hull,
    "Compare convex hulls computed by local projection and abstract");
 
-  ("-compare-projection",
-   Arg.String (compare_projection (fun _ -> true)),
-   "Compare projected hulls computed by model-based hull-and-project and by LIRA");
+  ("-compare-lira-real-convhull",
+   Arg.String
+     (compare_projection [`Lira; `RealConvHull] `AllQuantifiers)
+   , "Compare projected hulls computed by LIRA and real convex hull");
+
+  ("-compare-lira-hull-and-project-double-elim",
+   Arg.String
+     (compare_projection [`Lira; `HullRealProjectDoubleElim] `AllQuantifiers)
+   , "Compare projected hulls computed by LIRA and hull&project");
 
   ("-local-hull-and-project"
   , Arg.String
       (fun s ->
         ignore
-          (run_eliminate_all_quantifiers
+          (run_eliminate `AllQuantifiers
              (LatticePolyhedron.abstract_by_local_hull_and_project_real srk `TwoPhaseElim) s))
   , " May diverge when formula contains real-valued variables (why?)"
   );
@@ -431,12 +470,12 @@ let spec_list = [
    *)
 
   ("-lira-project"
-  , Arg.String (fun s -> ignore (run_eliminate_all_quantifiers (Lira.project srk) s))
+  , Arg.String (fun s -> ignore (run_eliminate `AllQuantifiers (Lira.project srk) s))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
   ("-project-by-real-conv-hull"
-  , Arg.String (fun s -> ignore (run_eliminate_all_quantifiers (Abstract.conv_hull srk) s))
+  , Arg.String (fun s -> ignore (run_eliminate `AllQuantifiers (Abstract.conv_hull srk) s))
   , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
 
   ("-int-hull-by-cone-deprecated",

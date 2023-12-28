@@ -96,11 +96,6 @@ module FormulaVectorInterface: sig
     [> `LIRA of 'a Interpretation.interpretation ] -> 'b
 
   (*
-  val extend_assignment_to_adjoined_dimensions:
-    'a binding -> (int -> QQ.t) -> (int -> QQ.t)
-   *)
-
-  (*
   (** Given a local projection algorithm [proj] that eliminates variables,
       [project_onto_terms term_context proj = proj']
       where [proj'] is a local projection algorithm that projects its input,

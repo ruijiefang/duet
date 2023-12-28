@@ -145,21 +145,16 @@ let formula_of_dd terms dd =
   else Syntax.mk_and srk conjuncts
 
 let do_qe keep_quantifiers abstract phi =
-  let (quantifiers, phi) = Quantifier.normalize srk phi in
   Format.printf "Abstracting @[%a@]@;" (Syntax.Formula.pp srk) phi;
-  let (_quantified_ints, preserved_symbols) =
-    free_vars_and_existentials keep_quantifiers (quantifiers, phi) in
+  let (quantifiers, phi) = Quantifier.normalize srk phi in
+  let (_quantified_vars, preserved_symbols) =
+    free_vars_and_existentials keep_quantifiers
+      (quantifiers, phi) in
   let terms = BatArray.of_enum
                 (BatEnum.map (Syntax.mk_const srk)
                    (Symbol.Set.enum preserved_symbols))
   in
   let lattice_constraints =
-    (*
-    Symbol.Set.fold
-      (fun symbol l -> Syntax.mk_is_int srk (Syntax.mk_const srk symbol) :: l)
-      quantified_ints
-      []
-     *)
     Symbol.Set.fold (fun sym l ->
         match Syntax.typ_symbol srk sym with
         | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l

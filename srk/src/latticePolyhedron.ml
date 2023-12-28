@@ -446,7 +446,12 @@ end = struct
       mk_binding srk symbol_of_dim ~term_of_adjoined_dim dim_of_symbol
         ~free_dims_start:(max_assigned_dim + 1)
     in
-    add_mod_term_dimensions srk initial_binding phi
+    (* The elimination scheme for ITE only introduces a new symbol to replace an
+       ITE term and flattens the condition into a disjunction; 
+       the result has exactly the same mod terms, but has no ITE, so the formula
+       becomes linear.
+     *)
+    add_mod_term_dimensions srk initial_binding (Syntax.eliminate_ite srk phi)
 
   let to_inequality srk binding (ckind, v) =
     let zero = Syntax.mk_zero srk in
@@ -519,7 +524,10 @@ end = struct
       | `Atom (`IsInt t) ->
          let ((pcond, lcond), linterm) = linearize t in
          (pcond @ pcons, linterm :: lcond @ lcons)
-      | _ -> assert false
+      | _ ->
+         logf ~level:`debug "constraints_of_implicant: @[%a@]@;"
+           (Syntax.Formula.pp srk) literal;
+         assert false
     in
     List.fold_left collect ([], []) atoms
 
@@ -584,7 +592,7 @@ end = struct
         definition_to_constraint (dim, v) :: l)
       binding.vector_of_initial_adjoined_dim
       []
-        
+
   let abstract_implicant
         srk binding
         (abstract:
@@ -1564,7 +1572,7 @@ end = struct
 end
 
 module FVI = FormulaVectorInterface
-    
+
 type 'a binding = 'a FVI.binding
 
 let mk_binding = FVI.mk_binding

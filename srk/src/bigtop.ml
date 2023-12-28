@@ -211,16 +211,13 @@ let compare_integer_hull file =
                       (Syntax.Symbol.Set.max_elt (Syntax.symbols phi)) + 1 in
   Format.printf "Computing mixed hull@;";
 
-  let binding = LatticePolyhedron.mk_binding srk
-                  ~symbol_of_dim:(fun dim -> Some (Syntax.symbol_of_int dim))
-                  ~term_of_adjoined_dim:(fun _ -> None)
-                  ~dim_of_symbol:Syntax.int_of_symbol in
+  let binding = LatticePolyhedron.mk_standard_binding srk phi in
   let mixed_hull =
-    LatticePolyhedron.abstract_lattice_hull binding `Mixed
+    LatticePolyhedron.abstract_lattice_hull srk binding `Mixed
       ~ambient_dim phi in
   Format.printf "Computing pure hull@;";
   let pure_hull =
-    LatticePolyhedron.abstract_lattice_hull binding `PureGomoryChvatal
+    LatticePolyhedron.abstract_lattice_hull srk binding `PureGomoryChvatal
       ~ambient_dim phi in
   Format.printf "Mixed hull: @[%a@]@;" (DD.pp Format.pp_print_int) mixed_hull;
   Format.printf "Pure hull: @[%a@]@;" (DD.pp Format.pp_print_int) pure_hull

@@ -135,7 +135,6 @@ end = struct
     ; next_fresh_dim: int
     ; first_mod_term_dimension: int
     ; dims_of_mod_term: mod_term_map
-    ; mod_term_of_dims: (V.t * QQ.t) IntMap.t
     (* Data for initial [term_of_adjoined_dim] before extension with terms for
        mod-term conversion; supports projection onto terms
      *)
@@ -316,7 +315,6 @@ end = struct
     ; next_fresh_dim
     ; first_mod_term_dimension = next_fresh_dim
     ; dims_of_mod_term
-    ; mod_term_of_dims = IntMap.empty
     ; dimensions_in_initial_terms =
         get_term_dimensions dim_of_symbol term_of_adjoined_dim
     ; vector_of_initial_adjoined_dim = vectors_of_terms
@@ -374,9 +372,6 @@ end = struct
     ; first_mod_term_dimension = binding.first_mod_term_dimension
     ; dims_of_mod_term =
         BatMap.add (v, r) (quotient, remainder) binding.dims_of_mod_term
-    ; mod_term_of_dims =
-        IntMap.add quotient (v, r) binding.mod_term_of_dims
-        |> IntMap.add remainder (v, r)
     ; dimensions_in_initial_terms = binding.dimensions_in_initial_terms
     ; vector_of_initial_adjoined_dim = binding.vector_of_initial_adjoined_dim
     }
@@ -645,24 +640,6 @@ end = struct
             m (p, l)
        end
     | _ -> assert false
-
-  (*
-  let extend_assignment_to_adjoined_dimensions binding m dim =
-    try
-      if dim >= binding.first_mod_term_dimension then
-        let (v, r) = IntMap.find dim binding.mod_term_of_dims in
-        let dividend = Linear.evaluate_affine m v in
-        let remainder = QQ.modulo dividend r in
-        if dim mod 2 = 0 then
-          QQ.div (QQ.sub dividend remainder) r
-        else 
-          remainder
-      else
-        let v = IntMap.find dim binding.vector_of_initial_adjoined_dim in
-        Linear.evaluate_affine m v
-    with
-    | Not_found -> m dim
-   *)
 
   (*
   let project_onto_terms term_ctx projection =
@@ -1530,19 +1507,12 @@ end = struct
       let projected = proj_alg m ~eliminate (p, l) in
       let p' = P.meet projected (P.of_constraints (BatList.enum term_defs))
       in
-      (*
-      let extended_m =
-        FVI.extend_assignment_to_adjoined_dimensions binding m in
-       *)
-
       let () = FVI.check_point_in_p srk ~level:`debug binding m p' in
       logf ~level:`debug
         "abstract_terms_by_two_phase_elim: Eliminating dimensions @[%a@] using real QE for @[%a@]@;"
         (Format.pp_print_list ~pp_sep:Format.pp_print_space Format.pp_print_int)
         (IntSet.to_list dimensions_in_terms)
         (P.pp Format.pp_print_int) p';
-
-      (* TODO: Check if model is sufficiently extended for the following. *)
       P.local_project m (IntSet.to_list dimensions_in_terms) p'
       |> P.dd_of ambient_dim
     in

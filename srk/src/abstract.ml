@@ -579,6 +579,60 @@ end
 module ConvexHull = struct
   type t = DD.closed DD.t
 
+  let of_model_lira_using_binding binding solver man terms =
+    let srk = Solver.get_context solver in
+    let phi = Solver.get_formula solver in
+    (* Map linear terms over the symbols in phi to the range [-1, n], such that
+       -1 -> -1, 0 -> term(0), ... n -> term(n) *)
+    let basis = BatDynArray.create () in
+    let map =
+      let neg_one = V.of_term QQ.one Linear.const_dim in
+      BatArray.fold_lefti (fun map i t ->
+          let vec = Linear.linterm_of srk t in
+          BatDynArray.add basis vec;
+          LM.may_add vec (V.of_term QQ.one i) map)
+        (LM.add_exn neg_one neg_one LM.empty)
+        terms
+      |> Symbol.Set.fold (fun symbol map ->
+          let symbol_vec = V.of_term QQ.one (Linear.dim_of_sym symbol) in
+          let ambient_dim = BatDynArray.length basis in
+          match LM.add symbol_vec (V.of_term QQ.one ambient_dim) map with
+          | Some map' ->
+            BatDynArray.add basis symbol_vec;
+            map'
+          | None -> map)
+        (symbols phi)
+    in
+    let dim = Array.length terms in
+    let elim_dims = BatList.of_enum (dim -- (BatDynArray.length basis)) in
+    let abstract m (p, _l) =
+      let cube =
+        BatEnum.map (fun (ckind, v) ->
+            try
+              (ckind , LM.apply map v |> BatOption.get)
+            with
+            | Invalid_argument s ->
+               Format.printf "linear map does not have @[%a@] in domain@;"
+                 (Linear.QQVector.pp_term Format.pp_print_int) v;
+               invalid_arg s
+          )
+          (Polyhedron.enum_constraints p)
+        |> Polyhedron.of_constraints
+      in
+      let valuation i =
+        try
+          Linear.evaluate_affine m (BatDynArray.get basis i)
+        with
+        | Invalid_argument s ->
+           Format.printf "valuation: cannot find dimension %d@;" i;
+           invalid_arg s
+      in
+      Polyhedron.local_project valuation elim_dims cube
+      |> Polyhedron.dd_of ~man dim
+    in
+    FormulaVector.abstract_implicant srk binding
+      (`ImplicantOnly abstract) phi
+
   let of_model_lira solver man terms =
     let srk = Solver.get_context solver in
     let phi = Solver.get_formula solver in
@@ -669,6 +723,10 @@ module ConvexHull = struct
       DD.of_constraints_closed ~man dim constraints
 
   let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
+    let binding = FormulaVector.mk_standard_binding
+                    (Solver.get_context solver) (Solver.get_formula solver)
+    in
+
     let join = DD.join in
     let dim = Array.length terms in
     let srk = Solver.get_context solver in
@@ -695,13 +753,21 @@ module ConvexHull = struct
       |> mk_and srk
     in
     let of_model = match Solver.(solver.solver) with
-      | `LIRA _ -> of_model_lira solver man terms
+      | `LIRA _ ->
+         (* of_model_lira solver man terms *)
+         (fun interp ->
+           let using_binding =
+             of_model_lira_using_binding binding solver man terms interp in
+           using_binding)
       | `LIRR _ -> of_model_lirr solver man terms
     in
     let domain =
       { join; top; of_model; bottom; formula_of }
     in
     Solver.abstract solver domain
+
+  let _of_model_lira = of_model_lira
+
 end
 
 let vanishing_space srk phi terms =

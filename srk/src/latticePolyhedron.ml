@@ -447,7 +447,7 @@ end = struct
         ~free_dims_start:(max_assigned_dim + 1)
     in
     (* The elimination scheme for ITE only introduces a new symbol to replace an
-       ITE term and flattens the condition into a disjunction; 
+       ITE term and flattens the condition into a disjunction;
        the result has exactly the same mod terms, but has no ITE, so the formula
        becomes linear.
      *)
@@ -509,7 +509,7 @@ end = struct
     in
     formula_of_point srk binding v
 
-  let constraints_of_implicant srk linearize atoms =
+  let constraints_of_implicant srk linearize m atoms =
     let collect (pcons, lcons) literal =
       match Syntax.Formula.destruct srk literal with
       | `Atom (`Arith (sign, t1, t2)) ->
@@ -524,6 +524,29 @@ end = struct
       | `Atom (`IsInt t) ->
          let ((pcond, lcond), linterm) = linearize t in
          (pcond @ pcons, linterm :: lcond @ lcons)
+      | `Not phi ->
+         begin match Syntax.Formula.destruct srk phi with
+         | `Atom (`Arith (`Eq, t1, t2)) ->
+            let (((pcond1, lcond1), v1), ((pcond2, lcond2), v2)) =
+              (linearize t1, linearize t2) in
+            if QQ.lt QQ.zero (Linear.evaluate_affine m (V.sub v1 v2)) then
+              ( (`Pos, V.sub v1 v2) :: pcond1 @ pcond2 @ pcons
+              , lcond1 @ lcond2 @ lcons )
+            else
+              ( (`Pos, V.sub v2 v1) :: pcond1 @ pcond2 @ pcons
+              , lcond1 @ lcond2 @ lcons )
+         | `Atom (`Arith (`Leq, t1, t2)) ->
+            let (((pcond1, lcond1), v1), ((pcond2, lcond2), v2)) =
+              (linearize t1, linearize t2) in
+            ( (`Pos, V.sub v1 v2) :: pcond1 @ pcond2 @ pcons
+            , lcond1 @ lcond2 @ lcons )
+         | `Atom (`Arith (`Lt, t1, t2)) ->
+            let (((pcond1, lcond1), v1), ((pcond2, lcond2), v2)) =
+              (linearize t1, linearize t2) in
+            ( (`Nonneg, V.sub v1 v2) :: pcond1 @ pcond2 @ pcons
+            , lcond1 @ lcond2 @ lcons )
+         | _ -> raise Linear.Nonlinear
+         end
       | _ ->
          logf ~level:`debug "constraints_of_implicant: @[%a@]@;"
            (Syntax.Formula.pp srk) literal;
@@ -629,7 +652,7 @@ end = struct
        let (atom_pcons, atom_lcons) =
          match implicant with
          | None -> assert false
-         | Some atoms -> constraints_of_implicant srk linearize atoms
+         | Some atoms -> constraints_of_implicant srk linearize m atoms
        in
        let (p, l) =
          ( P.of_constraints (BatList.enum atom_pcons)

@@ -144,12 +144,17 @@ let formula_of_dd terms dd =
   if conjuncts = [] then Syntax.mk_true srk
   else Syntax.mk_and srk conjuncts
 
+let simplify srk phi =
+  Syntax.eliminate_ite srk phi
+(* |> Syntax.eliminate_floor_mod_div srk *)
+
 let do_qe keep_quantifiers abstract phi =
   Format.printf "Abstracting @[%a@]@;" (Syntax.Formula.pp srk) phi;
   let (quantifiers, phi) = Quantifier.normalize srk phi in
   let (_quantified_vars, preserved_symbols) =
     free_vars_and_existentials keep_quantifiers
       (quantifiers, phi) in
+  let simplified_phi = simplify srk phi in
   let terms = BatArray.of_enum
                 (BatEnum.map (Syntax.mk_const srk)
                    (Symbol.Set.enum preserved_symbols))
@@ -160,10 +165,10 @@ let do_qe keep_quantifiers abstract phi =
         | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
         | _ -> l
       )
-      (symbols phi) []
+      (symbols simplified_phi) []
   in
   let phi_with_int_constraints =
-    Syntax.mk_and srk (phi :: lattice_constraints) in
+    Syntax.mk_and srk (simplified_phi :: lattice_constraints) in
   let () = Format.printf "phi with lattice constraints: @[%a@]@;"
              (Syntax.Formula.pp srk) phi_with_int_constraints
   in
@@ -366,8 +371,7 @@ let compare_projection
   let comparisons = test_all_pairs test hulls in
   let unexpected = List.filter (fun (_, _, _, b) -> not b) comparisons in
   match unexpected with
-  | [] -> Format.printf "Result: all hulls equal@;"
-  | _ ->
+  | _ :: _ ->
      List.iter (fun (meth1, meth2, result, _) ->
          Format.printf "Result: unsound projection (%s is %a %s)@;"
            (string_of meth1)
@@ -379,7 +383,24 @@ let compare_projection
            result
            (string_of meth2)
        ) unexpected
-
+  | [] ->
+     let unequal_hulls =
+       List.filter (fun (_, _, comparison, _) -> comparison <> `Equal) comparisons in
+     match unequal_hulls with
+     | _ :: _ ->
+        List.iter (fun (meth1, meth2, result, _) ->
+            Format.printf "Result: Smaller than (%s is %a %s)@;"
+              (string_of meth1)
+              (fun fmt comparison ->
+                match comparison with
+                | `Equal -> assert false
+                | `Smaller -> Format.fprintf fmt "smaller than"
+                | `Incomparable -> Format.fprintf fmt "incomparable with")
+              result
+              (string_of meth2)
+          ) unequal_hulls
+     | [] -> Format.printf "Result: all hulls equal@;"
+    
 let spec_list = [
   ("-simsat",
    Arg.String (fun file ->

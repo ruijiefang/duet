@@ -615,13 +615,24 @@ module ConvexHull = struct
           BatList.iter (fun atom ->
               match Interpretation.destruct_atom srk atom with
               | `ArithComparison (p, x, y) ->
-                let t =
-                  V.sub (Linear.linterm_of srk y) (Linear.linterm_of srk x)
-                  |> LM.apply map
-                  |> BatOption.get
-                in
-                let p = match p with `Eq -> `Zero | `Leq -> `Nonneg | `Lt -> `Pos in
-                BatEnum.push constraints (p, t)
+                 (* NK: Mod terms should be eliminated from the formula before
+                    reaching this stage, so any mod term that comes up here
+                    must be due to [destruct_atom] translating Int constraints
+                    into mod-term equalities.
+                    Ite terms should also have been eliminated.
+                    TODO: Check if there are other non-linear terms.
+                  *)
+                 begin try
+                   let t =
+                     V.sub (Linear.linterm_of srk y) (Linear.linterm_of srk x)
+                     |> LM.apply map
+                     |> BatOption.get
+                   in
+                   let p = match p with `Eq -> `Zero | `Leq -> `Nonneg | `Lt -> `Pos in
+                   BatEnum.push constraints (p, t)
+                 with
+                 | Linear.Nonlinear -> ()
+                 end
               | _ -> ())
             cube;
           Polyhedron.of_constraints constraints

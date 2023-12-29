@@ -211,7 +211,7 @@ let compare_integer_hull file =
                       (Syntax.Symbol.Set.max_elt (Syntax.symbols phi)) + 1 in
   Format.printf "Computing mixed hull@;";
 
-  let binding = LatticePolyhedron.mk_standard_binding srk phi in
+  let binding = FormulaVector.mk_standard_binding srk phi in
   let mixed_hull =
     LatticePolyhedron.abstract_lattice_hull srk binding `Mixed
       ~ambient_dim phi in

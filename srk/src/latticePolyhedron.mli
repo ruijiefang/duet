@@ -10,54 +10,6 @@
     explicitly.
  *)
 
-(** A binding consists a map that interprets symbols as dimensions and a map
-    that interprets dimensions as symbols and terms.
-*)
-type 'a binding
-
-(** [symbol_of_dim] and [term_of_adjoined_dim] need to be consistent on the
-    intersection of their domains 
-    (i.e., [mk_const (symbol_of_dim dim) = term_of_adjoined_dim dim] for all
-    [dim] such that [symbol_of_dim dim] and [term_of_adjoined_dim dim] are both
-    not None),
-    and [symbol_of_dim (dim_of_symbol s) = s] for all symbols [s].
- *)
-val mk_binding:
-  'a Syntax.context ->
-  (int -> Syntax.symbol option) ->
-  ?term_of_adjoined_dim: 'a Syntax.arith_term SrkUtil.Int.Map.t ->
-  (Syntax.symbol -> int) ->
-  free_dims_start: int -> 'a binding
-
-(** Add dimensions to linearize mod terms, i.e., terms of the form [t mod r]
-    for a term t and a constant rational r, in the formula.
- *)
-val add_mod_term_dimensions:
-  'a Syntax.context -> 'a binding -> 'a Syntax.formula -> 'a binding
-
-val mod_term_dimensions: 'a binding -> int list
-
-(** Terms of the array are placed in dimensions 0 --^ length(array), 
-    followd by the image of [Syntax.int_of_symbol] on the symbols of the formula,
-    followed by dimensions corresponding to quotient and remainder symbols
-    for each term of the form [t % r] (t a term, r a rational constant; 
-    "mod term") occurring in the formula.
- *)
-val mk_standard_binding:
-  'a Syntax.context -> ?project_onto:'a Syntax.arith_term Array.t ->
-  'a Syntax.formula -> 'a binding
-
-val abstract_implicant:
-  'a Syntax.context -> 'a binding ->
-  [ `ImplicantOnly of ((int -> Q.t) -> Polyhedron.t * IntLattice.t -> 'b)
-  | `WithTerms of
-      term_defs: (Polyhedron.constraint_kind * Linear.QQVector.t) list ->
-      dimensions_in_terms: SrkUtil.Int.Set.t ->
-      (int -> QQ.t) -> (Polyhedron.t * IntLattice.t) -> 'b
-  ] ->
-  'a Syntax.formula ->
-  [> `LIRA of 'a Interpretation.interpretation ] -> 'b
-
 (** Given a point [m] in the intersection of [P] and [L],
     [local_mixed_lattice_hull m P L = P'] is a subpolyhedron in the lattice hull
     of [P] with respect to L that contains [m].
@@ -78,7 +30,7 @@ val local_mixed_lattice_hull:
     occurring in the formula (computed via [dim_of_symbol]) + 1.
  *)
 val mixed_lattice_hull:
-  'a Syntax.context -> 'a binding -> ambient_dim: int ->
+  'a Syntax.context -> 'a FormulaVector.binding -> ambient_dim: int ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 (** `PureGomoryChvatal is guaranteed to work only when all variables are
@@ -89,7 +41,8 @@ val mixed_lattice_hull:
     occurring in the formula (computed via [dim_of_symbol]) + 1.
  *)
 val abstract_lattice_hull:
-  'a Syntax.context -> 'a binding -> [`Mixed | `PureGomoryChvatal] -> ambient_dim:int ->
+  'a Syntax.context -> 'a FormulaVector.binding ->
+  [`Mixed | `PureGomoryChvatal] -> ambient_dim:int ->
   'a Syntax.formula -> DD.closed DD.t
 
 val partition_vertices_by_integrality:
@@ -157,7 +110,7 @@ val local_project_cooper:
 exception PositiveIneqOverRealVar of Linear.QQVector.t * int
 
 val project_cooper:
-  'a Syntax.context -> 'a binding -> eliminate: int list ->
+  'a Syntax.context -> 'a FormulaVector.binding -> eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list ->
   DD.closed DD.t * IntLattice.t
@@ -171,7 +124,7 @@ val project_cooper:
     the variable is to be eliminated or not).
  *)
 val project_cooper_and_hull:
-  'a Syntax.context -> 'a binding -> eliminate: int list ->
+  'a Syntax.context -> 'a FormulaVector.binding -> eliminate: int list ->
   [`RoundLowerBound of ceiling | `NonstrictIneqsOnly | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
@@ -184,14 +137,14 @@ val project_cooper_and_hull:
     converge otherwise.
  *)
 val hull_and_project_cooper:
-  'a Syntax.context -> 'a binding -> eliminate: int list ->
+  'a Syntax.context -> 'a FormulaVector.binding -> eliminate: int list ->
   [ `RoundLowerBound of ceiling
   | `NonstrictIneqsOnly
   | `RoundStrictWhenVariablesIntegral] ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val hull_and_project_real:
-  'a Syntax.context -> 'a binding -> eliminate: int list ->
+  'a Syntax.context -> 'a FormulaVector.binding -> eliminate: int list ->
   (Polyhedron.t * IntLattice.t) list -> DD.closed DD.t
 
 val abstract_by_local_project_cooper_and_hull:

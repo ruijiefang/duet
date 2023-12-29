@@ -7,6 +7,8 @@ module IntMap = SrkUtil.Int.Map
 
 include Log.Make(struct let name = "srk.formulaVector" end)
 
+let () = my_verbosity_level := `trace
+
 (* [t mod b |-> (q, r)], where b > 0 and
      [t = qb + r /\ Int(q) /\ 0 <= r < b] for all valuations.
  *)
@@ -330,7 +332,13 @@ let mk_standard_binding srk ?(translate_mod_terms=false)
   let base = Array.length project_onto in
   let dim_of_symbol sym = base + (Syntax.int_of_symbol sym) in
   let max_assigned_dim =
-    base + (Syntax.int_of_symbol (Syntax.Symbol.Set.max_elt (Syntax.symbols phi)))
+    let max_dim =
+      try
+        Syntax.int_of_symbol (Syntax.Symbol.Set.max_elt (Syntax.symbols phi))
+      with
+      | Not_found -> -1
+    in
+    base + max_dim
   in
   let symbol_of_dim dim =
     if base <= dim && dim <= max_assigned_dim then

@@ -121,7 +121,12 @@ let vector_of dim_of_symbol mod_term_to_dims substitutions_used =
       (fun v1 v2 ->
         let (v1', r2) = normalize_mod v1 v2 in
         match BatMap.find_opt (v1', r2) mod_term_to_dims with
-        | None -> invalid_arg "vector_of: binding incomplete to translate mod"
+        | None ->
+           invalid_arg
+             (Format.asprintf
+                "vector_of: binding incomplete to translate @[%a@] mod %a"
+                (V.pp_term Format.pp_print_int) v1' QQ.pp r2
+             )
         | Some (_q_dim, r_dim) ->
            substitutions_used := (v1', r2) :: !substitutions_used;
            V.of_term QQ.one r_dim
@@ -151,6 +156,7 @@ let define_quotient_remainder (a, b) mod_term_to_dims =
       [evaluate term interp = evaluate_affine v (valuation_of binding interp)].
  *)
 let linearize_term srk dim_of_symbol mod_term_to_dims term =
+  logf ~level:`debug "linearize_term: @[%a@]@;" (Syntax.ArithTerm.pp srk) term;
   let substitutions_used = ref [] in
   let linterm =
     eval_linear_term srk
@@ -319,7 +325,8 @@ let add_mod_term_dimensions srk binding phi =
     phi;
   !binding_ref
 
-let mk_standard_binding srk ?(project_onto = Array.of_list []) phi =
+let mk_standard_binding srk ?(translate_mod_terms=false)
+      ?(project_onto = Array.of_list []) phi =
   let base = Array.length project_onto in
   let dim_of_symbol sym = base + (Syntax.int_of_symbol sym) in
   let max_assigned_dim =
@@ -339,12 +346,17 @@ let mk_standard_binding srk ?(project_onto = Array.of_list []) phi =
     mk_binding srk symbol_of_dim ~term_of_adjoined_dim dim_of_symbol
       ~free_dims_start:(max_assigned_dim + 1)
   in
-  (* The elimination scheme for ITE only introduces a new symbol to replace an
+  if translate_mod_terms then
+    (* The elimination scheme for ITE only introduces a new symbol to replace an
        ITE term and flattens the condition into a disjunction;
        the result has exactly the same mod terms, but has no ITE, so the formula
        becomes linear.
+       TODO: This isn't a good solution, because [eliminate_ite] adds new symbols
+       to [srk] that are never used again.
    *)
-  add_mod_term_dimensions srk initial_binding (Syntax.eliminate_ite srk phi)
+    add_mod_term_dimensions srk initial_binding (Syntax.eliminate_ite srk phi)
+  else
+    initial_binding
 
 let to_inequality srk binding (ckind, v) =
   let zero = Syntax.mk_zero srk in

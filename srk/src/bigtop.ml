@@ -146,7 +146,7 @@ let formula_of_dd terms dd =
 
 let simplify srk phi =
   Syntax.eliminate_ite srk phi
-(* |> Syntax.eliminate_floor_mod_div srk *)
+  |> Syntax.eliminate_floor_mod_div srk
 
 let do_qe keep_quantifiers abstract phi =
   Format.printf "Abstracting @[%a@]@;" (Syntax.Formula.pp srk) phi;

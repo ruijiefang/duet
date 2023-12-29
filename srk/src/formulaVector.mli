@@ -41,7 +41,8 @@ val add_mod_term_dimensions:
     constant rational r and term t); there is one for each such term.
  *)
 val mk_standard_binding:
-  'a Syntax.context -> ?project_onto:'a Syntax.arith_term array ->
+  'a Syntax.context -> ?translate_mod_terms:bool ->
+  ?project_onto:'a Syntax.arith_term array ->
   'a Syntax.formula -> 'a binding
 
 val mod_term_dimensions: 'a binding -> int list

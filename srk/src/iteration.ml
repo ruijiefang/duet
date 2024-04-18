@@ -860,8 +860,8 @@ let invariant_transition_predicates srk tf predicates =
 
 (* Each cell is i, (pos_pred_indices, neg_pred_indices), cell_formula *)
 let invariant_partition srk candidates tf =
-    let tf = TF.linearize srk tf in
-    logf "linearized transition formula to be partitioned: %a" (Formula.pp srk) (TF.formula tf);
+    let tf = if get_theory srk = `LIRR then tf else TF.linearize srk tf in
+    logf "formula to be partitioned: %a" (Formula.pp srk) (TF.formula tf);
     let predicates =
       invariant_transition_predicates srk tf candidates
       |> BatArray.of_list
@@ -1052,11 +1052,14 @@ let phase_graph srk tf candidates algebra =
 
 let phase_mp srk candidate_predicates tf nonterm =
   let star tf =
-    let module E = LossyTranslation in
-    let k = mk_symbol srk `TyInt in
-    let exists x = x != k && (TF.exists tf) x in
-    TF.make ~exists
-      (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf)) (TF.symbols tf)
+      let module E = (val if get_theory srk = `LIRR then 
+        (module LIRR : PreDomain) 
+      else (module LossyTranslation))
+      in 
+      let k = mk_symbol srk `TyInt in
+      let exists x = x != k && (TF.exists tf) x in
+      TF.make ~exists
+        (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf)) (TF.symbols tf)
   in
   let algebra = tf_algebra srk (TF.symbols tf) star in
   let wg = phase_graph srk tf candidate_predicates algebra in

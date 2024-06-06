@@ -752,7 +752,10 @@ end = struct
   (* Same logic as above *)
   let local_hull_and_project_real m ~eliminate (p, l) =
     let hulled = Hull.local_mixed_lattice_hull m (p, l) in
-    let projected = Polyhedron.local_project m eliminate hulled in
+    (* This may diverge!
+       let projected = P.local_project m eliminate hulled in
+     *)
+    let projected = P.project eliminate hulled in
     projected
 
   let formula_of srk binding dd =

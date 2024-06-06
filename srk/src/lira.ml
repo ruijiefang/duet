@@ -461,8 +461,8 @@ end = struct
     in
     let (sum_of_fractional, fractional, residue_to_floor) =
       Linear.QQVector.fold (fun dim coeff (sum, fractional, residue) ->
-          if not (DimensionBinding.is_frac_dim binding dim) then
-            (* constant dimension *)
+          if not (DimensionBinding.is_frac_dim binding dim)
+             && (dim = Linear.const_dim) then
             (sum, fractional, Linear.QQVector.add_term coeff dim residue)
           else
             begin

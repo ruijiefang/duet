@@ -135,7 +135,7 @@ module Solver = struct
   type 'a t =
     { solver : 'a smt_solver
     ; context : 'a context
-    ; formula : 'a formula
+    ; mutable formula : 'a formula
     ; mutable models : 'a smt_model list }
 
   let make srk ?(theory=get_theory srk) formula =
@@ -211,6 +211,20 @@ module Solver = struct
         solver.models
     in
     with_blocking solver fix init
+
+  (* Does a model satisfy a given formula? *)
+  let sat srk m phi = match m with
+    | `LIRA m -> Interpretation.evaluate_formula m phi
+    | `LIRR m -> LirrSolver.Model.evaluate_formula srk m phi
+
+  let add s phis =
+    let srk = get_context s in
+    s.formula <- mk_and srk (s.formula::phis);
+    s.models <- List.filter (fun m -> List.for_all (sat srk m) phis) s.models;
+    match s.solver with
+    | `LIRA s -> Smt.StdSolver.add s phis
+    | `LIRR s -> LirrSolver.Solver.add s phis
+
 end
 
 

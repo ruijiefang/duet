@@ -81,6 +81,11 @@ module Solver : sig
      called within a procedure that passed to [with_blocking], to ensure that
      blocking clauses are removed.  *)
   val block : 'a t -> 'a formula -> unit
+
+  (** [add s phis] each formula in [phis] to the formula associated with the
+     solver. *)
+  val add : 'a t -> ('a formula) list -> unit
+
 end
 
 (** The sign domain represents formulas of the form (/\ t <> 0), where t

@@ -96,6 +96,8 @@ let pp pp_dim formatter polyhedron =
   Format.fprintf formatter "@[<v 0>%a@]"
     (SrkUtil.pp_print_enum_nobox ~pp_sep pp_elt) (enum_constraints polyhedron)
 
+let is_bottom p = Abstract0.is_bottom (Abstract0.manager p) p
+let is_top p = Abstract0.is_top (Abstract0.manager p) p
 let equal p q = Abstract0.is_eq (Abstract0.manager p) p q
 let join p q = Abstract0.join (Abstract0.manager p) p q
 let meet p q = Abstract0.meet (Abstract0.manager p) p q

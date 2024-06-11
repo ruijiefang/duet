@@ -5,27 +5,7 @@ open Test_pervasives
 
 module V = Linear.QQVector
 
-let mk_polyhedron halfspaces =
-  BatList.enum halfspaces
-  /@ (fun (v, a) -> (`Nonneg,
-                    (V.add_term (QQ.of_int (-a)) Linear.const_dim (mk_vector v))))
-  |> Polyhedron.of_constraints
-
-let mk_polyhedron_from_generators mk_vector dim vertices rays =
-  (List.map (fun v -> (`Vertex, mk_vector v)) vertices)
-  @ (List.map (fun v -> (`Ray, mk_vector v)) rays)
-  |> BatList.enum
-  |> DD.of_generators dim
-  |> Polyhedron.of_dd
-
 let qqify v = List.map (fun (a, b) -> QQ.of_frac a b) v
-
-let assert_equal_polyhedron p q =
-  assert_equal ~cmp:Polyhedron.equal p q
-
-let assert_equal_dd p q =
-  assert_equal ~cmp:DD.equal p q
-
 
 let test_vertical_integer_hull k () =
   (*

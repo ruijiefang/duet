@@ -19,7 +19,6 @@ type 'a t = 'a Abstract0.t
 (** Pretty print *)
 val pp : (Format.formatter -> int -> unit) -> Format.formatter -> 'a t -> unit
 
-
 (** Compute double-description polyhedron from its generators. *)
 val of_generators : ?man:(closed Apron.Manager.t) ->
   int ->
@@ -53,6 +52,12 @@ val meet : 'a t -> 'a t -> 'a t
 
 (** Test whether two polyhedra have exactly the same points *)
 val equal : 'a t -> 'a t -> bool
+
+(** Test whether a polyhedron is empty *)
+val is_bottom : 'a t -> bool
+
+(** Test whether a polyhedron is the entire ambient space *)
+val is_top : 'a t -> bool
 
 (** Test whether a constraint is satisfied by all points in a polyhedron. *)
 val implies : 'a t -> (constraint_kind * V.t) -> bool

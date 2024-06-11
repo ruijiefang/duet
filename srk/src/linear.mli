@@ -30,7 +30,7 @@ module QQVector : sig
   (** Are all entries integers? *)
   val is_integral : t -> bool
 
-  (** Find common denominator of all entries.  Multiplying by the cmmon
+  (** Find common denominator of all entries.  Multiplying by the common
      denominator yields an integral vector. *)
   val common_denominator : t -> ZZ.t
 

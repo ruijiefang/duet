@@ -49,7 +49,7 @@ type ('a, 'b) domain =
   ; top : 'b
   ; bottom : 'b }
   
-(** An solver contains a single formula that can be abstracted in various ways
+(** A solver contains a single formula that can be abstracted in various ways
    (convex hull, affine hull, sign analysis, ...); the solver allows different
    abstraction routines to share the work of computing a diverse set of models
     of the formula *)

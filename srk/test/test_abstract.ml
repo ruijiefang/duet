@@ -392,4 +392,34 @@ let suite = "Abstract" >::: [
     "degree3_abstract" >:: degree3_abstract;
     "lt_abstract" >:: lt_abstract;
     "abstract_pc" >:: abstract_pc
+    ; "conv_hull" >:: (fun () ->
+        let open Infix in
+        let phi =
+          (((int 1) <= x) && x <= y && y <= (int 2)
+          || (int 0) <= y && y <= (int 1) && x = y)
+        in
+        let p =
+          mk_polyhedron [ ([1; 0], 0)
+                        ; ([-1; 0], -2)
+                        ; ([0; 1], 3)
+                        ; ([0; -1], -3)]
+          |> Polyhedron.dd_of 2
+        in
+        assert_equal_dd p (Abstract.conv_hull srk phi [| x; int 3 |]))
+
+    ; "conv_hull2" >:: (fun () ->
+        let open Infix in
+        let phi =
+          (((int 1) <= x) && x <= y && y <= (int 2)
+           || (int 0) <= y && y <= (int 1) && x = y)
+        in
+        let p =
+          mk_polyhedron [ ([1; 0], 0)
+                        ; ([-1; 0], -2)
+                        ; ([1; -1], 0)
+                        ; ([-1; 1], 0)]
+          |> Polyhedron.dd_of 2
+        in
+        assert_equal_dd p (Abstract.conv_hull srk phi [| x; x |]))
+
   ]

@@ -584,14 +584,27 @@ module ConvexHull = struct
     let srk = Solver.get_context solver in
     let phi = Solver.get_formula solver in
     (* Map linear terms over the symbols in phi to the range [-1, n], such that
-       -1 -> -1, 0 -> term(0), ... n -> term(n) *)
+       -1 -> -1, 0 -> term(0), ... n -> term(n).
+       dim_constraints is the set of linear relations among -1, term(0), ..., term(n)
+    *)
     let basis = BatDynArray.create () in
+    let dim_constraints = BatEnum.empty () in
     let map =
       let neg_one = V.of_term QQ.one Linear.const_dim in
       BatArray.fold_lefti (fun map i t ->
           let vec = Linear.linterm_of srk t in
           BatDynArray.add basis vec;
-          LM.may_add vec (V.of_term QQ.one i) map)
+          match LM.add vec (V.of_term QQ.one i) map with
+          | Some map -> map
+          | None ->
+            (* vec already belongs to the domain of map.  Add a constraint that
+               i = map(vec) *)
+            let v = match LM.apply map vec with
+              | Some v -> v
+              | None -> assert false
+            in
+            BatEnum.push dim_constraints (`Zero, V.add_term (QQ.of_int (-1)) i v);
+            map)
         (LM.add_exn neg_one neg_one LM.empty)
         terms
       |> Symbol.Set.fold (fun symbol map ->
@@ -606,6 +619,7 @@ module ConvexHull = struct
     in
     let dim = Array.length terms in
     let elim_dims = BatList.of_enum (dim -- (BatDynArray.length basis)) in
+    let dim_constraint_polyhedron = Polyhedron.of_constraints dim_constraints in
     function
     | `LIRR _ -> assert false
     | `LIRA interp ->
@@ -634,6 +648,7 @@ module ConvexHull = struct
           (BatDynArray.get basis i)
       in
       Polyhedron.local_project valuation elim_dims cube
+      |> Polyhedron.meet dim_constraint_polyhedron
       |> Polyhedron.dd_of ~man dim
 
   let of_model_lirr solver man terms =

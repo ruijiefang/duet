@@ -114,3 +114,10 @@ val constraint_space : t -> Linear.QQVectorSpace.t
 val dd_of : ?man:(Polka.loose Polka.t Apron.Manager.t) -> int -> t -> DD.closed DD.t
 val nnc_dd_of : ?man:(Polka.strict Polka.t Apron.Manager.t) -> int -> t -> DD.nnc DD.t
 val of_dd : 'a DD.t -> t
+
+(** Give a polyhedron [p], a rational point [q] in the polyhedron and an
+   integer point [z] in the polyhedron (in an ambient space of dimension [n]),
+   find an integer point in [p] that is close to [q].  From Lemma 4.8 of
+   Haase, Krishna, Madnani, Mishra, Zetzsche: "An efficient quantifier
+   elimination procedure for Presburger arithmetic", ICALP 2024.  *)
+val close_integral_point : t -> rational:V.t -> integer:V.t -> int -> V.t

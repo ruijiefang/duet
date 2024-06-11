@@ -389,3 +389,47 @@ module NormalizCone = struct
 end
 
 let hilbert_basis = NormalizCone.hilbert_basis
+
+let intersect_halfspaces cone halfspaces =
+  let intersect cone vec =
+    (* Partition rays of the cone into the ones that lie strictly in the halfspace,
+       strictly outside, and on the boundary *)
+    let (pos, neg, zero) =
+      List.fold_left (fun (pos, neg, zero) ray ->
+          let dot = V.dot ray vec in
+          if QQ.lt dot QQ.zero then
+            (pos, ray::neg, zero)
+          else if QQ.lt QQ.zero dot then
+            (ray::pos, neg, zero)
+          else
+            (pos, neg, ray::zero))
+        ([], [], [])
+        (generators cone)
+    in
+    (* For each pair (p, q) of a vector strictly inside / strictly outside the
+       halfspace, find a ray in cone(p,q) on the boundary.  These mid-rays,
+       along with the rays that are already inside the halfspace, generate the
+       intersection. *)
+    let rays =
+      List.fold_left (fun rays neg_ray ->
+          List.fold_left (fun rays pos_ray ->
+              let mid_ray =
+                V.add
+                  (V.scalar_mul (QQ.negate (V.dot neg_ray vec)) pos_ray)
+                  (V.scalar_mul (V.dot pos_ray vec) neg_ray)
+              in
+              (* TODO: implement adjacency heuristics to discard redundant rays. *)
+              if V.is_zero mid_ray then
+                rays
+              else
+
+                let gcd = V.gcd_entries mid_ray in
+                (V.scalar_mul (QQ.inverse gcd) mid_ray)::rays)
+            rays
+            pos)
+        (pos @ zero)
+        neg
+    in
+    make ~rays ~lines:[] cone.dim
+  in
+  List.fold_left intersect cone halfspaces

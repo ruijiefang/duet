@@ -431,50 +431,20 @@ module LossyTranslation = struct
       |> Nonlinear.linearize srk
     in
     let delta =
-      List.map (fun (s,_) ->
-          let name = "delta_" ^ (show_symbol srk s) in
-          mk_symbol srk ~name (typ_symbol srk s))
+      List.map
+        (fun (s,s') -> mk_sub srk (mk_const srk s') (mk_const srk s))
         (TF.symbols tf)
+      |> Array.of_list
     in
-    let delta_map =
-      List.fold_left2 (fun map delta (s,s') ->
-          Symbol.Map.add
-            delta
-            (mk_sub srk (mk_const srk s') (mk_const srk s))
-            map)
-        Symbol.Map.empty
-        delta
-        (TF.symbols tf)
-    in
-    let delta_polyhedron =
-      let man = Polka.manager_alloc_strict () in
-      let exists x = Symbol.Map.mem x delta_map in
-      let delta_constraints =
-        Symbol.Map.fold (fun s diff xs ->
-            (mk_eq srk (mk_const srk s) diff)::xs)
-          delta_map
-          []
-      in
-      Abstract.abstract ~exists srk man (mk_and srk (phi::delta_constraints))
-      |> SrkApron.formula_of_property
-    in
-    let constraint_of_atom atom =
-      match Formula.destruct srk atom with
-      | `Atom (`Arith (op, s, t)) ->
-        let t = V.sub (Linear.linterm_of srk t) (Linear.linterm_of srk s) in
-        let (k, t) = V.pivot Linear.const_dim t in
-        let term = substitute_map srk delta_map (Linear.of_linterm srk t) in
-        begin match op with
-          | `Leq | `Lt -> (term, `Geq, QQ.negate k)
-          | `Eq -> (term, `Eq, QQ.negate k)
-        end
-      | _ -> assert false
-    in
-    match Formula.destruct srk delta_polyhedron with
-      | `And xs -> List.map constraint_of_atom xs
-      | `Tru -> []
-      | `Fls -> [mk_real srk QQ.zero, `Eq, QQ.one]
-      | _ -> [constraint_of_atom delta_polyhedron]
+    DD.enum_constraints (ConvexHull.conv_hull srk phi delta)
+    /@ (fun (kind, vec) ->
+        let (k, vec) = V.pivot Linear.const_dim vec in
+        let t = Linear.term_of_vec srk (Array.get delta) vec in
+        let k = QQ.negate k in
+        match kind with
+        | `Zero -> (t, `Eq, k)
+        | `Nonneg | `Pos -> (t, `Geq, k))
+    |> BatList.of_enum
 
   let exp srk _ loop_counter lr =
     List.map (fun (delta, op, c) ->

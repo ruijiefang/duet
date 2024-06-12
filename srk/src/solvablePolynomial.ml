@@ -2121,7 +2121,7 @@ module SolvablePolynomialLIRR = struct
     in
     let ideal =
       PC.get_ideal
-        (LirrSolver.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+        (Lirr.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
     in
     abstract_cone ideal
 
@@ -2203,7 +2203,7 @@ module SolvablePolynomialLIRRQuadratic = struct
     in
     let ideal =
       PC.get_ideal
-        (LirrSolver.abstract srk (fun cone ->
+        (Lirr.abstract srk (fun cone ->
              PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
     in
     abstract_cone ideal

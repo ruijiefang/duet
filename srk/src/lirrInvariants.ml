@@ -4,7 +4,6 @@ open BatPervasives
 module TF = TransitionFormula
 module P = Polynomial
 module PC = PolynomialCone
-module WTS = LirrSolver
 module V = Linear.QQVector
 
 
@@ -100,7 +99,7 @@ let compute_LIRR_invariants srk tr_symbols loop_counter tf =
   let is_dx x = Symbol.Map.mem x dx_subst_x in
   let inv_functionals =
     mk_exists_consts srk is_dx formula_with_dx
-    |> WTS.abstract srk (project_down_to_linear is_dx)
+    |> Lirr.abstract srk (project_down_to_linear is_dx)
     |> PC.get_ideal
     |> find_inv_functionals is_dx
     |> List.map (Linear.term_of_vec
@@ -141,7 +140,7 @@ let compute_LIRR_invariants srk tr_symbols loop_counter tf =
                       (is_invariant_symbol % symbol_of_int % fst)
                       (P.Monomial.enum m))
     in
-    WTS.abstract srk cl existential_formula
+    Lirr.abstract srk cl existential_formula
   in
   (* Convert polynomial to term, substituting z variables for corresponding
      invariant functionals *)

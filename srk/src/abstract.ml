@@ -118,7 +118,7 @@ let abstract ?exists:(p=fun _ -> true) srk man phi =
 
 type 'a smt_model =
   [ `LIRA of 'a Interpretation.interpretation
-  | `LIRR of LirrSolver.Model.t ]
+  | `LIRR of Lirr.Model.t ]
 
 type ('a, 'b) domain =
   { join : 'b -> 'b -> 'b
@@ -130,7 +130,7 @@ type ('a, 'b) domain =
 module Solver = struct
   type 'a smt_solver =
     [ `LIRA of 'a Smt.StdSolver.t
-    | `LIRR of 'a LirrSolver.Solver.t ]
+    | `LIRR of 'a Lirr.Solver.t ]
 
   type 'a t =
     { solver : 'a smt_solver
@@ -142,8 +142,8 @@ module Solver = struct
     let solver =
       match theory with
       | `LIRR ->
-        let s = LirrSolver.Solver.make srk in
-        LirrSolver.Solver.add s [formula];
+        let s = Lirr.Solver.make srk in
+        Lirr.Solver.add s [formula];
         `LIRR s
       | `LIRA ->
         let s = Smt.StdSolver.make srk in
@@ -166,16 +166,16 @@ module Solver = struct
       Smt.StdSolver.pop s 1;
       result
     | `LIRR s ->
-      LirrSolver.Solver.push s;
+      Lirr.Solver.push s;
       let result = f x in
-      LirrSolver.Solver.pop s 1;
+      Lirr.Solver.pop s 1;
       result
 
   let block s phi =
     let not_phi = mk_not (get_context s) phi in
     match s.solver with
     | `LIRA s -> Smt.StdSolver.add s [not_phi]
-    | `LIRR s -> LirrSolver.Solver.add s [not_phi]
+    | `LIRR s -> Lirr.Solver.add s [not_phi]
 
   let get_model s =
     match s.solver with
@@ -188,7 +188,7 @@ module Solver = struct
           `Sat (`LIRA m)
       end
     | `LIRR smt_solver ->
-      begin match LirrSolver.Solver.get_model smt_solver with
+      begin match Lirr.Solver.get_model smt_solver with
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
         | `Sat m ->
@@ -215,7 +215,7 @@ module Solver = struct
   (* Does a model satisfy a given formula? *)
   let sat srk m phi = match m with
     | `LIRA m -> Interpretation.evaluate_formula m phi
-    | `LIRR m -> LirrSolver.Model.evaluate_formula srk m phi
+    | `LIRR m -> Lirr.Model.evaluate_formula srk m phi
 
   let add s phis =
     let srk = get_context s in
@@ -223,7 +223,7 @@ module Solver = struct
     s.models <- List.filter (fun m -> List.for_all (sat srk m) phis) s.models;
     match s.solver with
     | `LIRA s -> Smt.StdSolver.add s phis
-    | `LIRR s -> LirrSolver.Solver.add s phis
+    | `LIRR s -> Lirr.Solver.add s phis
 
 end
 
@@ -305,7 +305,7 @@ module Sign = struct
   let of_model srk terms m =
     let get_sign term = match m with
       | `LIRR m ->
-        begin match LirrSolver.Model.sign srk m term with
+        begin match Lirr.Model.sign srk m term with
           | `Zero -> Zero
           | `Pos -> Pos
           | `Neg -> Neg
@@ -365,7 +365,7 @@ module PredicateAbs = struct
     let srk = Solver.get_context solver in
     let of_model m =
       let sat = match m with
-        | `LIRR m -> (fun p -> LirrSolver.Model.evaluate_formula srk m p)
+        | `LIRR m -> (fun p -> Lirr.Model.evaluate_formula srk m p)
         | `LIRA m -> (fun p -> Interpretation.evaluate_formula m p)
       in
       Expr.Set.filter sat bottom
@@ -484,7 +484,7 @@ module LinearSpan = struct
       match m with
       | `LIRA _ -> assert false
       | `LIRR m ->
-        let ideal = PolynomialCone.get_ideal (LirrSolver.Model.nonnegative_cone m) in
+        let ideal = PolynomialCone.get_ideal (Lirr.Model.nonnegative_cone m) in
         Log.error ">> %a" (I.pp (_pp_numeric_dim "x")) ideal;
         let shift =
           QQXs.substitute (fun i ->
@@ -672,7 +672,7 @@ module ConvexHull = struct
     function
     | `LIRA _ -> assert false
     | `LIRR m ->
-      let cone = LirrSolver.Model.nonnegative_cone m in
+      let cone = Lirr.Model.nonnegative_cone m in
       let map_cone = PolynomialCone.inverse_image cone poly_terms in
       let constraints = BatEnum.empty () in
       I.generators (PolynomialCone.get_ideal map_cone)
@@ -759,7 +759,7 @@ module PolynomialCone = struct
     function
     | `LIRA _ -> assert false
     | `LIRR m ->
-      let cone = LirrSolver.Model.nonnegative_cone m in
+      let cone = Lirr.Model.nonnegative_cone m in
       PolynomialCone.inverse_image cone poly_terms
 
   let abstract solver ?(bottom=PC.make_cone (I.mk_rewrite Monomial.degrevlex [QQXs.one]) []) terms =

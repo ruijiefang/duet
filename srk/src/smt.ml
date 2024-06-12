@@ -117,25 +117,25 @@ module Solver = struct
       { s_add ; s_check ; s_get_model; s_push; s_pop }
 
     | `LIRR ->
-      let s = LirrSolver.Solver.make srk in
-      let s_add = LirrSolver.Solver.add s in
+      let s = Lirr.Solver.make srk in
+      let s_add = Lirr.Solver.add s in
       let s_check assumptions =
-        match LirrSolver.Solver.get_model ~assumptions s with
+        match Lirr.Solver.get_model ~assumptions s with
         | `Sat _ -> `Sat
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
       in
       let s_get_model () =
-        match LirrSolver.Solver.get_model s with
+        match Lirr.Solver.get_model s with
         | `Sat m ->
-          let m_sat phi = LirrSolver.Model.evaluate_formula srk m phi in
-          let m_sign t = LirrSolver.Model.sign srk m t in
+          let m_sat phi = Lirr.Model.evaluate_formula srk m phi in
+          let m_sign t = Lirr.Model.sign srk m t in
           `Sat (Model.{ m_sat; m_sign })
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
       in
-      let s_push () = LirrSolver.Solver.push s in
-      let s_pop = LirrSolver.Solver.pop s in
+      let s_push () = Lirr.Solver.push s in
+      let s_pop = Lirr.Solver.pop s in
       { s_add ; s_check ; s_get_model; s_push; s_pop }
 end
 

@@ -40,7 +40,7 @@ val abstract : ?exists:(symbol -> bool) ->
 
 type 'a smt_model =
   [ `LIRA of 'a Interpretation.interpretation
-  | `LIRR of LirrSolver.Model.t ]
+  | `LIRR of Lirr.Model.t ]
 
 type ('a, 'b) domain =
   { join : 'b -> 'b -> 'b

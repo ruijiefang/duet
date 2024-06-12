@@ -171,25 +171,25 @@ module K = struct
         (transform x)
     in
     let guard = mk_and srk guard in
-    let solver = LirrSolver.Solver.make srk in
+    let solver = Lirr.Solver.make srk in
     let project x =
       match V.of_symbol x with
       | Some _ -> true
       | None -> Symbol.Set.mem x rhs_symbols
     in
-    LirrSolver.Solver.add solver [guard];
+    Lirr.Solver.add solver [guard];
     let rec split disjuncts =
-      match LirrSolver.Solver.get_model solver with
+      match Lirr.Solver.get_model solver with
       | `Unknown -> [x]
       | `Unsat -> disjuncts
       | `Sat m ->
         let term_of_dim dim = mk_const srk (symbol_of_int dim) in
         let disjunct =
-          PolynomialCone.project (LirrSolver.Model.nonnegative_cone m)
+          PolynomialCone.project (Lirr.Model.nonnegative_cone m)
             (project % symbol_of_int)
           |> PolynomialCone.to_formula srk term_of_dim
         in
-        LirrSolver.Solver.add solver [mk_not srk disjunct];
+        Lirr.Solver.add solver [mk_not srk disjunct];
         split ((construct disjunct x_tr)::disjuncts)
     in
     split []

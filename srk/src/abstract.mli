@@ -14,14 +14,6 @@ val affine_hull : 'a context -> 'a formula -> symbol list -> 'a arith_term list
    on all models of [phi]. *)
 val vanishing_space : 'a context -> 'a formula -> 'a arith_term array -> Linear.QQVectorSpace.t
 
-(** Given a formula [F] and terms [t_0,...,t_n], compute the convex hull all
-   points [ { (t_0(x),...,t_n(x)) : x |= F } ]. *)
-val conv_hull : ?man:(DD.closed Apron.Manager.t) ->
-  'a context ->
-  'a formula ->
-  ('a arith_term) array ->
-  DD.closed DD.t
-
 (** [boxify srk phi terms] computes the strongest formula of the form
     [/\ { lo <= t <= hi : t in terms }]
     that is implied by [phi]. *)
@@ -71,6 +63,8 @@ module Solver : sig
   val get_model : 'a t -> [ `Sat of 'a smt_model | `Unsat | `Unknown ]
 
   val get_context : 'a t -> 'a context
+
+  val get_theory : 'a t -> [ `LIRR | `LIRA ]
 
   (** [with_blocking s f x] executed [f x] under a new blocking level.  All
      formulas added to the solver using [block s phi] are forgotten. *)
@@ -125,19 +119,4 @@ module LinearSpan : sig
      with [solver].  The affine equations are represented w.r.t. the basis
      defined by [Syntax.symbol_of_int / Syntax.int_of_symbol].  *)
   val affine_hull : 'a Solver.t -> ?bottom:t -> symbol list -> t
-end
-
-(** Domain of affine inequations over a fixed set of terms *)
-module ConvexHull : sig
-  type t = DD.closed DD.t
-  val abstract : 'a Solver.t ->
-    ?man:(DD.closed Apron.Manager.t) ->
-    ?bottom:(t option) ->
-    'a arith_term array ->
-    t
-end
-
-module PolynomialCone : sig
-  type t = PolynomialCone.t
-  val abstract : 'a Solver.t -> ?bottom:t -> 'a arith_term array -> t
 end

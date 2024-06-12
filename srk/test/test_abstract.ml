@@ -359,7 +359,7 @@ let abstract_pc () =
   in
   let terms = [| x; y |] in
   let solver = Abstract.Solver.make ~theory:`LIRR srk phi in
-  let cone = Abstract.PolynomialCone.abstract solver terms in
+  let cone = ConsequenceCone.abstract solver terms in
   let abstract_phi = PolynomialCone.to_formula srk (Array.get terms) cone in
   assert_equiv_formula psi abstract_phi
 
@@ -405,7 +405,7 @@ let suite = "Abstract" >::: [
                         ; ([0; -1], -3)]
           |> Polyhedron.dd_of 2
         in
-        assert_equal_dd p (Abstract.conv_hull srk phi [| x; int 3 |]))
+        assert_equal_dd p (ConvexHull.conv_hull srk phi [| x; int 3 |]))
 
     ; "conv_hull2" >:: (fun () ->
         let open Infix in
@@ -420,6 +420,6 @@ let suite = "Abstract" >::: [
                         ; ([-1; 1], 0)]
           |> Polyhedron.dd_of 2
         in
-        assert_equal_dd p (Abstract.conv_hull srk phi [| x; x |]))
+        assert_equal_dd p (ConvexHull.conv_hull srk phi [| x; x |]))
 
   ]

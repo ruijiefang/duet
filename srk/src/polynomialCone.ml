@@ -239,7 +239,7 @@ let inverse_image pc map =
      are free to use *)
   let shift =
     QQXs.substitute (fun i ->
-        let i' = if i > 0 then i + dim else i in
+        let i' = if i >= 0 then i + dim else i in
         QQXs.of_dim i')
   in
   (* Elimination order that is compatible with the monomial order of pc; after
@@ -247,11 +247,11 @@ let inverse_image pc map =
   let elim_ord =
     let base_order = Rewrite.get_monomial_ordering pc.zero in
     let split m =
-      BatEnum.fold (fun (t,f) (dim, pow) ->
-          if dim >= dim then
-            (Monomial.mul_term (dim - 2*dim) pow t, f)
+      BatEnum.fold (fun (t,f) (cdim, pow) ->
+          if cdim >= dim then
+            (Monomial.mul_term (cdim - dim) pow t, f)
           else
-            (t, Monomial.mul_term dim pow f))
+            (t, Monomial.mul_term cdim pow f))
         (Monomial.one, Monomial.one)
         (Monomial.enum m)
     in

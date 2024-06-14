@@ -96,3 +96,7 @@ val hilbert_basis : t -> QQVector.t list
 
 (** Pretty print *)
 val pp : Format.formatter -> t -> unit
+
+(** [intersect_halfspaces c1 h] computes the intersection of the cone [c1] and
+   the cone { v : a*v > 0 for all a in h }. *)
+val intersect_halfspaces : t -> QQVector.t list -> t

@@ -6,10 +6,10 @@ include Log.Make(struct let name = "srk.abstract" end)
 
 module V = Linear.QQVector
 module CS = CoordinateSystem
-module LM = Linear.MakeLinearMap(QQ)(SrkUtil.Int)(V)(V)
 module QQXs = Polynomial.QQXs
 module I = Polynomial.Rewrite
 module Monomial = Polynomial.Monomial
+module PC = PolynomialCone
 
 let _pp_numeric_dim base formatter i =
   Format.fprintf formatter "%s_{%d}" base i
@@ -117,7 +117,7 @@ let abstract ?exists:(p=fun _ -> true) srk man phi =
 
 type 'a smt_model =
   [ `LIRA of 'a Interpretation.interpretation
-  | `LIRR of LirrSolver.Model.t ]
+  | `LIRR of Lirr.Model.t ]
 
 type ('a, 'b) domain =
   { join : 'b -> 'b -> 'b
@@ -129,20 +129,20 @@ type ('a, 'b) domain =
 module Solver = struct
   type 'a smt_solver =
     [ `LIRA of 'a Smt.StdSolver.t
-    | `LIRR of 'a LirrSolver.Solver.t ]
+    | `LIRR of 'a Lirr.Solver.t ]
 
   type 'a t =
     { solver : 'a smt_solver
     ; context : 'a context
-    ; formula : 'a formula
+    ; mutable formula : 'a formula
     ; mutable models : 'a smt_model list }
 
   let make srk ?(theory=get_theory srk) formula =
     let solver =
       match theory with
       | `LIRR ->
-        let s = LirrSolver.Solver.make srk in
-        LirrSolver.Solver.add s [formula];
+        let s = Lirr.Solver.make srk in
+        Lirr.Solver.add s [formula];
         `LIRR s
       | `LIRA ->
         let s = Smt.StdSolver.make srk in
@@ -156,6 +156,10 @@ module Solver = struct
 
   let get_formula solver = solver.formula
   let get_context solver = solver.context
+  let get_theory solver =
+    match solver.solver with
+    | `LIRR _ -> `LIRR
+    | `LIRA _ -> `LIRA
 
   let with_blocking s f x =
     match s.solver with
@@ -165,16 +169,16 @@ module Solver = struct
       Smt.StdSolver.pop s 1;
       result
     | `LIRR s ->
-      LirrSolver.Solver.push s;
+      Lirr.Solver.push s;
       let result = f x in
-      LirrSolver.Solver.pop s 1;
+      Lirr.Solver.pop s 1;
       result
 
   let block s phi =
     let not_phi = mk_not (get_context s) phi in
     match s.solver with
     | `LIRA s -> Smt.StdSolver.add s [not_phi]
-    | `LIRR s -> LirrSolver.Solver.add s [not_phi]
+    | `LIRR s -> Lirr.Solver.add s [not_phi]
 
   let get_model s =
     match s.solver with
@@ -187,7 +191,7 @@ module Solver = struct
           `Sat (`LIRA m)
       end
     | `LIRR smt_solver ->
-      begin match LirrSolver.Solver.get_model smt_solver with
+      begin match Lirr.Solver.get_model smt_solver with
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
         | `Sat m ->
@@ -210,6 +214,20 @@ module Solver = struct
         solver.models
     in
     with_blocking solver fix init
+
+  (* Does a model satisfy a given formula? *)
+  let sat srk m phi = match m with
+    | `LIRA m -> Interpretation.evaluate_formula m phi
+    | `LIRR m -> Lirr.Model.evaluate_formula srk m phi
+
+  let add s phis =
+    let srk = get_context s in
+    s.formula <- mk_and srk (s.formula::phis);
+    s.models <- List.filter (fun m -> List.for_all (sat srk m) phis) s.models;
+    match s.solver with
+    | `LIRA s -> Smt.StdSolver.add s phis
+    | `LIRR s -> Lirr.Solver.add s phis
+
 end
 
 
@@ -290,7 +308,7 @@ module Sign = struct
   let of_model srk terms m =
     let get_sign term = match m with
       | `LIRR m ->
-        begin match LirrSolver.Model.sign srk m term with
+        begin match Lirr.Model.sign srk m term with
           | `Zero -> Zero
           | `Pos -> Pos
           | `Neg -> Neg
@@ -350,7 +368,7 @@ module PredicateAbs = struct
     let srk = Solver.get_context solver in
     let of_model m =
       let sat = match m with
-        | `LIRR m -> (fun p -> LirrSolver.Model.evaluate_formula srk m p)
+        | `LIRR m -> (fun p -> Lirr.Model.evaluate_formula srk m p)
         | `LIRA m -> (fun p -> Interpretation.evaluate_formula m p)
       in
       Expr.Set.filter sat bottom
@@ -469,7 +487,7 @@ module LinearSpan = struct
       match m with
       | `LIRA _ -> assert false
       | `LIRR m ->
-        let ideal = PolynomialCone.get_ideal (LirrSolver.Model.nonnegative_cone m) in
+        let ideal = PolynomialCone.get_ideal (Lirr.Model.nonnegative_cone m) in
         Log.error ">> %a" (I.pp (_pp_numeric_dim "x")) ideal;
         let shift =
           QQXs.substitute (fun i ->
@@ -576,200 +594,6 @@ module LinearSpan = struct
           (V.enum vec))
 end
 
-module ConvexHull = struct
-  type t = DD.closed DD.t
-
-  let of_model_lira_using_binding binding solver man terms =
-    let srk = Solver.get_context solver in
-    let phi = Solver.get_formula solver in
-    (* Map linear terms over the symbols in phi to the range [-1, n], such that
-       -1 -> -1, 0 -> term(0), ... n -> term(n) *)
-    let basis = BatDynArray.create () in
-    let map =
-      let neg_one = V.of_term QQ.one Linear.const_dim in
-      BatArray.fold_lefti (fun map i t ->
-          let vec = Linear.linterm_of srk t in
-          BatDynArray.add basis vec;
-          LM.may_add vec (V.of_term QQ.one i) map)
-        (LM.add_exn neg_one neg_one LM.empty)
-        terms
-      |> Symbol.Set.fold (fun symbol map ->
-          let symbol_vec = V.of_term QQ.one (Linear.dim_of_sym symbol) in
-          let ambient_dim = BatDynArray.length basis in
-          match LM.add symbol_vec (V.of_term QQ.one ambient_dim) map with
-          | Some map' ->
-            BatDynArray.add basis symbol_vec;
-            map'
-          | None -> map)
-        (symbols phi)
-    in
-    let dim = Array.length terms in
-    let elim_dims = BatList.of_enum (dim -- (BatDynArray.length basis)) in
-    let abstract m (p, _l) =
-      let cube =
-        BatEnum.map (fun (ckind, v) ->
-            try
-              (ckind , LM.apply map v |> BatOption.get)
-            with
-            | Invalid_argument s ->
-               Format.printf "linear map does not have @[%a@] in domain@;"
-                 (Linear.QQVector.pp_term Format.pp_print_int) v;
-               invalid_arg s
-          )
-          (Polyhedron.enum_constraints p)
-        |> Polyhedron.of_constraints
-      in
-      let valuation i =
-        try
-          Linear.evaluate_affine m (BatDynArray.get basis i)
-        with
-        | Invalid_argument s ->
-           Format.printf "valuation: cannot find dimension %d@;" i;
-           invalid_arg s
-      in
-      Polyhedron.local_project valuation elim_dims cube
-      |> Polyhedron.dd_of ~man dim
-    in
-    FormulaVector.abstract_implicant srk binding
-      (`ImplicantOnly abstract) phi
-
-  let of_model_lira solver man terms =
-    let srk = Solver.get_context solver in
-    let phi = Solver.get_formula solver in
-    (* Map linear terms over the symbols in phi to the range [-1, n], such that
-       -1 -> -1, 0 -> term(0), ... n -> term(n) *)
-    let basis = BatDynArray.create () in
-    let map =
-      let neg_one = V.of_term QQ.one Linear.const_dim in
-      BatArray.fold_lefti (fun map i t ->
-          let vec = Linear.linterm_of srk t in
-          BatDynArray.add basis vec;
-          LM.may_add vec (V.of_term QQ.one i) map)
-        (LM.add_exn neg_one neg_one LM.empty)
-        terms
-      |> Symbol.Set.fold (fun symbol map ->
-          let symbol_vec = V.of_term QQ.one (Linear.dim_of_sym symbol) in
-          let ambient_dim = BatDynArray.length basis in
-          match LM.add symbol_vec (V.of_term QQ.one ambient_dim) map with
-          | Some map' ->
-            BatDynArray.add basis symbol_vec;
-            map'
-          | None -> map)
-        (symbols phi)
-    in
-    let dim = Array.length terms in
-    let elim_dims = BatList.of_enum (dim -- (BatDynArray.length basis)) in
-    function
-    | `LIRR _ -> assert false
-    | `LIRA interp ->
-      let cube =
-        match Interpretation.select_implicant interp phi with
-        | Some cube ->
-          let constraints = BatEnum.empty () in
-          BatList.iter (fun atom ->
-              match Interpretation.destruct_atom srk atom with
-              | `ArithComparison (p, x, y) ->
-                 (* NK: Mod terms should be eliminated from the formula before
-                    reaching this stage, so any mod term that comes up here
-                    must be due to [destruct_atom] translating Int constraints
-                    into mod-term equalities.
-                    Ite terms should also have been eliminated.
-                    TODO: Check if there are other non-linear terms.
-                  *)
-                 begin try
-                   let t =
-                     V.sub (Linear.linterm_of srk y) (Linear.linterm_of srk x)
-                     |> LM.apply map
-                     |> BatOption.get
-                   in
-                   let p = match p with `Eq -> `Zero | `Leq -> `Nonneg | `Lt -> `Pos in
-                   BatEnum.push constraints (p, t)
-                 with
-                 | Linear.Nonlinear -> ()
-                 end
-              | _ -> ())
-            cube;
-          Polyhedron.of_constraints constraints
-        | None -> assert false
-      in
-      let valuation i =
-        Linear.evaluate_linterm
-          (Interpretation.real interp)
-          (BatDynArray.get basis i)
-      in
-      Polyhedron.local_project valuation elim_dims cube
-      |> Polyhedron.dd_of ~man dim
-
-  let of_model_lirr solver man terms =
-    let srk = Solver.get_context solver in
-    let poly_terms = Array.map (QQXs.of_term srk) terms in
-    let dim = Array.length terms in
-    function
-    | `LIRA _ -> assert false
-    | `LIRR m ->
-      let cone = LirrSolver.Model.nonnegative_cone m in
-      let map_cone = PolynomialCone.inverse_image cone poly_terms in
-      let constraints = BatEnum.empty () in
-      I.generators (PolynomialCone.get_ideal map_cone)
-      |> List.iter (fun p ->
-          match QQXs.vec_of p with
-          | Some vec -> BatEnum.push constraints (`Zero, vec)
-          | None -> ());
-      PolynomialCone.get_cone_generators map_cone
-      |> List.iter (fun p ->
-          match QQXs.vec_of p with
-          | Some vec -> BatEnum.push constraints (`Nonneg, vec)
-          | None -> ());
-      DD.of_constraints_closed ~man dim constraints
-
-  let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
-    let binding = FormulaVector.mk_standard_binding
-                    (Solver.get_context solver) (Solver.get_formula solver)
-    in
-
-    let join = DD.join in
-    let dim = Array.length terms in
-    let srk = Solver.get_context solver in
-    let top = DD.of_constraints_closed ~man dim (BatEnum.empty ()) in
-    let bottom = match bottom with
-      | Some bot -> bot
-      | None ->
-        let inconsistent = (* 0 = 1 *)
-          BatEnum.singleton (`Zero, V.of_term QQ.one Linear.const_dim)
-        in
-        DD.of_constraints_closed ~man dim inconsistent
-    in
-    let term_of_dim i =
-      if i == Linear.const_dim then mk_one srk else terms.(i)
-    in
-    let formula_of prop =
-      DD.enum_constraints_closed prop
-      /@ (fun (kind, v) ->
-          let t = Linear.term_of_vec srk term_of_dim v in
-          match kind with
-          | `Zero -> mk_eq srk (mk_zero srk) t
-          | `Nonneg -> mk_leq srk (mk_zero srk) t)
-      |> BatList.of_enum
-      |> mk_and srk
-    in
-    let of_model = match Solver.(solver.solver) with
-      | `LIRA _ ->
-         (* of_model_lira solver man terms *)
-         (fun interp ->
-           let using_binding =
-             of_model_lira_using_binding binding solver man terms interp in
-           using_binding)
-      | `LIRR _ -> of_model_lirr solver man terms
-    in
-    let domain =
-      { join; top; of_model; bottom; formula_of }
-    in
-    Solver.abstract solver domain
-
-  let _of_model_lira = of_model_lira
-
-end
-
 let vanishing_space srk phi terms =
   let solver = Solver.make srk phi in
   LinearSpan.abstract solver terms
@@ -780,7 +604,3 @@ let affine_hull srk phi constants =
   in
   vanishing_space srk phi basis
   |> List.map (Linear.term_of_vec srk (fun i -> basis.(i)))
-
-let conv_hull ?(man=Polka.manager_alloc_loose ()) srk phi terms =
-  let solver = Solver.make srk phi in
-  ConvexHull.abstract solver ~man terms

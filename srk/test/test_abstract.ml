@@ -1,9 +1,9 @@
 open Srk
 open OUnit
-open Abstract
 open Nonlinear
 open Test_pervasives
 
+let affine_hull = Abstract.affine_hull
 let hull_formula hull = Ctx.mk_and (List.map (Ctx.mk_eq (int 0)) hull)
 
 let affine_hull1 () =
@@ -345,6 +345,24 @@ let lt_abstract () =
   in
   assert_equiv_formula phi phi_abstract
 
+let abstract_pc () =
+  let phi =
+    let open Infix in
+    ((x = (int 1)) || ((x = y) && y <= (int 2)))
+    && (x*x <= z*z) && (z*z <= y)
+  in
+  let psi =
+    let open Infix in
+    x <= (int 2)
+    && x <= y && (x - (int 1))*(x - y) = (int 0)
+    && x*x <= x
+  in
+  let terms = [| x; y |] in
+  let solver = Abstract.Solver.make ~theory:`LIRR srk phi in
+  let cone = ConsequenceCone.abstract solver terms in
+  let abstract_phi = PolynomialCone.to_formula srk (Array.get terms) cone in
+  assert_equiv_formula psi abstract_phi
+
 let suite = "Abstract" >::: [
     "affine_hull1" >:: affine_hull1;
     "affine_hull2" >:: affine_hull2;
@@ -372,5 +390,36 @@ let suite = "Abstract" >::: [
     "nonlinear_abstract2" >:: nonlinear_abstract2;
     "mod_abstract" >:: mod_abstract;
     "degree3_abstract" >:: degree3_abstract;
-    "lt_abstract" >:: lt_abstract
+    "lt_abstract" >:: lt_abstract;
+    "abstract_pc" >:: abstract_pc
+    ; "conv_hull" >:: (fun () ->
+        let open Infix in
+        let phi =
+          (((int 1) <= x) && x <= y && y <= (int 2)
+          || (int 0) <= y && y <= (int 1) && x = y)
+        in
+        let p =
+          mk_polyhedron [ ([1; 0], 0)
+                        ; ([-1; 0], -2)
+                        ; ([0; 1], 3)
+                        ; ([0; -1], -3)]
+          |> Polyhedron.dd_of 2
+        in
+        assert_equal_dd p (ConvexHull.conv_hull srk phi [| x; int 3 |]))
+
+    ; "conv_hull2" >:: (fun () ->
+        let open Infix in
+        let phi =
+          (((int 1) <= x) && x <= y && y <= (int 2)
+           || (int 0) <= y && y <= (int 1) && x = y)
+        in
+        let p =
+          mk_polyhedron [ ([1; 0], 0)
+                        ; ([-1; 0], -2)
+                        ; ([1; -1], 0)
+                        ; ([-1; 1], 0)]
+          |> Polyhedron.dd_of 2
+        in
+        assert_equal_dd p (ConvexHull.conv_hull srk phi [| x; x |]))
+
   ]

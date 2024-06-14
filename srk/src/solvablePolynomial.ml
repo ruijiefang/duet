@@ -1977,19 +1977,20 @@ module SolvablePolynomialLIRR = struct
 
 
   let exp_ti it = 
-    let it_offset = it.ideal.dim in
+    let it_offset = TransitionIdeal.get_dim it.ideal in
+    let ideal = TransitionIdeal.get_ideal it.ideal in
     logf "Exponentiating : %a" (TransitionIdeal.pp (pp_dim it_offset)) it.ideal;
-    if I.generators (it.ideal.ideal) = [] then
-      TransitionIdeal.make it_offset it.ideal.ideal
+    if I.generators ideal = [] then
+      TransitionIdeal.make it_offset ideal
     else 
-      let k_equal_i i = QQXs.sub (QQXs.of_dim (2 * it.ideal.dim)) (QQXs.scalar (QQ.of_int i)) in
+      let k_equal_i i = QQXs.sub (QQXs.of_dim (2 * it_offset)) (QQXs.scalar (QQ.of_int i)) in
       let zeroth = Id.make ((k_equal_i 0) :: (List.init it_offset (fun d -> QQXs.sub (QQXs.of_dim (d+it_offset)) (QQXs.of_dim d)))) in
-      if QQXs.is_zero (I.reduce it.ideal.ideal QQXs.one) then
+      if QQXs.is_zero (I.reduce ideal QQXs.one) then
         TransitionIdeal.make it_offset (Id.mk_rewrite zeroth)
       else
         let inv_seq, inv_dom = TransitionIdeal.iteration_sequence it.ideal in
         let inv_dom_id = Id.make (I.generators inv_dom) in
-        let inv_seq_id = List.mapi (fun i (id : TransitionIdeal.t) -> Id.make ((k_equal_i (i+1)) :: (I.generators id.ideal))) inv_seq in
+        let inv_seq_id = List.mapi (fun i (id : TransitionIdeal.t) -> Id.make ((k_equal_i (i+1)) :: (I.generators (TransitionIdeal.get_ideal id)))) inv_seq in
         let transient_closure = List.fold_left Id.intersect zeroth inv_seq_id in
         logf "Invariant Dom : %a" (I.pp (pp_dim it_offset)) inv_dom;
         if QQXs.is_zero (I.reduce inv_dom QQXs.one) then 
@@ -2046,19 +2047,21 @@ module SolvablePolynomialLIRR = struct
       substitute_const srk subst
     in
     let it_cl = exp_ti it.ti in
-    logf "Ideal closure : %a" (TransitionIdeal.pp (pp_dim (it_cl.dim))) it_cl;
-    if QQXs.is_zero (I.reduce it_cl.ideal QQXs.one) then
+    let dim = TransitionIdeal.get_dim it_cl in
+    let ideal = TransitionIdeal.get_ideal it_cl in
+    logf "Ideal closure : %a" (TransitionIdeal.pp (pp_dim dim)) it_cl;
+    if QQXs.is_zero (I.reduce ideal QQXs.one) then
       let ident = List.map (fun (pre, post) -> mk_eq srk (mk_const srk pre) (mk_const srk post)) tr_symbols in
       mk_and srk ((mk_eq srk loop_count (mk_real srk QQ.zero)) :: ident)
     else
-      let gens = I.generators it_cl.ideal in
+      let gens = I.generators ideal in
       let gens_t = List.map (
         fun p ->
           let p_t = QQXs.term_of srk (
             fun d ->
-              if d = 2 * it_cl.dim then loop_count
-              else if d < it_cl.dim then it.simulation.(d)
-              else postify (it.simulation.(d-it_cl.dim))
+              if d = 2 * dim then loop_count
+              else if d < dim then it.simulation.(d)
+              else postify (it.simulation.(d-dim))
           ) p in
           mk_eq srk p_t (mk_real srk (QQ.zero))
       ) gens in
@@ -2121,7 +2124,7 @@ module SolvablePolynomialLIRR = struct
     in
     let ideal =
       PC.get_ideal
-        (LirrSolver.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+        (Lirr.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
     in
     abstract_cone ideal
 
@@ -2203,7 +2206,7 @@ module SolvablePolynomialLIRRQuadratic = struct
     in
     let ideal =
       PC.get_ideal
-        (LirrSolver.abstract srk (fun cone ->
+        (Lirr.abstract srk (fun cone ->
              PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
     in
     abstract_cone ideal

@@ -2,6 +2,7 @@ open Srk
 open OUnit
 open Syntax
 open Linear
+open BatPervasives
 
 module Ctx = MakeSimplifyingContext ()
 module Infix = Syntax.Infix(Ctx)
@@ -82,6 +83,19 @@ let mk_qqmatrix mat =
     QQMatrix.zero
     (List.mapi (fun i row -> (i, mk_qqvector row)) mat)
 
+let mk_polyhedron halfspaces =
+  BatList.enum halfspaces
+  /@ (fun (v, a) -> (`Nonneg,
+                    (QQVector.add_term (QQ.of_int (-a)) Linear.const_dim (mk_vector v))))
+  |> Polyhedron.of_constraints
+
+let mk_polyhedron_from_generators mk_vector dim vertices rays =
+  (List.map (fun v -> (`Vertex, mk_vector v)) vertices)
+  @ (List.map (fun v -> (`Ray, mk_vector v)) rays)
+  |> BatList.enum
+  |> DD.of_generators dim
+  |> Polyhedron.of_dd
+
 let assert_equal_arith_term s t =
   assert_equal ~cmp:ArithTerm.equal ~printer:(ArithTerm.show srk) s t
 
@@ -118,6 +132,12 @@ let assert_equal_up_exppoly x y =
 
 let assert_equal_pathexpr context x y =
   assert_equal ~cmp:(Pathexpr.equiv context) ~printer:Pathexpr.show x y
+
+let assert_equal_polyhedron p q =
+  assert_equal ~cmp:Polyhedron.equal p q
+
+let assert_equal_dd p q =
+  assert_equal ~cmp:DD.equal p q
 
 let assert_implies phi psi =
   if not (Smt.entails srk phi psi = `Yes) then

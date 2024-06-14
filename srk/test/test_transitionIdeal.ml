@@ -57,16 +57,19 @@ let assert_equal_ti = assert_equal ~cmp:TransitionIdeal.equal ~printer:show_ti
 let enumerate (ti : TransitionIdeal.t) n = 
   let rec ti_to_n acc ti_to_i_minus_1 i = 
     if i > n then acc
-    else if i = 0 then 
-      let ti_0 = make_ti (List.init ti.dim (fun d -> QQXs.sub (QQXs.of_dim (d + ti.dim)) (QQXs.of_dim d))) in
-      let ti_0_id = I.make ((QQXs.sub (QQXs.of_dim (2*ti.dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators ti_0.ideal))  in
+    else if i = 0 then
+      let dim = TransitionIdeal.get_dim ti in
+      let ti_0 = make_ti (List.init dim (fun d -> QQXs.sub (QQXs.of_dim (d + dim)) (QQXs.of_dim d))) in
+      let ti_0_id = I.make ((QQXs.sub (QQXs.of_dim (2*dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators (TransitionIdeal.get_ideal ti_0)))  in
       ti_to_n ti_0_id ti_0 (i+1)
     else if i = 1 then
-      let ti_1 = I.make ((QQXs.sub (QQXs.of_dim (2*ti.dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators ti.ideal)) in
+      let dim = TransitionIdeal.get_dim ti in
+      let ti_1 = I.make ((QQXs.sub (QQXs.of_dim (2*dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators (TransitionIdeal.get_ideal ti))) in
       ti_to_n (I.intersect ti_1 acc) ti (i+1)
     else
+      let dim = TransitionIdeal.get_dim ti in
       let ti_i = TransitionIdeal.compose ti_to_i_minus_1 ti in
-      let ti_i_id = I.make ((QQXs.sub (QQXs.of_dim (2*ti.dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators ti_i.ideal))in
+      let ti_i_id = I.make ((QQXs.sub (QQXs.of_dim (2*dim)) (QQXs.scalar (QQ.of_int i))) :: (R.generators (TransitionIdeal.get_ideal ti_i))) in
       ti_to_n (I.intersect ti_i_id acc) ti_i (i+1)
   in
   ti_to_n (I.make [QQXs.zero]) (make_ti [QQXs.zero]) 0
@@ -256,7 +259,7 @@ let suite = "TransitionIdeal" >::: [
       let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
       (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
       let first_few = enumerate solvable 2 in
-      let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+      let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
       (*Log.logf ~level:`always "T^0 inter T^1 inter T^2 : %a" (Polynomial.Ideal.pp (pp_dim solvable.dim)) first_few;*)
       assert_bool "Not subset" res)
   ; "solvable_cl2" >:: (fun () ->
@@ -275,7 +278,7 @@ let suite = "TransitionIdeal" >::: [
     let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
     (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
     let first_few = enumerate solvable 2 in
-    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
     (*Log.logf ~level:`always "T^0 inter T^1 inter T^2 : %a" (Polynomial.Ideal.pp (pp_dim solvable.dim)) first_few;*)
     assert_bool "Not subset" res)
   ; "solvable_cl3" >:: (fun () ->
@@ -294,7 +297,7 @@ let suite = "TransitionIdeal" >::: [
     let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
     (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
     let first_few = enumerate solvable 2 in
-    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
     (*Log.logf ~level:`always "T^0 inter T^1 inter T^2 : %a" (Polynomial.Ideal.pp (pp_dim solvable.dim)) first_few;*)
     assert_bool "Not subset" res)
   ; "solvable_cl4" >:: (fun () ->
@@ -313,7 +316,7 @@ let suite = "TransitionIdeal" >::: [
     let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
     (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
     let first_few = enumerate solvable 2 in
-    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
     (*Log.logf ~level:`always "T^0 inter T^1 inter T^2 : %a" (Polynomial.Ideal.pp (pp_dim solvable.dim)) first_few;*)
     assert_bool "Not subset" res)
   ; "solvable_cl5" >:: (fun () ->
@@ -332,7 +335,7 @@ let suite = "TransitionIdeal" >::: [
     let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
     (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
     let first_few = enumerate solvable 2 in
-    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
     (*Log.logf ~level:`always "T^0 inter T^1 inter T^2 : %a" (Polynomial.Ideal.pp (pp_dim solvable.dim)) first_few;*)
     assert_bool "Not subset" res)
   ; "ultsolvable_cl1" >:: (fun () ->
@@ -348,7 +351,7 @@ let suite = "TransitionIdeal" >::: [
     let sp_lirr_t = SolvablePolynomial.SolvablePolynomialLIRR.make_sp solvable witness in
     let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
     let first_few = enumerate solvable 2 in
-    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+    let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
     assert_bool "Not subset" res)
     ; "ultsolvable_cl2" >:: (fun () ->
       let open QQXsInfix in
@@ -379,7 +382,7 @@ let suite = "TransitionIdeal" >::: [
       let cl = SolvablePolynomial.SolvablePolynomialLIRR.exp_ti sp_lirr_t in
       (*Log.logf ~level:`always "Cl : %a" (TransitionIdeal.pp (pp_dim cl.dim)) cl;*)
       let first_few = enumerate solvable 10 in
-      let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators cl.ideal)) first_few in
+      let res = Polynomial.Ideal.subset (Polynomial.Ideal.make (R.generators (TransitionIdeal.get_ideal cl))) first_few in
       assert_bool "Not subset" res)
   ; "quadratic_sim" >:: (fun () ->
       let base_dim = 3 in

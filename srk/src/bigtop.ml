@@ -304,7 +304,7 @@ let compare_projection
   in
   let compute phi = function
     | `RealConvHull ->
-       (`RealConvHull, attempt (fun () -> do_qe (Abstract.conv_hull srk) phi))
+       (`RealConvHull, attempt (fun () -> do_qe (ConvexHull.conv_hull srk) phi))
     | `Lira -> (`Lira, do_qe (Lira.project srk) phi)
     | `HullRealProjectDoubleElim ->
        ( `HullRealProjectDoubleElim
@@ -400,7 +400,7 @@ let compare_projection
               (string_of meth2)
           ) unequal_hulls
      | [] -> Format.printf "Result: all hulls equal@;"
-    
+
 let spec_list = [
   ("-simsat",
    Arg.String (fun file ->
@@ -417,7 +417,7 @@ let spec_list = [
   ("-lirrsat",
    Arg.String (fun file ->
        let phi = load_formula file in
-       print_result (LirrSolver.is_sat srk (snd (Quantifier.normalize srk phi)))),
+       print_result (Lirr.is_sat srk (snd (Quantifier.normalize srk phi)))),
    " Test satisfiability of a non-linear ground formula using theory of linear integer real rings");
 
   ("-normaliz",
@@ -428,6 +428,7 @@ let spec_list = [
    Arg.Set generator_rep,
    " Print generator representation of convex hull");
 
+  (*
   ("-compare-integer-hull",
    Arg.String compare_integer_hull,
    "Compare integer hulls computed by Gomory-Chvatal, Normaliz, and recession cone generalization");
@@ -455,80 +456,64 @@ let spec_list = [
   , " May diverge when formula contains real-valued variables (why?)"
   );
 
-  (*
-  ("-local-hull-and-project-define-terms"
-  , Arg.String
-      (run_eliminate_integers
-         (LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
-            `DefineThenProject
-            `RoundStrictWhenVariablesIntegral))
-  , " May be unsound due to Cooper elimination applied to real-valued variables (and also diverge because of unsound blocking)"
-  );
-
-  ("-local-project-and-hull-define-terms"
-  , Arg.String (run_eliminate_integers
-                  (LatticePolyhedron.abstract_by_local_hull_and_project_cooper srk
-                     `ProjectThenRealQe
-                     `RoundStrictWhenVariablesIntegral))
-  , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
-  );
-
-  ("-local-project-and-hull"
-  , Arg.String (run_eliminate_integers
-                  (LatticePolyhedron.abstract_by_local_project_and_hull srk
-                     `ProjectThenRealQe
-                     `RoundStrictWhenVariablesIntegral))
-  , " May diverge when formula contains real-valued variables"
-  );
-   *)
-
   ("-lira-project"
   , Arg.String (fun s -> ignore (run_eliminate `AllQuantifiers (Lira.project srk) s))
   , " Compute the lattice hull of an existential formula by model-based projection of recession cones"
   );
 
   ("-project-by-real-conv-hull"
-  , Arg.String (fun s -> ignore (run_eliminate `AllQuantifiers (Abstract.conv_hull srk) s))
+  , Arg.String (fun s -> ignore (run_eliminate `AllQuantifiers (ConvexHull.conv_hull srk) s))
   , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
+   *)
 
-  ("-int-hull-by-cone-deprecated",
+  ("-lira-convex-hull-sc",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
-       let hull = SymbolicAbstraction.integer_hull_by_recession_cone
-                    srk phi (Symbol.Set.to_list preserved_symbols) in
+       if List.exists (fun (q, _) -> q = `Forall) qf then
+         failwith "universal quantification not supported";
+       let module S = Syntax.Symbol.Set in
+       let module PLT = PolyhedronLatticeTiling in
+       let terms = S.filter
+                     (fun sym -> not (List.exists (fun (_, quant) -> quant = sym) qf))
+                     (Syntax.symbols phi)
+                   |> (fun set -> S.fold (fun sym terms -> Ctx.mk_const sym :: terms) set [])
+                   |> Array.of_list
+       in
+       let integer_constraints =
+         S.fold
+           (fun sym l ->
+             match Syntax.typ_symbol srk sym with
+             | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
+             | _ -> l
+           )
+           (Syntax.symbols phi)
+           []
+       in
+       Format.printf "Symbols to eliminate: @[%a@]@;"
+         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+            (fun fmt sym ->
+              Format.fprintf fmt "%a: %a"
+                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
+         (List.map snd qf);
+       let _hull =
+         PLT.convex_hull
+           srk (Syntax.mk_and srk (phi :: integer_constraints))
+           terms in
+       (*
+       Format.printf "Symbols to eliminate: @[%a@]@;"
+         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+            (fun fmt sym ->
+              Format.fprintf fmt "%a: %a"
+                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
+         (List.map snd qf);
        Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         (DD.pp (fun fmt i ->
-              if i = Linear.const_dim then
-                Format.pp_print_int fmt i
-              else pp_symbol srk fmt (symbol_of_int i))) hull),
-   " Compute the integer hull of an existential formula by model-based projection of recession cones");
-
-  ("-int-hull-by-standard-deprecated",
-   Arg.String (fun file ->
-       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
-       let hull = SymbolicAbstraction.integer_hull_standard srk phi
-                    (Symbol.Set.to_list preserved_symbols) in
-       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         (DD.pp (fun fmt i ->
-              if i = Linear.const_dim then
-                Format.pp_print_int fmt i
-              else pp_symbol srk fmt (symbol_of_int i))) hull),
-   " Compute the integer hull of an existential formula by model-based projection of polyhedra directly");
-
-  ("-int-hull-by-cooper-deprecated",
-   Arg.String (fun file ->
-       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       let (_, preserved_symbols) = free_vars_and_existentials int_quantifiers_only (qf, phi) in
-       let (hull, _) = SymbolicAbstraction.integer_hull_by_cooper srk phi
-                         (Symbol.Set.to_list preserved_symbols) in
-       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         (DD.pp (fun fmt i ->
-              if i = Linear.const_dim then
-                Format.pp_print_int fmt i
-              else pp_symbol srk fmt (symbol_of_int i))) hull),
-   " Compute the integer hull of an existential formula by model-based Cooper");
+         (Syntax.Formula.pp srk)
+         (PLT.formula_of_dd srk (fun dim -> terms.(dim)) hull);
+        *)
+       Format.printf "Result: success"
+     ),
+   "Compute the convex hull of an existential formula in integer-real linear arithmetic"
+  );
 
   ("-convex-hull",
    Arg.String (fun file ->

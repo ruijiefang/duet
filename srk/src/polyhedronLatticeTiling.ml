@@ -582,15 +582,33 @@ end = struct
 
 end
 
-module LoosWeispfenning: sig
+module Ddify: sig
 
-  val abstract_lw:
+  val abstract:
     max_dim_in_projected: int ->
     (Polyhedron.t, int -> QQ.t, dd, int -> QQ.t) LocalAbstraction.t
 
 end = struct
 
-  let abstract_lw ~max_dim_in_projected =
+  let abstract ~max_dim_in_projected =
+    let abstract _m p =
+      ( (P.dd_of (max_dim_in_projected + 1) p, max_dim_in_projected)
+      , (fun m -> m)
+      )
+    in
+    LocalAbstraction.{ abstract }
+
+end
+
+module LoosWeispfenning: sig
+
+  val abstract_lw:
+    elim: (int -> bool) ->
+    (Polyhedron.t, int -> QQ.t, Polyhedron.t, int -> QQ.t) LocalAbstraction.t
+
+end = struct
+
+  let abstract_lw ~elim =
     let abstract m p =
       (*
       let () =
@@ -614,7 +632,7 @@ end = struct
       let to_project =
         BatList.of_enum (Polyhedron.enum_constraints p)
         |> collect_dimensions (fun (_, v) -> v)
-        |> IntSet.filter (fun dim -> dim > max_dim_in_projected)
+        |> IntSet.filter elim
         |> IntSet.to_list
       in
       logf ~level:`debug "abstract_lw: eliminating dimensions @[%a@] from @[%a@]"
@@ -623,11 +641,9 @@ end = struct
         to_project
         (Polyhedron.pp Format.pp_print_int) p;
       let abstracted = Polyhedron.local_project m to_project p in
-      logf ~level:`debug "abstract_lw: abstracted @[%a@], max_dim_in_projected = %d\n"
-        (Polyhedron.pp Format.pp_print_int) abstracted max_dim_in_projected;
-      let dd = abstracted
-               |> Polyhedron.dd_of (max_dim_in_projected + 1) in
-      ((dd, max_dim_in_projected), fun m -> m)
+      logf ~level:`debug "abstract_lw: abstracted @[%a@]@\n"
+        (Polyhedron.pp Format.pp_print_int) abstracted;
+      (abstracted, fun m -> m)
     in
     LocalAbstraction.{ abstract }
 
@@ -657,7 +673,12 @@ end = struct
     let abstract m plt =
       logf ~level:`debug "abstract_sc...";
       let abstract_lw =
-        LocalAbstraction.apply (LW.abstract_lw ~max_dim_in_projected) m
+        let abstract =
+          LocalAbstraction.compose
+            (LW.abstract_lw ~elim:(fun dim -> dim > max_dim_in_projected))
+            (Ddify.abstract ~max_dim_in_projected)
+        in
+        LocalAbstraction.apply abstract m
       in
       let p =
         Polyhedron.enum_constraints plt.Plt.poly_part

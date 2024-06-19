@@ -46,8 +46,8 @@ val formula_of_dd:
   'a Syntax.formula
 
 val abstract_lw:
-    max_dim_in_projected: int ->
-    (Polyhedron.t, int -> QQ.t, dd, int -> QQ.t) LocalAbstraction.t
+    elim: (int -> bool) ->
+    (Polyhedron.t, int -> QQ.t, Polyhedron.t, int -> QQ.t) LocalAbstraction.t
 
 val abstract_sc:
   max_dim_in_projected: int ->

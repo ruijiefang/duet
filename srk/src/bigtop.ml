@@ -496,7 +496,7 @@ let spec_list = [
                 (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
          (List.map snd qf);
        let _hull =
-         PLT.convex_hull
+         PLT.convex_hull_sc
            srk (Syntax.mk_and srk (phi :: integer_constraints))
            terms in
        (*

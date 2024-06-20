@@ -4,7 +4,7 @@ open Syntax
 module Vec = Linear.QQVector
 module TF = TransitionFormula
 module CS = CoordinateSystem
-module LIRR = LirrSolver
+module LIRR = Lirr
 module P = Polynomial
 module PC = PolynomialCone
 
@@ -19,7 +19,7 @@ let pp_dim srk arr formatter i =
 
 let zero_stable srk f pre_vars_arr post_vars_arr =
   let solver = Abstract.Solver.make srk ~theory:`LIRR f in
-  let conseq_pre = Abstract.PolynomialCone.abstract solver pre_vars_arr in
+  let conseq_pre = ConsequenceCone.abstract solver pre_vars_arr in
   logf "computed conseq pre";
   logf "conseq pre: %a" (PC.pp (pp_dim srk pre_vars_arr)) conseq_pre;
   let rec work prev_cone prev_f =
@@ -38,7 +38,7 @@ let zero_stable srk f pre_vars_arr post_vars_arr =
     in
     let new_f = mk_and srk (prev_f :: zero_guards_remain_zero) in
     let new_solver = Abstract.Solver.make srk ~theory:`LIRR new_f in
-    let new_cone = Abstract.PolynomialCone.abstract new_solver pre_vars_arr in
+    let new_cone = ConsequenceCone.abstract new_solver pre_vars_arr in
     if P.Rewrite.equal (PC.get_ideal prev_cone) (PC.get_ideal new_cone) then
       new_f
     else work new_cone new_f
@@ -65,7 +65,7 @@ let lin_conseq_over_diff_polys srk solver pre_vars_arr post_vars_arr
     (fun i diff -> logf "dim: %d, term: %a" i (ArithTerm.pp srk) diff)
     diffs_arr;
   logf "lin solver made";
-  let lin_conseq = Abstract.ConvexHull.abstract solver diffs_arr in
+  let lin_conseq = ConvexHull.abstract solver diffs_arr in
   logf "lin abstract complete";
 
   (* let positive_poly_terms =
@@ -99,7 +99,7 @@ let has_prf srk tf =
   in
   logf "zero-stable formula: %a" (Formula.pp srk) zero_stable_formula;
   let solver = Abstract.Solver.make srk ~theory:`LIRR zero_stable_formula in
-  let pre_conseq_cone = Abstract.PolynomialCone.abstract solver pre_vars_arr in
+  let pre_conseq_cone = ConsequenceCone.abstract solver pre_vars_arr in
   logf "conseq pre: %a" (PC.pp (pp_dim srk pre_vars_arr)) pre_conseq_cone;
   let pos_pre_polys = PC.get_cone_generators pre_conseq_cone in
   let dim = List.length pos_pre_polys in
@@ -180,7 +180,7 @@ let has_plrf srk tf =
     logf "current TF: %a" (Formula.pp srk) f;
     let solver = Abstract.Solver.make srk ~theory:`LIRR f in
     let pre_conseq_cone =
-      Abstract.PolynomialCone.abstract solver pre_vars_arr
+      ConsequenceCone.abstract solver pre_vars_arr
     in
     logf "conseq pre: %a" (PC.pp (pp_dim srk pre_vars_arr)) pre_conseq_cone;
     (* let pos_polys = PC.get_cone_generators pre_conseq_cone in *)

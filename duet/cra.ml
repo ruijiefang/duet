@@ -1227,7 +1227,7 @@ let prove_termination_main file =
           Stdlib.close_out chan
         end;
       if Syntax.get_theory srk = `LIRR then
-        match LirrSolver.is_sat srk omega_paths_sum with
+        match Lirr.is_sat srk omega_paths_sum with
         | `Sat -> Format.printf "Cannot prove that program always terminates\n"
         | `Unsat -> Format.printf "Program always terminates\n"
         | `Unknown -> Format.printf "Unknown analysis result\n"
@@ -1459,6 +1459,7 @@ let _ =
      Arg.Clear Polynomial.FGb.use_fgb,
      " Do not use fgb in any Grobner basis computation"
     );
+  CmdLine.register_config
     ("-theory",
      Arg.String (function
          | "LIRA" -> Syntax.set_theory srk `LIRA;

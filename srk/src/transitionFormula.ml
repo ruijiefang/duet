@@ -118,7 +118,7 @@ let preimage srk tf state =
   logf "preimage of transition formula: %a" (Formula.pp srk) tf.formula;
   logf "and state formula: %a" (Formula.pp srk) state;
   let open Syntax in
-  let tf = linearize srk tf in
+  let tf = if get_theory srk = `LIRR then tf else linearize srk tf in
   let fresh_skolem =
     Memo.memo (fun sym ->
         let name = show_symbol srk sym in

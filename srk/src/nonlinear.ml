@@ -249,6 +249,7 @@ let uninterpret srk expr =
   rewrite srk ~up:(uninterpret_rewriter srk) expr
 
 let linearize srk phi =
+  if get_theory srk = `LIRR then phi else
   let uninterp_phi = uninterpret srk phi in
   let (lin_phi, nonlinear) = SrkSimplify.purify srk uninterp_phi in
   if Symbol.Map.is_empty nonlinear then

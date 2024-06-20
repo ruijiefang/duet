@@ -1,5 +1,8 @@
 (** Concept space of polyhedron-lattice-tilings (PLTs) *)
 
+module P = Polyhedron
+module V = Linear.QQVector
+
 module LocalAbstraction: sig
 
   type ('concept1, 'point1, 'concept2, 'point2) t
@@ -45,13 +48,25 @@ val formula_of_dd:
   'a Syntax.context -> (int -> 'a Syntax.arith_term) -> DD.closed DD.t ->
   'a Syntax.formula
 
+val formula_of_plt:
+  'a Syntax.context -> (int -> 'a Syntax.arith_term) -> plt ->
+  'a Syntax.formula
+
 val abstract_lw:
     elim: (int -> bool) ->
     (Polyhedron.t, int -> QQ.t, Polyhedron.t, int -> QQ.t) LocalAbstraction.t
+
+val abstract_cooper:
+    elim: (int -> bool) ->
+    ceiling: (V.t -> (int -> QQ.t) -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
+    (plt, int -> QQ.t, plt, int -> QQ.t) LocalAbstraction.t
 
 val abstract_sc:
   max_dim_in_projected: int ->
   (plt, int -> QQ.t, dd, int -> QQ.t) LocalAbstraction.t
 
-val convex_hull: 'a Syntax.context -> 'a Syntax.formula ->
-                 ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+val convex_hull_sc: 'a Syntax.context -> 'a Syntax.formula ->
+                    ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+
+val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
+                    ('a Syntax.arith_term ) Array.t -> plt list

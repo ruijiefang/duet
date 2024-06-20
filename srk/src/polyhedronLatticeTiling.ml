@@ -373,11 +373,11 @@ module Plt : sig
 
   val top: max_dim: int -> t
 
-  val abstract_formula:
+  val abstract_to_standard_plt:
     'a Syntax.context ->
-    ?universe_p:(P.constraint_kind * V.t) BatEnum.t ->
-    ?universe_l:([`IsInt] * V.t) BatEnum.t ->
-    ?universe_t:([`NotInt] * V.t) BatEnum.t ->
+    ?universe_p: (P.constraint_kind * V.t) BatEnum.t ->
+    ?universe_l: V.t BatEnum.t ->
+    ?universe_t: V.t BatEnum.t ->
     max_dim:int ->
     (Syntax.symbol -> int) ->
     ('a Interpretation.interpretation -> (int -> QQ.t)) ->
@@ -493,19 +493,30 @@ end = struct
        , lin.extension
        )
 
-  let abstract_formula srk
+  let to_int_map m n =
+    let rec to_int_map n map =
+      try
+        if n = -1 then map
+        else
+          to_int_map (n-1) (IntMap.add n (m n) map)
+      with _ ->
+        to_int_map (n-1) map
+    in
+    to_int_map n IntMap.empty
+        
+  let abstract_to_standard_plt srk
         ?(universe_p=(BatList.enum []))
         ?(universe_l=(BatList.enum []))
         ?(universe_t=(BatList.enum []))
         ~max_dim
         dim_of_symbol univ_translation =
     let universe_p = BatList.of_enum universe_p in
-    let universe_l = BatList.of_enum universe_l |> List.map (fun (_, v) -> v) in
-    let universe_t = BatList.of_enum universe_t |> List.map (fun (_, v) -> v) in
+    let universe_l = BatList.of_enum universe_l in
+    let universe_t = BatList.of_enum universe_t in
     let abstract m phi =
-      logf ~level:`debug "abstract_formula...";
+      logf ~level:`debug "abstract_to_standard_plt...";
       let implicant = Interpretation.select_implicant m phi in
-      logf ~level:`debug "abstract_formula: abstracting @[%a@]"
+      logf ~level:`debug "abstract_to_standard_plt: abstracting @[%a@]"
         (Format.pp_print_list
            ~pp_sep: (fun fmt () -> Format.fprintf fmt ", ")
            (fun fmt atom -> Syntax.Formula.pp srk fmt atom)
@@ -518,7 +529,7 @@ end = struct
           m
           implicant
       in
-      logf ~level:`debug "abstract_formula: abstracted @[%a@]"
+      logf ~level:`debug "abstract_to_standard_plt: abstracted @[%a@]"
         (P.pp Format.pp_print_int) p;
       let plt = { poly_part = p
                 ; lattice_part = l
@@ -531,26 +542,9 @@ end = struct
       in
       let extended_univ_translation interp =
         let m = univ_translation interp in
-        let rec to_int_map n map =
-          try
-            if n = -1 then map
-            else
-              to_int_map (n-1) (IntMap.add n (m n) map)
-          with _ ->
-            (*
-            let msg =
-              Format.asprintf
-                "abstract_formula: dimension %d not defined, max_dim = %d, max_dim_plt = %d"
-                n max_dim max_dim_plt
-            in
-            failwith msg
-             *)
-            to_int_map (n-1) map
-        in
-        let map = to_int_map max_dim IntMap.empty in
-        let map' = extension map in
+        let map = to_int_map m max_dim in
         (fun dim ->
-          try IntMap.find dim map' with
+          try IntMap.find dim (extension map) with
           | Not_found -> m dim)
       in
       (plt, extended_univ_translation)
@@ -1077,7 +1071,7 @@ let standard_plt_abstraction srk terms phi =
       terms;
     term_defs
   in
-  Plt.abstract_formula srk ~universe_p ~max_dim dim_of_symbol interp_dim
+  Plt.abstract_to_standard_plt srk ~universe_p ~max_dim dim_of_symbol interp_dim
 
 let convex_hull_sc srk phi terms =
   let num_terms = Array.length terms in

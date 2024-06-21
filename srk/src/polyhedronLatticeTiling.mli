@@ -76,3 +76,7 @@ val cooper_project: [`ReplaceModFloor | `NoModFloor] ->
 val convex_hull_lia: [`ReplaceModFloor | `NoModFloor] ->
                      'a Syntax.context -> 'a Syntax.formula ->
                      ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+
+val convex_hull_lra: [`ReplaceModFloor | `NoModFloor] ->
+                     'a Syntax.context -> 'a Syntax.formula ->
+                     ('a Syntax.arith_term ) Array.t -> DD.closed DD.t

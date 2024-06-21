@@ -18,6 +18,10 @@ module LocalAbstraction : sig
   val apply:
     ('concept1, 'point1, 'concept2, 'point2) t -> 'point1 -> 'concept1 -> 'concept2
 
+  val apply2:
+    ('concept1, 'point1, 'concept2, 'point2) t -> 'point1 -> 'concept1 ->
+    'concept2 * ('point1 -> 'point2)
+
   val compose:
     ('concept2, 'point2, 'concept3, 'point3) t ->
     ('concept1, 'point1, 'concept2, 'point2) t ->
@@ -54,6 +58,8 @@ end = struct
     }
 
   let apply t x c = fst (t.abstract x c)
+
+  let apply2 t x c = t.abstract x c
 
   let compose
         (t2: ('concept2, 'point2, 'concept3, 'point3) t)
@@ -159,13 +165,7 @@ module Plt : sig
   type standard
   type intfrac
 
-  type 'layout t =
-    {
-      poly_part: P.t
-    ; lattice_part: L.t
-    ; tiling_part: L.t
-    ; max_dim: int
-    }
+  type 'layout t
 
   val top: max_dim: int -> 'layout t
 
@@ -178,6 +178,18 @@ module Plt : sig
     ('a formula, 'a Interpretation.interpretation, standard t, int -> Q.t)
       LocalAbstraction.t
 
+  val poly_part: 'layout t -> P.t
+  val lattice_part: 'layout t -> L.t
+  val tiling_part: 'layout t -> L.t
+
+  val mk_plt:
+    poly_part:P.t -> lattice_part:L.t -> tiling_part:L.t -> max_dim:int ->
+    'layout t
+
+  val abstract_poly_part:
+    (P.t, int -> Q.t, P.t, int -> Q.t) LocalAbstraction.t ->
+    ('layout t, int -> Q.t, 'layout t, int -> Q.t) LocalAbstraction.t
+
 end = struct
 
   type standard = unit
@@ -189,6 +201,19 @@ end = struct
     ; lattice_part: L.t
     ; tiling_part: L.t
     ; max_dim: int
+    ; metadata: 'layout option
+    }
+
+  let poly_part plt = plt.poly_part
+  let lattice_part plt = plt.lattice_part
+  let tiling_part plt = plt.tiling_part
+  let mk_plt ~poly_part ~lattice_part ~tiling_part ~max_dim =
+    {
+      poly_part
+    ; lattice_part
+    ; tiling_part
+    ; max_dim
+    ; metadata = None
     }
 
   let top ~max_dim =
@@ -197,6 +222,7 @@ end = struct
     ; lattice_part = L.bottom
     ; tiling_part = L.bottom
     ; max_dim
+    ; metadata = None
     }
 
   type 'a lin_cond =
@@ -525,6 +551,7 @@ end = struct
                 ; lattice_part = imp_l
                 ; tiling_part = imp_t
                 ; max_dim = max_dim_plt
+                ; metadata = None
                 }
       in
       let extended_univ_translation interp =
@@ -676,6 +703,14 @@ end = struct
     abstract_to_standard_plt has_mod_floor srk
       ~universe_p ~max_dim dim_of_int_symbol interp_dim
    *)
+
+  let abstract_poly_part abstract_poly =
+    let abstract m plt =
+      let p = plt.poly_part in
+      let (p', p_translate) = LocalAbstraction.apply2 abstract_poly m p in
+      ({ plt with poly_part = p' }, p_translate)
+    in
+    LocalAbstraction.{abstract}
 
 end
 
@@ -883,10 +918,9 @@ end = struct
 
   let abstract_cooper_ ~elim ~ceiling m plt =
     let open Plt in
-    let p = P.enum_constraints plt.poly_part |> BatList.of_enum in
-    let l = L.basis plt.lattice_part in
-    let t = L.basis plt.tiling_part
-    in
+    let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
+    let l = L.basis (Plt.lattice_part plt) in
+    let t = L.basis (Plt.tiling_part plt) in
     log_plt_constraints "abstract_cooper: abstracting" (p, l, t);
     let collect_dimensions (p, l, t) =
       p
@@ -922,12 +956,10 @@ end = struct
       try IntSet.max_elt dimensions with
       | Not_found -> failwith "abstract_cooper: no dimension left!"
     in
-    {
-      poly_part = Polyhedron.of_constraints (BatList.enum projected_p)
-    ; lattice_part = L.hermitize projected_l
-    ; tiling_part = L.hermitize projected_t
-    ; max_dim
-    }
+    mk_plt ~poly_part:(Polyhedron.of_constraints (BatList.enum projected_p))
+      ~lattice_part:(L.hermitize projected_l)
+      ~tiling_part:(L.hermitize projected_t)
+      ~max_dim
 
   let abstract_cooper ~elim ~ceiling =
     LocalAbstraction.
@@ -968,9 +1000,9 @@ end = struct
         in
         LocalAbstraction.apply abstract m
       in
-      let closed_p = close_constraints (P.enum_constraints plt.Plt.poly_part)
+      let closed_p = close_constraints (P.enum_constraints (Plt.poly_part plt))
                      |> P.of_constraints in
-      let l_constraints = L.basis plt.Plt.lattice_part in
+      let l_constraints = L.basis (Plt.lattice_part plt) in
       let polyhedron_abstraction = abstract_lw closed_p in
       let subspace_abstraction =
         let subspace_constraints =
@@ -1032,10 +1064,9 @@ end = struct
     !dims
 
   let abstract_lw_cooper_ ~elim m plt =
-    let open Plt in
-    let p = P.enum_constraints plt.poly_part |> BatList.of_enum in
-    let l = L.basis plt.lattice_part in
-    let t = L.basis plt.tiling_part in
+    let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
+    let l = L.basis (Plt.lattice_part plt) in
+    let t = L.basis (Plt.tiling_part plt) in
     log_plt_constraints "abstracting" (p, l, t);
     let collect_dimensions (p, l, t) =
       p
@@ -1056,14 +1087,8 @@ end = struct
       (LoosWeispfenning.abstract_lw
          ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim))
     in
-    let lifted_lw m plt =
-      (* TODO: Improve this *)
-      let p = plt.poly_part in
-      let (p', univ_translation) = abstract_lw.abstract m p in
-      ({ plt with poly_part = p' }, univ_translation)
-    in
     let local_abstraction =
-      LocalAbstraction.{abstract = lifted_lw}
+      Plt.abstract_poly_part abstract_lw
       |> LocalAbstraction.compose
            (MixedCooper.abstract_cooper
               ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
@@ -1220,7 +1245,7 @@ let convex_hull_separate_projection has_mod_floor finalizer srk phi terms =
     let elim dim = dim > num_terms in
     Plt.standard_plt_abstraction has_mod_floor srk terms (Syntax.symbols phi)
     |> compose (SeparateProjection.abstract_lw_cooper ~elim)
-    |> compose (inject (fun _ plt -> plt.Plt.poly_part)) (* TODO: handle universe constraints *)
+    |> compose (inject (fun _ plt -> Plt.poly_part plt))
     |> compose (Ddify.abstract ~max_dim_in_projected:(num_terms - 1))
     |> compose (inject finalizer)
   in

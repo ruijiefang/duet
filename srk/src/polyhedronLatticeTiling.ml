@@ -142,15 +142,15 @@ let pp_pconstr fmt (kind, v) =
 
 let log_plt_constraints str (p, l, t) =
   logf ~level:`debug
-    "abstract_cooper: %s p_constraints: @[%a@]@\n" str
+    "%s: p_constraints: @[%a@]@\n" str
     (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
        pp_pconstr) p;
   logf ~level:`debug
-    "abstract_cooper: %s l_constraints: @[%a@]@\n" str
+    "%s: l_constraints: @[%a@]@\n" str
     (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
        pp_vector) l;
   logf ~level:`debug
-    "abstract_cooper: %s t_constraints: @[%a@]@\n" str
+    "%s: t_constraints: @[%a@]@\n" str
     (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
        pp_vector) t
 
@@ -164,9 +164,6 @@ module Plt : sig
       poly_part: P.t
     ; lattice_part: L.t
     ; tiling_part: L.t
-    ; universe_p: (P.constraint_kind * V.t) list
-    ; universe_l: V.t list
-    ; universe_t: V.t list
     ; max_dim: int
     }
 
@@ -191,9 +188,6 @@ end = struct
       poly_part: P.t
     ; lattice_part: L.t
     ; tiling_part: L.t
-    ; universe_p: (P.constraint_kind * V.t) list
-    ; universe_l: V.t list
-    ; universe_t: V.t list
     ; max_dim: int
     }
 
@@ -202,9 +196,6 @@ end = struct
       poly_part = Polyhedron.top
     ; lattice_part = L.bottom
     ; tiling_part = L.bottom
-    ; universe_p = []
-    ; universe_l = []
-    ; universe_t = []
     ; max_dim
     }
 
@@ -473,21 +464,14 @@ end = struct
     match implicant with
     | None -> assert false
     | Some atoms ->
-       let lin = List.fold_left (fun lin atom ->
-                     let lin_atom =
-                       plt_constraint_of_atom srk linterm vec_of_symbol
-                         ~free_dim:lin.free_dim m atom in
-                     conjoin lin_atom lin
-                   )
-                   (tru ~free_dim)
-                   atoms
-       in
-       ( P.of_constraints (BatList.enum lin.p_cond)
-       , L.hermitize (lin.l_cond)
-       , L.hermitize (lin.t_cond)
-       , free_dim - 1
-       , lin.extension
-       )
+       List.fold_left (fun lin atom ->
+           let lin_atom =
+             plt_constraint_of_atom srk linterm vec_of_symbol
+               ~free_dim:lin.free_dim m atom in
+           conjoin lin_atom lin
+         )
+         (tru ~free_dim)
+         atoms
 
   let to_int_map m n =
     let rec to_int_map n map =
@@ -508,9 +492,6 @@ end = struct
         ?(universe_t=(BatList.enum []))
         ~max_dim
         dim_of_symbol univ_translation =
-    let universe_p = BatList.of_enum universe_p in
-    let universe_l = BatList.of_enum universe_l in
-    let universe_t = BatList.of_enum universe_t in
     let abstract m phi =
       logf ~level:`debug "abstract_to_standard_plt...";
       let implicant = Interpretation.select_implicant m phi in
@@ -520,21 +501,29 @@ end = struct
            (fun fmt atom -> Syntax.Formula.pp srk fmt atom)
         )
         (Option.get implicant);
-      let (p, l, t, max_dim_plt, extension) =
+      let lincond =
         plt_implicant_of_implicant srk (linearize_term_standard has_mod_floor)
           (fun sym -> V.of_term QQ.one (dim_of_symbol sym))
           ~free_dim:(max_dim + 1)
           m
           implicant
       in
-      logf ~level:`debug "abstract_to_standard_plt: abstracted @[%a@]"
-        (P.pp Format.pp_print_int) p;
-      let plt = { poly_part = p
-                ; lattice_part = l
-                ; tiling_part = t
-                ; universe_p
-                ; universe_l
-                ; universe_t
+      let max_dim_plt = lincond.free_dim - 1 in
+      log_plt_constraints "abstract_to_standard_plt: abstracted: "
+        (lincond.p_cond, lincond.l_cond, lincond.t_cond);
+      let imp_p =
+        Polyhedron.of_constraints
+          (BatEnum.append universe_p (BatList.enum lincond.p_cond))
+      in
+      let imp_l =
+        L.hermitize (List.rev_append (BatList.of_enum universe_l) lincond.l_cond)
+      in
+      let imp_t =
+        L.hermitize (List.rev_append (BatList.of_enum universe_t) lincond.t_cond)
+      in
+      let plt = { poly_part = imp_p
+                ; lattice_part = imp_l
+                ; tiling_part = imp_t
                 ; max_dim = max_dim_plt
                 }
       in
@@ -542,7 +531,7 @@ end = struct
         let m = univ_translation interp in
         let map = to_int_map m max_dim in
         (fun dim ->
-          try IntMap.find dim (extension map) with
+          try IntMap.find dim (lincond.extension map) with
           | Not_found -> m dim)
       in
       (plt, extended_univ_translation)
@@ -554,20 +543,19 @@ end = struct
       BatEnum.fold
         (fun phis constr -> formula_p srk term_of_dim constr :: phis)
         []
-        ((P.enum_constraints plt.poly_part)
-         |> BatEnum.append (BatList.enum plt.universe_p))
+        (P.enum_constraints plt.poly_part)
     in
     let phis_l =
       BatList.fold
         (fun phis lconstr -> formula_l srk term_of_dim lconstr :: phis)
         []
-        (L.basis plt.lattice_part |> List.rev_append plt.universe_l)
+        (L.basis plt.lattice_part)
     in
     let phis_t =
       BatList.fold
         (fun phis tconstr -> formula_t srk term_of_dim tconstr :: phis)
         []
-        (L.basis plt.tiling_part |> List.rev_append plt.universe_t)
+        (L.basis plt.tiling_part)
     in
     mk_and srk (phis_p @ phis_l @ phis_t)
 
@@ -895,18 +883,11 @@ end = struct
 
   let abstract_cooper_ ~elim ~ceiling m plt =
     let open Plt in
-    let p =
-      P.enum_constraints plt.poly_part
-      |> BatList.of_enum
-      |> List.rev_append plt.universe_p
-    in
-    let l = L.basis plt.lattice_part
-            |> List.rev_append plt.universe_l
-    in
+    let p = P.enum_constraints plt.poly_part |> BatList.of_enum in
+    let l = L.basis plt.lattice_part in
     let t = L.basis plt.tiling_part
-            |> List.rev_append plt.universe_t
     in
-    log_plt_constraints "abstracting" (p, l, t);
+    log_plt_constraints "abstract_cooper: abstracting" (p, l, t);
     let collect_dimensions (p, l, t) =
       p
       |> collect_dimensions (fun (_, v) -> v)
@@ -935,7 +916,7 @@ end = struct
         elim_dimensions
         (p, l, t)
     in
-    log_plt_constraints "abstracted" (projected_p, projected_l, projected_t);
+    log_plt_constraints "abstract_cooper: abstracted" (projected_p, projected_l, projected_t);
     let max_dim =
       let dimensions = collect_dimensions (projected_p, projected_l, projected_t) in
       try IntSet.max_elt dimensions with
@@ -945,9 +926,6 @@ end = struct
       poly_part = Polyhedron.of_constraints (BatList.enum projected_p)
     ; lattice_part = L.hermitize projected_l
     ; tiling_part = L.hermitize projected_t
-    ; universe_p = [] (* TODO: Separate projection from poly_part from universe_p? *)
-    ; universe_l = []
-    ; universe_t = []
     ; max_dim
     }
 
@@ -990,17 +968,9 @@ end = struct
         in
         LocalAbstraction.apply abstract m
       in
-      let p =
-        P.enum_constraints plt.Plt.poly_part
-        |> BatEnum.append (BatList.enum (plt.Plt.universe_p))
-        |> P.of_constraints
-      in
-      let l_constraints =
-        L.basis plt.lattice_part
-        |> BatList.append plt.universe_l
-      in
-      let closed_p = close_constraints (P.enum_constraints p) |> P.of_constraints
-      in
+      let closed_p = close_constraints (P.enum_constraints plt.Plt.poly_part)
+                     |> P.of_constraints in
+      let l_constraints = L.basis plt.Plt.lattice_part in
       let polyhedron_abstraction = abstract_lw closed_p in
       let subspace_abstraction =
         let subspace_constraints =
@@ -1047,7 +1017,7 @@ module SeparateProjection: sig
   
 end = struct
 
-  let collect_integer_dimensions l =
+  let collect_integer_dimensions l_vectors =
     let dims = ref IntSet.empty in
     BatList.iter
       (fun v ->
@@ -1058,22 +1028,14 @@ end = struct
                then dims := IntSet.add dim !dims
                else ())
       )
-      (L.basis l);
+      l_vectors;
     !dims
 
   let abstract_lw_cooper_ ~elim m plt =
     let open Plt in
-    let p =
-      P.enum_constraints plt.poly_part
-      |> BatList.of_enum
-      |> List.rev_append plt.universe_p
-    in
-    let l = L.basis plt.lattice_part
-            |> List.rev_append plt.universe_l
-    in
-    let t = L.basis plt.tiling_part
-            |> List.rev_append plt.universe_t
-    in
+    let p = P.enum_constraints plt.poly_part |> BatList.of_enum in
+    let l = L.basis plt.lattice_part in
+    let t = L.basis plt.tiling_part in
     log_plt_constraints "abstracting" (p, l, t);
     let collect_dimensions (p, l, t) =
       p

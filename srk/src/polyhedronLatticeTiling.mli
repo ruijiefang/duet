@@ -52,6 +52,18 @@ val formula_of_plt:
   'a Syntax.context -> (int -> 'a Syntax.arith_term) -> 'layout plt ->
   'a Syntax.formula
 
+val abstract_to_standard_plt:
+  [`ExpandModFloor | `NoExpandModFloor ] ->
+  'a Syntax.context -> 'a Syntax.arith_term array -> Syntax.Symbol.Set.t ->
+  ('a Syntax.formula, 'a Interpretation.interpretation, standard plt, int -> Q.t)
+    LocalAbstraction.t
+
+val abstract_to_intfrac_plt:
+  [`ExpandModFloor | `NoExpandModFloor ] ->
+  'a Syntax.context -> 'a Syntax.arith_term array -> Syntax.Symbol.Set.t ->
+  ('a Syntax.formula, 'a Interpretation.interpretation, intfrac plt, int -> Q.t)
+    LocalAbstraction.t
+
 val abstract_lw:
     elim: (int -> bool) ->
     (Polyhedron.t, int -> QQ.t, Polyhedron.t, int -> QQ.t) LocalAbstraction.t
@@ -65,18 +77,18 @@ val abstract_sc:
   max_dim_in_projected: int ->
   ('layout plt, int -> QQ.t, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t
 
-val convex_hull_sc: [`ReplaceModFloor | `NoModFloor] ->
+val convex_hull_sc: [`ExpandModFloor | `NoExpandModFloor] ->
                     'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
 
-val cooper_project: [`ReplaceModFloor | `NoModFloor] ->
+val cooper_project: [`ExpandModFloor | `NoExpandModFloor] ->
                     'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> standard plt list
 
-val convex_hull_lia: [`ReplaceModFloor | `NoModFloor] ->
+val convex_hull_lia: [`ExpandModFloor | `NoExpandModFloor] ->
                      'a Syntax.context -> 'a Syntax.formula ->
                      ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
 
-val convex_hull_lra: [`ReplaceModFloor | `NoModFloor] ->
+val convex_hull_lra: [`ExpandModFloor | `NoExpandModFloor] ->
                      'a Syntax.context -> 'a Syntax.formula ->
                      ('a Syntax.arith_term ) Array.t -> DD.closed DD.t

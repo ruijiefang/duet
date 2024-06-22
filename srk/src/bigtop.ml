@@ -496,7 +496,7 @@ let spec_list = [
                 (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
          (List.map snd qf);
        let _hull =
-         PLT.convex_hull_sc
+         PLT.convex_hull_sc `ExpandModFloor
            srk (Syntax.mk_and srk (phi :: integer_constraints))
            terms in
        (*
@@ -512,7 +512,56 @@ let spec_list = [
         *)
        Format.printf "Result: success"
      ),
-   "Compute the convex hull of an existential formula in integer-real linear arithmetic"
+   "Compute the convex hull of an existential formula in linear integer-real arithmetic"
+  );
+
+  ("-lira-convex-hull-separate-projection",
+   Arg.String (fun file ->
+       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
+       if List.exists (fun (q, _) -> q = `Forall) qf then
+         failwith "universal quantification not supported";
+       let module S = Syntax.Symbol.Set in
+       let module PLT = PolyhedronLatticeTiling in
+       let terms = S.filter
+                     (fun sym -> not (List.exists (fun (_, quant) -> quant = sym) qf))
+                     (Syntax.symbols phi)
+                   |> (fun set -> S.fold (fun sym terms -> Ctx.mk_const sym :: terms) set [])
+                   |> Array.of_list
+       in
+       let integer_constraints =
+         S.fold
+           (fun sym l ->
+             match Syntax.typ_symbol srk sym with
+             | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
+             | _ -> l
+           )
+           (Syntax.symbols phi)
+           []
+       in
+       Format.printf "Symbols to eliminate: @[%a@]@;"
+         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+            (fun fmt sym ->
+              Format.fprintf fmt "%a: %a"
+                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
+         (List.map snd qf);
+       let _hull =
+         PLT.convex_hull_sc `ExpandModFloor
+           srk (Syntax.mk_and srk (phi :: integer_constraints))
+           terms in
+       (*
+       Format.printf "Symbols to eliminate: @[%a@]@;"
+         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+            (fun fmt sym ->
+              Format.fprintf fmt "%a: %a"
+                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
+         (List.map snd qf);
+       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+         (Syntax.Formula.pp srk)
+         (PLT.formula_of_dd srk (fun dim -> terms.(dim)) hull);
+        *)
+       Format.printf "Result: success"
+     ),
+   "Compute the convex hull of an existential formula in linear integer-real arithmetic"
   );
 
   ("-convex-hull",

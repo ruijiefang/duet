@@ -280,8 +280,7 @@ end = struct
     | TV_floor of V.t
 
   let lin_mod vector_of_free_dim int_cond next_free_dim next_term_of_dim
-        ~free_dim term_of_dim
-        (v1, lincond1) (v2, _lincond2) =
+        ~free_dim term_of_dim v1 v2 =
     let modulus =
       try real_of v2 with | Invalid_argument _ -> raise Linear.Nonlinear
     in
@@ -297,9 +296,8 @@ end = struct
       {
         p_cond = [(`Nonneg, remainder); (`Pos, V.sub v2 remainder)]
                  @ intcond_p
-                 @ lincond1.p_cond
-      ; l_cond = intcond_l @ lincond1.l_cond
-      ; t_cond = lincond1.t_cond
+      ; l_cond = intcond_l
+      ; t_cond = []
       }
     in
     ( remainder
@@ -310,7 +308,7 @@ end = struct
 
   let lin_floor
         vector_of_free_dim int_cond next_free_dim next_term_of_dim
-        ~free_dim term_of_dim (v, lincond) =
+        ~free_dim term_of_dim v =
     let floored = vector_of_free_dim free_dim in
     logf ~level:`debug "introducing dimension %d for floor" free_dim;
     let lower_bound = V.sub v floored in
@@ -321,9 +319,9 @@ end = struct
     let lincond =
       {
         p_cond = [(`Nonneg, lower_bound); (`Pos, upper_bound)]
-                 @ intcond_p @ lincond.p_cond
-      ; l_cond = intcond_l @ lincond.l_cond
-      ; t_cond = lincond.t_cond
+                 @ intcond_p
+      ; l_cond = intcond_l
+      ; t_cond = []
       }
     in
     ( floored
@@ -338,10 +336,10 @@ end = struct
         ; free_dim: int
         ; new_dimensions: term_vector IntMap.t
         ; linearize_mod: free_dim:int -> term_vector IntMap.t ->
-                         (V.t * lin_cond) -> (V.t * lin_cond) ->
+                         V.t -> V.t ->
                          (V.t * lin_cond * int * term_vector IntMap.t)
         ; linearize_floor: free_dim:int -> term_vector IntMap.t ->
-                           (V.t * lin_cond) ->
+                           V.t ->
                            (V.t * lin_cond * int * term_vector IntMap.t)
         }
     | NoExpansion of
@@ -451,19 +449,22 @@ end = struct
              end
           | `Binop (`Mod, (v1, lincond1), (v2, lincond2)) ->
              let (term, cond, next_free_dim, next_term_of_dim) =
-               lin_mod ~free_dim:!curr_free_dim !curr_term_of_dim
-                 (v1, lincond1) (v2, lincond2)
+               lin_mod ~free_dim:!curr_free_dim !curr_term_of_dim v1 v2
+             in
+             let lincond = (conjoin lincond2 lincond1)
+                           |> conjoin cond
              in
              curr_free_dim := next_free_dim;
              curr_term_of_dim := next_term_of_dim;
-             (term, cond)
+             (term, lincond)
           | `Unop (`Floor, (v, lincond)) ->
              let (term, cond, next_free_dim, next_term_of_dim) =
-               lin_floor ~free_dim:!curr_free_dim !curr_term_of_dim (v, lincond)
+               lin_floor ~free_dim:!curr_free_dim !curr_term_of_dim v
              in
+             let lincond_floor = conjoin cond lincond in
              curr_free_dim := next_free_dim;
              curr_term_of_dim := next_term_of_dim;
-             (term, cond)
+             (term, lincond_floor)
           | `Unop (`Neg, (v, lincond)) -> (V.negate v, lincond)
           | `Ite _ -> assert false
           | `Select _ -> raise Linear.Nonlinear
@@ -501,7 +502,6 @@ end = struct
     (constrnt, expansion1)
 
   let plt_int srk expansion _m (sign: [`IsInt | `NotInt]) t =
-    (* TODO: integrality constraint for LIRA should be purified *)
     let (v, lincond, expansion') = linearize_term srk expansion t in
     match sign with
     | `IsInt ->

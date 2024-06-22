@@ -330,10 +330,10 @@ end = struct
     , next_term_of_dim free_dim (TV_floor v) term_of_dim
     )
 
-  type expansion =
-    | Expand_with of
-        { vec_of_symbol: Syntax.symbol -> V.t
-        ; free_dim: int
+  type expand_mod_floor =
+    | NoExpansion
+    | Expand_mod_floor_with of
+        { free_dim: int
         ; new_dimensions: term_vector IntMap.t
         ; linearize_mod: free_dim:int -> term_vector IntMap.t ->
                          V.t -> V.t ->
@@ -342,10 +342,12 @@ end = struct
                            V.t ->
                            (V.t * lin_cond * int * term_vector IntMap.t)
         }
-    | NoExpansion of
-        {
-          vec_of_symbol: Syntax.symbol -> V.t
-        }
+
+  type expansion =
+    {
+      vec_of_symbol: Syntax.symbol -> V.t
+    ; expand_mod_floor: expand_mod_floor
+    }
 
   let mk_expansion expand layout dim_of_symbol =
     let standard_vec_of_symbol s = V.of_term QQ.one (dim_of_symbol s) in
@@ -372,28 +374,36 @@ end = struct
     | `Standard ->
        begin match expand with
        | `Expand free_dim ->
-          Expand_with
-            { vec_of_symbol = standard_vec_of_symbol
-            ; free_dim
-            ; new_dimensions = IntMap.empty
-            ; linearize_mod = mk_standard lin_mod
-            ; linearize_floor = mk_standard lin_floor
-            }
+          { vec_of_symbol = standard_vec_of_symbol
+          ; expand_mod_floor =
+              Expand_mod_floor_with
+                { free_dim
+                ; new_dimensions = IntMap.empty
+                ; linearize_mod = mk_standard lin_mod
+                ; linearize_floor = mk_standard lin_floor
+                }
+          }
        | `NoExpand ->
-          NoExpansion { vec_of_symbol = standard_vec_of_symbol }
+          { vec_of_symbol = standard_vec_of_symbol
+          ; expand_mod_floor = NoExpansion
+          }
        end
     | `IntFrac ->
        begin match expand with
        | `Expand free_dim ->
-          Expand_with
-            { vec_of_symbol = int_frac_vec_of_symbol
-            ; free_dim
-            ; new_dimensions = IntMap.empty
-            ; linearize_mod = mk_int_frac lin_mod
-            ; linearize_floor = mk_int_frac lin_floor
-            }
+          { vec_of_symbol = standard_vec_of_symbol
+          ; expand_mod_floor =
+              Expand_mod_floor_with
+                { free_dim
+                ; new_dimensions = IntMap.empty
+                ; linearize_mod = mk_int_frac lin_mod
+                ; linearize_floor = mk_int_frac lin_floor
+                }
+          }
        | `NoExpand ->
-          NoExpansion { vec_of_symbol = int_frac_vec_of_symbol }
+          { vec_of_symbol = int_frac_vec_of_symbol
+          ; expand_mod_floor = NoExpansion
+          }
        end
 
   (* Linear.linterm_of can only handle div and mod on constants, but
@@ -402,19 +412,18 @@ end = struct
      [t' mod constant] terms.
    *)
   let linearize_term srk expansion term =
-    let (vec_of_symbol, curr_free_dim, curr_term_of_dim, lin_mod, lin_floor) =
-      match expansion with
-      | Expand_with
-        { vec_of_symbol
-        ; free_dim
+    let vec_of_symbol = expansion.vec_of_symbol in
+    let (curr_free_dim, curr_term_of_dim, lin_mod, lin_floor) =
+      match expansion.expand_mod_floor with
+      | Expand_mod_floor_with
+        { free_dim
         ; new_dimensions
         ; linearize_mod = lin_mod
         ; linearize_floor = lin_floor
         } ->
-         (vec_of_symbol, ref free_dim, ref new_dimensions, lin_mod, lin_floor)
-      | NoExpansion { vec_of_symbol } ->
-         ( vec_of_symbol
-         , ref (-1)
+         (ref free_dim, ref new_dimensions, lin_mod, lin_floor)
+      | NoExpansion ->
+         ( ref (-1)
          , ref IntMap.empty
          , (fun ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "mod term in formula")
          , (fun ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "floor term in formula")
@@ -470,19 +479,17 @@ end = struct
           | `Select _ -> raise Linear.Nonlinear
         ) term
     in
-    let next_expansion =
-      match expansion with
-      | Expand_with _ ->
-         Expand_with
-           { vec_of_symbol
-           ; free_dim = !curr_free_dim
+    let expand_mod_floor =
+      match expansion.expand_mod_floor with
+      | NoExpansion -> NoExpansion
+      | Expand_mod_floor_with initial ->
+         Expand_mod_floor_with
+           { initial with
+             free_dim = !curr_free_dim
            ; new_dimensions = !curr_term_of_dim
-           ; linearize_mod = lin_mod
-           ; linearize_floor = lin_floor
            }
-      | NoExpansion _ -> NoExpansion {vec_of_symbol}
     in
-    (linearized, cond, next_expansion)
+    (linearized, cond, {expansion with expand_mod_floor})
 
   let plt_ineq srk expansion (sign: [`Lt | `Leq | `Eq]) t1 t2 =
     let (v2, lin2, expansion2) = linearize_term srk expansion t2 in
@@ -597,9 +604,9 @@ end = struct
       in
       let extended_univ_translation interp =
         let m = univ_translation interp in
-        match post_expansion with
-        | NoExpansion _ -> m          
-        | Expand_with {new_dimensions ; _} ->
+        match post_expansion.expand_mod_floor with
+        | NoExpansion -> m          
+        | Expand_mod_floor_with {new_dimensions ; _} ->
            let rec evaluate_dim dim =
              try
                begin match IntMap.find dim new_dimensions with
@@ -750,11 +757,6 @@ end = struct
         end
     in
     let (universe_p, universe_l, universe_t) =
-      (*
-        term t --> new symbol x (and x_int, x_frac) and constraint 
-        x_int + x_frac = t_int + t_frac.
-        x = x_int + x_frac, t = t_int + t_frac are implicit.
-       *)
       let (p_conds, l_conds, t_conds) =
         (ref (BatEnum.empty ()), ref (BatEnum.empty ()), ref (BatEnum.empty ()))
       in

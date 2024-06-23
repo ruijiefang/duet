@@ -346,8 +346,118 @@ end = struct
   type expansion =
     {
       vec_of_symbol: Syntax.symbol -> V.t
+    ; translate_int_atom: [`IsInt | `NotInt] -> (int -> QQ.t) -> V.t -> lin_cond
     ; expand_mod_floor: expand_mod_floor
     }
+
+  let expand_univ_translation univ_translation new_dimensions initial =
+    let extend m new_dimensions =
+      let rec evaluate_dim dim =
+        try
+          begin match IntMap.find dim new_dimensions with
+          | TV_real r -> r
+          | TV_mod (v, r) ->
+             QQ.idiv (Linear.evaluate_affine evaluate_dim v) r |> QQ.of_zz
+          | TV_floor v ->
+             QQ.floor (Linear.evaluate_affine evaluate_dim v) |> QQ.of_zz
+          end
+        with
+        | Not_found -> m dim
+      in
+      evaluate_dim
+    in
+    let next = univ_translation initial in
+    extend next new_dimensions
+
+  let floor_int_frac m v =
+    (* 
+       For integer dimensions:
+
+       (Finite image)
+       Let r(m) \in \Z be such that
+       m |= p x_int = kq + r(m) for some integer k and 0 <= r(m) < q.
+
+       1. (Abstraction)
+          If m |= F[floor((p/q) x_int + t)], then  
+          m |= F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q ).
+
+       2. (Universality)
+          F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q )
+          |= F[floor((p/q) x_int + t)].
+
+          Int((p/q) x_int - r(m)/q) implies 
+          Int( (p/q) x_int - r(m)/q + floor(r(m)/q + t) ) implies
+          (p/q) x_int - r(m)/q + floor(r(m)/q + t) = k for some k \in \Z.
+            
+          Want to show k = floor((p/q) x_int + t).
+          (p/q) x_int + t = k + (r(m)/q + t) - floor(r(m)/q + t).
+          So floor( (p/q) x_int + t ) = k + floor( (r(m)/q + t) - floor(r(m)/q + t) ).
+          For all y \in \R, 0 <= y - floor(y) < 1, so the second summand is always 0,
+          and the claim follows.
+
+       For fractional dimensions:
+
+       (Finite image)
+       0 <= x_frac < 1 -->  
+       - t <= a x_frac + t < a + t. floor(t) <= floor(a x_frac + t) <= floor(a + t).
+       - a + t < a x_frac + t <= t. floor(a + t) <= floor(a x_frac + t) <= floor(t).
+
+       Let n \in \Z be such that m |= floor(a x_frac + t) = n.
+
+       1. (Abstraction)
+       If m |= F[floor(a x_frac + t)], then m |= F[n] /\ n <= a x_frac + t < n + 1.
+         
+       2. (Universality) 
+       F[n] /\ n <= a x_frac + t < n + 1 |= F[floor(a x_frac + t)].
+     *)
+
+    let (integer_part, fraction_from_integer_part, lconds) =
+      V.fold
+        (fun dim coeff (integer_part, fractional_part, lconds) ->
+          if dim mod 2 = 1 then (integer_part, fractional_part, lconds)
+          else
+            let (p, q) = QQ.to_zzfrac coeff in
+            let remainder =
+              match QQ.to_zz (m dim) with
+              | Some n -> ZZ.modulo (ZZ.mul p n) q
+              | None ->
+                 failwith
+                   (Format.asprintf "dim %d should evaluate to an integer" dim)
+            in
+            let fraction = QQ.of_zzfrac remainder q in
+            let integer_summand =
+              V.of_term coeff dim
+              |> V.add_term (QQ.negate fraction) Linear.const_dim in
+            ( V.add integer_part integer_summand
+            , QQ.add fractional_part fraction
+            , integer_summand :: lconds
+            )
+        )
+        v
+        (V.zero, QQ.zero, [])
+    in
+    let (fraction_part, pconds) =
+      V.fold
+        (fun dim coeff (sum, term) ->
+          if dim mod 2 = 0 then (sum, term)
+          else
+            ( QQ.add (QQ.mul coeff (m dim)) sum
+            , V.add_term coeff dim term
+            )
+        )
+        v (fraction_from_integer_part, Linear.const_linterm fraction_from_integer_part)
+      |> (fun (sum, term) ->
+        let lower_bound = QQ.floor sum |> QQ.of_zz in
+        let pconds =
+          [ (`Nonneg, V.add_term (QQ.negate lower_bound) Linear.const_dim term)
+          ; (`Pos, (Linear.const_linterm (QQ.add lower_bound QQ.one))
+                   |> V.add (V.negate term))
+          ]
+        in
+        (lower_bound, pconds))
+    in
+    let result = V.add_term fraction_part Linear.const_dim integer_part in
+    (result, pconds, lconds)
 
   let mk_expansion expand layout dim_of_symbol =
     let standard_vec_of_symbol s = V.of_term QQ.one (dim_of_symbol s) in
@@ -370,11 +480,31 @@ end = struct
           IntMap.add free_dim term map |> IntMap.add free_dim (TV_real QQ.zero)
         )
     in
+    let int_frac_translate integral m v =
+      let (result, pconds, lconds) = floor_int_frac m v in
+      match integral with
+      | `IsInt ->
+         { p_cond = (`Zero, V.sub v result) :: pconds
+         ; l_cond = lconds
+         ; t_cond = []
+         }
+      | `NotInt ->
+         { p_cond = (`Pos, V.sub v result) :: pconds
+         ; l_cond = lconds
+         ; t_cond = []
+         }
+    in
+    let standard_translate integral _m v =
+      match integral with
+      | `IsInt -> { p_cond = []; l_cond = [v]; t_cond = [] }
+      | `NotInt -> { p_cond = []; l_cond = []; t_cond = [v] }
+    in
     match layout with
     | `Standard ->
        begin match expand with
        | `Expand free_dim ->
           { vec_of_symbol = standard_vec_of_symbol
+          ; translate_int_atom = standard_translate
           ; expand_mod_floor =
               Expand_mod_floor_with
                 { free_dim
@@ -385,6 +515,7 @@ end = struct
           }
        | `NoExpand ->
           { vec_of_symbol = standard_vec_of_symbol
+          ; translate_int_atom = standard_translate
           ; expand_mod_floor = NoExpansion
           }
        end
@@ -392,6 +523,7 @@ end = struct
        begin match expand with
        | `Expand free_dim ->
           { vec_of_symbol = standard_vec_of_symbol
+          ; translate_int_atom = int_frac_translate
           ; expand_mod_floor =
               Expand_mod_floor_with
                 { free_dim
@@ -402,6 +534,7 @@ end = struct
           }
        | `NoExpand ->
           { vec_of_symbol = int_frac_vec_of_symbol
+          ; translate_int_atom = int_frac_translate
           ; expand_mod_floor = NoExpansion
           }
        end
@@ -508,17 +641,19 @@ end = struct
     in
     (constrnt, expansion1)
 
-  let plt_int srk expansion _m (sign: [`IsInt | `NotInt]) t =
-    let (v, lincond, expansion') = linearize_term srk expansion t in
-    match sign with
-    | `IsInt ->
-       let constrnt = {lincond with l_cond = v :: lincond.l_cond} in
-       (constrnt, expansion')
-    | `NotInt ->
-       let constrnt = {lincond with t_cond = v :: lincond.t_cond } in
-       (constrnt, expansion')
+  let plt_int srk univ_translation expansion interp (sign: [`IsInt | `NotInt]) t =
+    let (v, lincond_linearize, next_expansion) = linearize_term srk expansion t in
+    let m =
+      match next_expansion.expand_mod_floor with
+      | NoExpansion -> univ_translation interp
+      | Expand_mod_floor_with {new_dimensions; _} ->
+         (expand_univ_translation univ_translation new_dimensions) interp
+    in
+    let lincond_int = next_expansion.translate_int_atom sign m v
+    in
+    (conjoin lincond_int lincond_linearize, next_expansion)
 
-  let plt_constraint_of_atom srk expansion m atom =
+  let plt_constraint_of_atom srk univ_translation expansion interp atom =
     match Formula.destruct srk atom with
     | `Tru -> (tru, expansion)
     | `Fls -> (fls, expansion)
@@ -528,7 +663,7 @@ end = struct
          | `Tru -> (fls, expansion)
          | `Fls -> (tru, expansion)
          | `Atom (`Arith (`Eq, t1, t2)) ->
-            if Interpretation.evaluate_formula m (Syntax.mk_lt srk t1 t2)
+            if Interpretation.evaluate_formula interp (Syntax.mk_lt srk t1 t2)
             then
               plt_ineq srk expansion `Lt t1 t2
             else
@@ -539,7 +674,7 @@ end = struct
             plt_ineq srk expansion `Leq t2 t1
          | `Atom (`ArrEq (_t1, _t2)) -> invalid_arg "linearize_atom"
          | `Atom (`IsInt t) ->
-            plt_int srk expansion m `NotInt t
+            plt_int srk univ_translation expansion interp `NotInt t
          | _ -> invalid_arg "linearize_atom"
        end
     | `Atom (`Arith (`Eq, t1, t2)) ->
@@ -549,16 +684,17 @@ end = struct
     | `Atom (`Arith (`Lt, t1, t2)) ->
        plt_ineq srk expansion `Lt t1 t2
     | `Atom (`ArrEq (_t1, _t2)) -> invalid_arg "linearize_atom"
-    | `Atom (`IsInt t) -> plt_int srk expansion m `IsInt t
+    | `Atom (`IsInt t) ->
+       plt_int srk univ_translation expansion interp `IsInt t
     | _ -> invalid_arg "linearize_atom"
 
-  let plt_implicant_of_implicant srk expansion m implicant =
+  let plt_implicant_of_implicant srk univ_translation expansion m implicant =
     match implicant with
     | None -> assert false
     | Some atoms ->
        List.fold_left (fun (lincond, expansion) atom ->
            let (lincond_atom, next_expansion) =
-             plt_constraint_of_atom srk expansion m atom in
+             plt_constraint_of_atom srk univ_translation expansion m atom in
            (conjoin lincond_atom lincond, next_expansion)
          )
          (tru, expansion)
@@ -583,7 +719,7 @@ end = struct
         (Option.get implicant);
       let expansion = mk_expansion expand_mod_floor layout dim_of_symbol in
       let (lincond, post_expansion) =
-        plt_implicant_of_implicant srk expansion m implicant in
+        plt_implicant_of_implicant srk univ_translation expansion m implicant in
       log_plt_constraints "abstract_to_plt: abstracted: "
         (lincond.p_cond, lincond.l_cond, lincond.t_cond);
       let imp_p =
@@ -602,26 +738,13 @@ end = struct
                 ; metadata = None
                 }
       in
-      let extended_univ_translation interp =
-        let m = univ_translation interp in
+      let expanded_univ_translation =
         match post_expansion.expand_mod_floor with
-        | NoExpansion -> m          
+        | NoExpansion -> univ_translation
         | Expand_mod_floor_with {new_dimensions ; _} ->
-           let rec evaluate_dim dim =
-             try
-               begin match IntMap.find dim new_dimensions with
-               | TV_real r -> r
-               | TV_mod (v, r) ->
-                  QQ.idiv (Linear.evaluate_affine evaluate_dim v) r |> QQ.of_zz
-               | TV_floor v ->
-                  QQ.floor (Linear.evaluate_affine evaluate_dim v) |> QQ.of_zz
-               end
-             with
-             | Not_found -> m dim
-           in
-           evaluate_dim
+           expand_univ_translation univ_translation new_dimensions
       in
-      (plt, extended_univ_translation)
+      (plt, expanded_univ_translation)
     in
     LocalAbstraction.{ abstract }
 

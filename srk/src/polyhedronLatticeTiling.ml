@@ -161,11 +161,13 @@ let log_plt_constraints str (p, l, t) =
     (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
        pp_vector) t
 
+let test_level = ref `trace
+
 let test_point_in_polyhedron level str m p =
-  if Log.level_leq level `trace then
+  if Log.level_leq level !test_level then
     List.iter
       (fun (kind, v) ->
-        logf "%s: testing vector: %a" str Linear.QQVector.pp v;
+        logf "%s: testing @[%a@]" str pp_pconstr (kind, v);
         let result = Linear.evaluate_affine m v in
         match kind with
         | `Zero ->
@@ -181,10 +183,16 @@ let test_point_in_polyhedron level str m p =
   else ()
 
 let test_point_in_lattice is_int level str m l =
-  if Log.level_leq level `trace then
+  if Log.level_leq level !test_level then
     List.iter
       (fun v ->
-        logf "%s: testing vector: %a" str Linear.QQVector.pp v;
+        logf "%s: testing %a(%a)"
+          str
+          (fun fmt is_int -> match is_int with
+                             | `IsInt -> Format.fprintf fmt "Int"
+                             | `NotInt -> Format.fprintf fmt "~Int")
+          is_int
+          Linear.QQVector.pp v;
         let result = Linear.evaluate_affine m v in
         match QQ.to_zz result, is_int with
         | Some _, `IsInt -> ()
@@ -1035,8 +1043,6 @@ end = struct
 
   let abstract_lw ~elim =
     let abstract m p =
-      test_point_in_polyhedron !my_verbosity_level "abstract_lw" m
-        (BatList.of_enum (P.enum_constraints p));
       let to_project =
         BatList.of_enum (P.enum_constraints p)
         |> collect_dimensions (fun (_, v) -> v) (fun _ -> true)
@@ -1051,6 +1057,8 @@ end = struct
       let abstracted = P.local_project m to_project p in
       logf ~level:`debug "abstract_lw: abstracted @[%a@]@\n"
         (P.pp Format.pp_print_int) abstracted;
+      test_point_in_polyhedron !my_verbosity_level "abstract_lw" m
+        (BatList.of_enum (P.enum_constraints abstracted));
       let restricted m dim =
         if elim dim then failwith "abstract_lw: Dimension has been eliminated"
         else m dim
@@ -1132,7 +1140,7 @@ end = struct
 
   let glb_for dim p m =
     let has_upper_bound = ref false in
-    let max (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
+    let argmax (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
       if b1 < b2 then (kind2, lower_bound2, b2)
       else if b2 < b1 then (kind1, lower_bound1, b1)
       else
@@ -1144,6 +1152,11 @@ end = struct
         end
     in
     let glb = ref None in
+    let set_glb lb =
+      logf ~level:`trace "glb_for: setting lower bound @[%a@]"
+        pp_vector (let (_, lower_bound, _) = lb in lower_bound);
+      glb := Some lb
+    in
     List.iter
       (fun (kind, v) ->
         logf ~level:`trace "glb_for: @[%a@]"
@@ -1162,17 +1175,23 @@ end = struct
                 | _ -> ()
               in
               match !glb with
-              | None -> glb := Some (kind, lower_bound, b)
+              | None ->
+                 set_glb (kind, lower_bound, b)
               | Some (kind0, lower_bound0, b0) ->
-                 glb := Some (max (kind0, lower_bound0, b0) (kind, lower_bound, b))
+                 set_glb (argmax (kind0, lower_bound0, b0) (kind, lower_bound, b))
             end
           else
             begin
               has_upper_bound := true;
-              match !glb with
-              | None -> glb := Some (kind, lower_bound, b)
-              | Some (kind0, lower_bound0, b0) ->
-                 glb := Some (max (kind0, lower_bound0, b0) (kind, lower_bound, b))
+              match kind with
+              | `Zero ->
+                 begin match !glb with
+                 | None ->
+                    set_glb (kind, lower_bound, b)
+                 | Some (kind0, lower_bound0, b0) ->
+                    set_glb (argmax (kind0, lower_bound0, b0) (kind, lower_bound, b))
+                 end
+              | _ -> ()
             end
       )
       p;
@@ -1187,18 +1206,14 @@ end = struct
      If [ceiling] has finite image (for each t), [abstract_cooper_one] has.
    *)
   let cooper_one ceiling lcm_denom_elim_dim_in_lt elim_dim m (p, l, t) =
-    test_point_in_polyhedron !my_verbosity_level "cooper_one" m p;
-    test_point_in_lattice `IsInt !my_verbosity_level "cooper_one" m l;
-    test_point_in_lattice `NotInt !my_verbosity_level "cooper_one" m t;
-    logf ~level:`debug "cooper_one: eliminating %d@;" elim_dim;
-
+    logf ~level:`debug "cooper_one: eliminating %d" elim_dim;
     let select_term lower =
       let delta = QQ.modulo
                     (QQ.sub (m elim_dim) (Linear.evaluate_affine m lower))
                     lcm_denom_elim_dim_in_lt
       in
       let term = V.add_term delta Linear.const_dim lower in
-      logf ~level:`debug "cooper_one: selected term @[%a@]" pp_vector term;
+      logf ~level:`debug "cooper_one: selected term @[%a@]@;" pp_vector term;
       term
     in
     let (term_selected, pcond, lcond) =
@@ -1206,10 +1221,11 @@ end = struct
       | (_, false) -> (`PlusInfinity, [], [])
       | (None, _) -> (`MinusInfinity, [], [])
       | (Some (kind, term, value), true) ->
+         logf ~level:`debug "abstract_cooper: selecting term based on @[%a@]"
+           pp_pconstr (kind, V.add_term QQ.one elim_dim term);
+         let (rounded, pcond, lcond) = ceiling m term in
          if Option.is_some (QQ.to_zz value) && kind = `Pos then
-           let (rounded, pcond, lcond) = ceiling m term in
-           let lb =
-             V.add_term QQ.one Linear.const_dim rounded
+           let lb = V.add_term QQ.one Linear.const_dim rounded
            in
            (`Term (select_term lb), pcond, lcond)
          else
@@ -1228,6 +1244,9 @@ end = struct
     in
     let tiling = virtual_sub_l term_selected elim_dim t
     in
+    test_point_in_polyhedron !my_verbosity_level "cooper_one" m polyhedron;
+    test_point_in_lattice `IsInt !my_verbosity_level "cooper_one" m lattice;
+    test_point_in_lattice `NotInt !my_verbosity_level "cooper_one" m tiling;
     (polyhedron, lattice, tiling)
 
   let abstract_cooper_ ~elim ~ceiling m plt =
@@ -1240,6 +1259,8 @@ end = struct
       Plt.constrained_dimensions plt
       |> IntSet.filter elim
     in
+    logf ~level:`debug "abstract_cooper: eliminating dimensions @[%a@]"
+      IntSet.pp elim_dimensions;
     let (projected_p, projected_l, projected_t) =
       IntSet.fold
         (fun elim_dim (p, l, t) ->
@@ -1413,8 +1434,8 @@ end = struct
         elim_dimensions
     in
     let abstract_lw =
-      (LoosWeispfenning.abstract_lw
-         ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim))
+      LoosWeispfenning.abstract_lw
+        ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim)
     in
     let local_abstraction =
       Plt.abstract_poly_part abstract_lw
@@ -1423,12 +1444,21 @@ end = struct
               ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
               ~ceiling:(fun _ v -> (v, [], [])))
     in
-    LocalAbstraction.apply local_abstraction m plt
+    let (plt, univ_translation) =
+      LocalAbstraction.apply2 local_abstraction m plt in
+    let projected_p = Plt.poly_part plt in
+    let projected_l = Plt.lattice_part plt in
+    let projected_t = Plt.tiling_part plt in
+    log_plt_constraints "abstract_lw_cooper: abstracted"
+      ( BatList.of_enum (P.enum_constraints projected_p)
+      , L.basis projected_l
+      , L.basis projected_t);
+    (plt, univ_translation)
 
   let abstract_lw_cooper ~elim =
     LocalAbstraction.
     {
-      abstract = (fun m c -> (abstract_lw_cooper_ ~elim m c, fun m -> m))
+      abstract = abstract_lw_cooper_ ~elim
     }
 
 end
@@ -1626,11 +1656,13 @@ let convex_hull_lw_cooper hull_after_proj has_mod_floor srk phi terms =
   let finalizer =
     match hull_after_proj with
     | `IntHullAfterProjection ->
-       logf "convex_hull_lw_cooper: taking integer hull...";
-       (fun _m dd -> (DD.integer_hull dd, fun m -> m))
+       (fun _m dd ->
+         logf "convex_hull_lw_cooper: taking integer hull...";
+         (DD.integer_hull dd, fun m -> m))
     | `NoIntHullAfterProjection ->
-       logf "convex_hull_lw_cooper: done";
-       (fun _m dd -> (dd, fun m -> m))
+       (fun _m dd ->
+         logf "convex_hull_lw_cooper: done";
+         (dd, fun m -> m))
   in
   let num_terms = Array.length terms in
   let local_abs =

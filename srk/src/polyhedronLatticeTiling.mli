@@ -89,10 +89,16 @@ val cooper_project: [`ExpandModFloor | `NoExpandModFloor] ->
                     'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> standard plt list
 
+val convex_hull_lw_cooper:
+  [`IntHullAfterProjection | `NoIntHullAfterProjection] ->
+  [`ExpandModFloor | `NoExpandModFloor] ->
+  'a Syntax.context -> 'a Syntax.formula ->
+  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+
 val convex_hull_lia: [`ExpandModFloor | `NoExpandModFloor] ->
-                     'a Syntax.context -> 'a Syntax.formula ->
-                     ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+  'a Syntax.context -> 'a Syntax.formula ->
+  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
 
 val convex_hull_lra: [`ExpandModFloor | `NoExpandModFloor] ->
-                     'a Syntax.context -> 'a Syntax.formula ->
-                     ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+  'a Syntax.context -> 'a Syntax.formula ->
+  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t

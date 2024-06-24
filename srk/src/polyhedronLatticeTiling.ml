@@ -124,14 +124,14 @@ let formula_of_dd srk term_of_dim dd =
   |> List.rev
   |> mk_and srk
 
-let collect_dimensions vector_of constraints =
+let collect_dimensions vector_of add_dim constraints =
   let dims = ref IntSet.empty in
   BatList.iter
     (fun constr ->
       V.enum (vector_of constr)
       |> BatEnum.iter
            (fun (_, dim) ->
-             if dim <> Linear.const_dim
+             if dim <> Linear.const_dim && add_dim dim
              then dims := IntSet.add dim !dims
              else ())
     )
@@ -160,6 +160,46 @@ let log_plt_constraints str (p, l, t) =
     "%s: t_constraints: @[%a@]@\n" str
     (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
        pp_vector) t
+
+let test_point_in_polyhedron level str m p =
+  if Log.level_leq level `trace then
+    List.iter
+      (fun (kind, v) ->
+        logf "%s: testing vector: %a" str Linear.QQVector.pp v;
+        let result = Linear.evaluate_affine m v in
+        match kind with
+        | `Zero ->
+           if not (QQ.equal result QQ.zero) then
+             failwith
+               (Format.asprintf "%s: evaluated vector to %a, expected 0"
+                  str QQ.pp result)
+           else ()
+        | `Nonneg -> assert (QQ.leq QQ.zero result)
+        | `Pos -> assert (QQ.lt QQ.zero result)
+      )
+      p
+  else ()
+
+let test_point_in_lattice is_int level str m l =
+  if Log.level_leq level `trace then
+    List.iter
+      (fun v ->
+        logf "%s: testing vector: %a" str Linear.QQVector.pp v;
+        let result = Linear.evaluate_affine m v in
+        match QQ.to_zz result, is_int with
+        | Some _, `IsInt -> ()
+        | None, `NotInt -> ()
+        | None, `IsInt ->
+           failwith
+             (Format.asprintf "%s: evaluated vector to %a, expected an integer"
+                str QQ.pp result)
+        | Some _, `NotInt ->
+           failwith
+             (Format.asprintf "%s: evaluated vector to %a, expected a non-integer"
+                str QQ.pp result)
+      )
+      l
+  else ()
 
 module Plt : sig
 
@@ -239,9 +279,9 @@ end = struct
     let p = BatList.of_enum (P.enum_constraints plt.poly_part) in
     let l = L.basis plt.lattice_part in
     let t = L.basis plt.tiling_part in
-    collect_dimensions (fun (_, v) -> v) p
-    |> IntSet.union (collect_dimensions (fun v -> v) l)
-    |> IntSet.union (collect_dimensions (fun v -> v) t)
+    collect_dimensions (fun (_, v) -> v) (fun _ -> true) p
+    |> IntSet.union (collect_dimensions (fun v -> v) (fun _ -> true) l)
+    |> IntSet.union (collect_dimensions (fun v -> v) (fun _ -> true) t)
 
   let top =
     {
@@ -851,6 +891,7 @@ end = struct
         terms;
       (!p_conds, !l_conds, !t_conds)
     in
+    logf ~level:`debug "abstract_to_standard_plt...";
     abstract_to_plt expand_mod_floor `Standard srk
       ~universe_p ~universe_l ~universe_t dim_of_symbol interp_dim
 
@@ -949,6 +990,7 @@ end = struct
         terms;
       (!p_conds, !l_conds, !t_conds)
     in
+    logf ~level:`debug "abstract_to_intfrac_plt...";
     abstract_to_plt expand_mod_floor `Standard srk
       ~universe_p ~universe_l ~universe_t int_dim_of_symbol interp_dim
 
@@ -972,9 +1014,12 @@ end = struct
 
   let abstract ~max_dim_in_projected =
     let abstract _m p =
-      ( P.dd_of (max_dim_in_projected + 1) p
-      , (fun m -> m)
-      )
+      logf ~level:`debug "DDifying %a with dimension %d"
+        (P.pp Format.pp_print_int) p
+        max_dim_in_projected;
+      let dd = P.dd_of (max_dim_in_projected + 1) p in
+      let () = logf ~level:`debug "DDified@;" in
+      (dd, (fun m -> m))
     in
     LocalAbstraction.{ abstract }
 
@@ -990,9 +1035,11 @@ end = struct
 
   let abstract_lw ~elim =
     let abstract m p =
+      test_point_in_polyhedron !my_verbosity_level "abstract_lw" m
+        (BatList.of_enum (P.enum_constraints p));
       let to_project =
         BatList.of_enum (P.enum_constraints p)
-        |> collect_dimensions (fun (_, v) -> v)
+        |> collect_dimensions (fun (_, v) -> v) (fun _ -> true)
         |> IntSet.filter elim
         |> IntSet.to_list
       in
@@ -1130,6 +1177,10 @@ end = struct
      If [ceiling] has finite image (for each t), [abstract_cooper_one] has.
    *)
   let cooper_one ceiling lcm_denom_elim_dim_in_lt elim_dim m (p, l, t) =
+    test_point_in_polyhedron !my_verbosity_level "cooper_one" m p;
+    test_point_in_lattice `IsInt !my_verbosity_level "cooper_one" m l;
+    test_point_in_lattice `NotInt !my_verbosity_level "cooper_one" m t;
+
     let select_term lower =
       let delta = QQ.modulo
                     (QQ.sub (m elim_dim) (Linear.evaluate_affine m lower))
@@ -1327,7 +1378,7 @@ end = struct
     LocalAbstraction.{abstract}      
 end
     
-module SeparateProjection: sig
+module LwCooper: sig
 
   (** This abstraction does real projection for real-valued dimensions and
       Cooper projection for integer-valued dimensions.
@@ -1338,36 +1389,14 @@ module SeparateProjection: sig
 
 end = struct
 
-  let collect_integer_dimensions l_vectors =
-    let dims = ref IntSet.empty in
-    BatList.iter
-      (fun v ->
-        V.enum v
-        |> BatEnum.iter
-             (fun (_, dim) ->
-               if dim <> Linear.const_dim
-               then dims := IntSet.add dim !dims
-               else ())
-      )
-      l_vectors;
-    !dims
-
   let abstract_lw_cooper_ ~elim m plt =
     let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
     let l = L.basis (Plt.lattice_part plt) in
     let t = L.basis (Plt.tiling_part plt) in
-    log_plt_constraints "abstracting" (p, l, t);
-    let collect_dimensions (p, l, t) =
-      p
-      |> collect_dimensions (fun (_, v) -> v)
-      |> IntSet.union (collect_dimensions (fun v -> v) l)
-      |> IntSet.union (collect_dimensions (fun v -> v) t)
-    in
+    log_plt_constraints "abstract_lw_cooper: abstracting" (p, l, t);
     let elim_dimensions =
-      collect_dimensions (p, l, t)
-      |> IntSet.filter elim
-    in
-    let integer_dimensions = collect_integer_dimensions l in
+      Plt.constrained_dimensions plt |> IntSet.filter elim in
+    let integer_dimensions = collect_dimensions (fun v -> v) (fun _ -> true) l in
     let (int_dims_to_elim, real_dims_to_elim) =
       IntSet.partition (fun dim -> IntSet.mem dim integer_dimensions)
         elim_dimensions
@@ -1582,13 +1611,22 @@ let convex_hull_intfrac has_mod_floor srk phi terms =
   in
   Abstraction.apply abstract phi
 
-let convex_hull_separate_projection has_mod_floor finalizer srk phi terms =
+let convex_hull_lw_cooper hull_after_proj has_mod_floor srk phi terms =
+  let finalizer =
+    match hull_after_proj with
+    | `IntHullAfterProjection ->
+       logf "convex_hull_lw_cooper: taking integer hull...";
+       (fun _m dd -> (DD.integer_hull dd, fun m -> m))
+    | `NoIntHullAfterProjection ->
+       logf "convex_hull_lw_cooper: done";
+       (fun _m dd -> (dd, fun m -> m))
+  in
   let num_terms = Array.length terms in
   let local_abs =
     let open LocalAbstraction in
-    let elim dim = dim > num_terms in
+    logf ~level:`debug "convex_hull_lw_cooper...";
     Plt.abstract_to_standard_plt has_mod_floor srk terms (Syntax.symbols phi)
-    |> compose (SeparateProjection.abstract_lw_cooper ~elim)
+    |> compose (LwCooper.abstract_lw_cooper ~elim:(fun dim -> dim >= num_terms))
     |> compose (inject (fun _ plt -> (Plt.poly_part plt, fun m -> m)))
     |> compose (Ddify.abstract ~max_dim_in_projected:(num_terms - 1))
     |> compose (inject finalizer)
@@ -1600,9 +1638,7 @@ let convex_hull_separate_projection has_mod_floor finalizer srk phi terms =
   Abstraction.apply abstract phi
 
 let convex_hull_lia has_mod_floor =
-  convex_hull_separate_projection has_mod_floor
-    (fun _m dd -> (DD.integer_hull dd, fun m -> m))
-
+  convex_hull_lw_cooper `IntHullAfterProjection has_mod_floor
+  
 let convex_hull_lra has_mod_floor =
-  convex_hull_separate_projection has_mod_floor
-    (fun _m dd -> (dd, fun m -> m))
+  convex_hull_lw_cooper `NoIntHullAfterProjection has_mod_floor

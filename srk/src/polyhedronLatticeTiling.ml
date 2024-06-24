@@ -1132,38 +1132,48 @@ end = struct
 
   let glb_for dim p m =
     let has_upper_bound = ref false in
+    let max (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
+      if b1 < b2 then (kind2, lower_bound2, b2)
+      else if b2 < b1 then (kind1, lower_bound1, b1)
+      else
+        begin match (kind1, kind2) with
+        | (`Nonneg, `Pos)
+          | (`Nonneg, `Zero)
+          | (`Pos, `Zero) -> (kind2, lower_bound2, b2)
+        | (_, _) -> (kind1, lower_bound1, b1)
+        end
+    in
     let glb = ref None in
     List.iter
       (fun (kind, v) ->
+        logf ~level:`trace "glb_for: @[%a@]"
+          pp_pconstr (kind, v);
         let (coeff, w) = V.pivot dim v in
         if QQ.equal QQ.zero coeff then
           ()
-        else if QQ.lt QQ.zero coeff then
+        else
           let lower_bound = V.scalar_mul (QQ.negate (QQ.inverse coeff)) w in
           let b = Linear.evaluate_affine m lower_bound in
-          begin
-            let () =
-              match kind with
-              | `Zero -> has_upper_bound := true
-              | _ -> ()
-            in
-            match !glb with
-            | None -> glb := Some (kind, lower_bound, b)
-            | Some (kind0, _, b0) ->
-               if b0 < b then
-                 glb := Some (kind, lower_bound, b)
-               else if b < b0 then
-                 ()
-               else
-                 begin match (kind0, kind) with
-                 | (`Nonneg, `Pos)
-                   | (`Nonneg, `Zero)
-                   | (`Pos, `Zero) -> glb := Some (kind, lower_bound, b)
-                 | (_, _) -> ()
-                 end
-          end
-        else
-          has_upper_bound := true
+          if QQ.lt QQ.zero coeff then
+            begin
+              let () =
+                match kind with
+                | `Zero -> has_upper_bound := true
+                | _ -> ()
+              in
+              match !glb with
+              | None -> glb := Some (kind, lower_bound, b)
+              | Some (kind0, lower_bound0, b0) ->
+                 glb := Some (max (kind0, lower_bound0, b0) (kind, lower_bound, b))
+            end
+          else
+            begin
+              has_upper_bound := true;
+              match !glb with
+              | None -> glb := Some (kind, lower_bound, b)
+              | Some (kind0, lower_bound0, b0) ->
+                 glb := Some (max (kind0, lower_bound0, b0) (kind, lower_bound, b))
+            end
       )
       p;
     (!glb, !has_upper_bound)
@@ -1180,6 +1190,7 @@ end = struct
     test_point_in_polyhedron !my_verbosity_level "cooper_one" m p;
     test_point_in_lattice `IsInt !my_verbosity_level "cooper_one" m l;
     test_point_in_lattice `NotInt !my_verbosity_level "cooper_one" m t;
+    logf ~level:`debug "cooper_one: eliminating %d@;" elim_dim;
 
     let select_term lower =
       let delta = QQ.modulo

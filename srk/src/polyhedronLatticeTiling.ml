@@ -27,7 +27,8 @@ module LocalAbstraction : sig
     ('concept1, 'point1, 'concept2, 'point2) t ->
     ('concept1, 'point1, 'concept3, 'point3) t
 
-  val inject: ('point -> 'concept1 -> 'concept2) -> ('concept1, 'point, 'concept2, 'point) t
+  val inject: ('point1 -> 'concept1 -> 'concept2 * ('point1 -> 'point2))
+              -> ('concept1, 'point1, 'concept2, 'point2) t
 
 end = struct
 
@@ -71,7 +72,7 @@ end = struct
     in
     { abstract }
 
-  let inject f = { abstract = (fun x c -> (f x c, (fun m -> m))) }
+  let inject f = { abstract = f }
 
 end
 
@@ -163,14 +164,25 @@ let log_plt_constraints str (p, l, t) =
 module Plt : sig
 
   type standard
-  type intfrac
+  type intfrac =
+    {
+      start_of_term_int_frac: int
+    ; start_of_symbol_int_frac: int
+    }
 
   type 'layout t
+
+  val int_frac_layout: num_terms:int -> intfrac
 
   val top: 'layout t
 
   val formula_of_plt:
     'a Syntax.context -> (int -> 'a Syntax.arith_term) -> 'layout t -> 'a formula
+
+  val constrained_dimensions: 'layout t -> IntSet.t
+
+  val ceiling_int_frac:
+    (int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)
 
   val abstract_to_standard_plt:
     [`ExpandModFloor | `NoExpandModFloor ] ->
@@ -189,8 +201,7 @@ module Plt : sig
   val tiling_part: 'layout t -> L.t
 
   val mk_plt:
-    poly_part:P.t -> lattice_part:L.t -> tiling_part:L.t ->
-    'layout t
+    poly_part:P.t -> lattice_part:L.t -> tiling_part:L.t -> 'layout t
 
   val abstract_poly_part:
     (P.t, int -> Q.t, P.t, int -> Q.t) LocalAbstraction.t ->
@@ -199,7 +210,11 @@ module Plt : sig
 end = struct
 
   type standard = unit
-  type intfrac = unit
+  type intfrac =
+    {
+      start_of_term_int_frac: int
+    ; start_of_symbol_int_frac: int
+    }
 
   type 'layout t =
     {
@@ -219,6 +234,14 @@ end = struct
     ; tiling_part
     ; metadata = None
     }
+
+  let constrained_dimensions plt =
+    let p = BatList.of_enum (P.enum_constraints plt.poly_part) in
+    let l = L.basis plt.lattice_part in
+    let t = L.basis plt.tiling_part in
+    collect_dimensions (fun (_, v) -> v) p
+    |> IntSet.union (collect_dimensions (fun v -> v) l)
+    |> IntSet.union (collect_dimensions (fun v -> v) t)
 
   let top =
     {
@@ -370,7 +393,7 @@ end = struct
     extend next new_dimensions
 
   let floor_int_frac m v =
-    (* 
+    (*
        For integer dimensions:
 
        (Finite image)
@@ -378,17 +401,17 @@ end = struct
        m |= p x_int = kq + r(m) for some integer k and 0 <= r(m) < q.
 
        1. (Abstraction)
-          If m |= F[floor((p/q) x_int + t)], then  
+          If m |= F[floor((p/q) x_int + t)], then
           m |= F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q ).
 
        2. (Universality)
           F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q )
           |= F[floor((p/q) x_int + t)].
 
-          Int((p/q) x_int - r(m)/q) implies 
+          Int((p/q) x_int - r(m)/q) implies
           Int( (p/q) x_int - r(m)/q + floor(r(m)/q + t) ) implies
           (p/q) x_int - r(m)/q + floor(r(m)/q + t) = k for some k \in \Z.
-            
+
           Want to show k = floor((p/q) x_int + t).
           (p/q) x_int + t = k + (r(m)/q + t) - floor(r(m)/q + t).
           So floor( (p/q) x_int + t ) = k + floor( (r(m)/q + t) - floor(r(m)/q + t) ).
@@ -398,7 +421,7 @@ end = struct
        For fractional dimensions:
 
        (Finite image)
-       0 <= x_frac < 1 -->  
+       0 <= x_frac < 1 -->
        - t <= a x_frac + t < a + t. floor(t) <= floor(a x_frac + t) <= floor(a + t).
        - a + t < a x_frac + t <= t. floor(a + t) <= floor(a x_frac + t) <= floor(t).
 
@@ -406,11 +429,10 @@ end = struct
 
        1. (Abstraction)
        If m |= F[floor(a x_frac + t)], then m |= F[n] /\ n <= a x_frac + t < n + 1.
-         
-       2. (Universality) 
+
+       2. (Universality)
        F[n] /\ n <= a x_frac + t < n + 1 |= F[floor(a x_frac + t)].
      *)
-
     let (integer_part, fraction_from_integer_part, lconds) =
       V.fold
         (fun dim coeff (integer_part, fractional_part, lconds) ->
@@ -430,34 +452,51 @@ end = struct
               |> V.add_term (QQ.negate fraction) Linear.const_dim in
             ( V.add integer_part integer_summand
             , QQ.add fractional_part fraction
-            , integer_summand :: lconds
+            , integer_summand :: V.of_term QQ.one dim :: lconds
             )
         )
         v
         (V.zero, QQ.zero, [])
     in
+    let within_unit_interval lower_bound term =
+      [
+        (`Nonneg, V.add_term (QQ.negate lower_bound) Linear.const_dim term)
+      ; (`Pos, (Linear.const_linterm (QQ.add lower_bound QQ.one))
+               |> V.add (V.negate term))
+      ]
+    in
     let (fraction_part, pconds) =
       V.fold
-        (fun dim coeff (sum, term) ->
-          if dim mod 2 = 0 then (sum, term)
+        (fun dim coeff (sum, term, fractional_bounds) ->
+          if dim mod 2 = 0 then (sum, term, fractional_bounds)
           else
             ( QQ.add (QQ.mul coeff (m dim)) sum
             , V.add_term coeff dim term
+            , List.rev_append
+                (within_unit_interval QQ.zero (V.of_term QQ.one dim))
+                fractional_bounds
             )
         )
-        v (fraction_from_integer_part, Linear.const_linterm fraction_from_integer_part)
-      |> (fun (sum, term) ->
+        v
+        ( fraction_from_integer_part
+        , Linear.const_linterm fraction_from_integer_part
+        , []
+        )
+      |> (fun (sum, term, fractional_bounds) ->
         let lower_bound = QQ.floor sum |> QQ.of_zz in
         let pconds =
-          [ (`Nonneg, V.add_term (QQ.negate lower_bound) Linear.const_dim term)
-          ; (`Pos, (Linear.const_linterm (QQ.add lower_bound QQ.one))
-                   |> V.add (V.negate term))
-          ]
+          List.rev_append
+            (within_unit_interval lower_bound term)
+            fractional_bounds
         in
         (lower_bound, pconds))
     in
     let result = V.add_term fraction_part Linear.const_dim integer_part in
     (result, pconds, lconds)
+
+  let ceiling_int_frac m v =
+    let (v', pcond, lcond) = floor_int_frac m (V.negate v) in
+    (V.negate v', pcond, lcond)
 
   let mk_expansion expand layout dim_of_symbol =
     let standard_vec_of_symbol s = V.of_term QQ.one (dim_of_symbol s) in
@@ -815,6 +854,16 @@ end = struct
     abstract_to_plt expand_mod_floor `Standard srk
       ~universe_p ~universe_l ~universe_t dim_of_symbol interp_dim
 
+  let int_frac_layout ~num_terms =
+    let start_of_term_int_frac =
+      if num_terms mod 2 = 0 then num_terms
+      else num_terms + 1
+    in
+    let start_of_symbol_int_frac = start_of_term_int_frac + (2 * num_terms) in
+    { start_of_term_int_frac
+    ; start_of_symbol_int_frac
+    }
+
   (* LIRA PLT layout:
      0 ... len(terms) - 1 represent terms.
      Let n be the first even integer >= len(terms).
@@ -823,16 +872,13 @@ end = struct
      Then n + 2k, n + 2k + 1 are the integer and fractional dimensions for
      the (k-1)-th term, k = 1, ..., len(terms).
      Dimensions (n + 2 * (len(terms) + m), (n + (2 * len(terms) + m) + 1)
-     are the integer and fractional dimensions for symbol m, 
+     are the integer and fractional dimensions for symbol m,
      m = 0, ..., max_elt symbols.
    *)
   let abstract_to_intfrac_plt has_mod_floor srk terms symbols =
     let num_terms = Array.length terms in
-    let start_of_int_frac =
-      if num_terms mod 2 = 0 then num_terms
-      else num_terms + 1
-    in
-    let start_of_symbol_int_frac = start_of_int_frac + (2 * num_terms) in
+    let { start_of_term_int_frac ; start_of_symbol_int_frac } =
+      int_frac_layout ~num_terms in
     let max_dim =
       match Symbol.Set.max_elt_opt symbols with
       | None -> start_of_symbol_int_frac - 1
@@ -849,7 +895,7 @@ end = struct
       max_dim num_terms;
     let int_dim_of_symbol sym =
       start_of_symbol_int_frac + (2 * Syntax.int_of_symbol sym) in
-    let int_dim_of_term i = start_of_int_frac + (2 * i) in
+    let int_dim_of_term i = start_of_term_int_frac + (2 * i) in
     let sym_idx_of_dim dim =
       if dim mod 2 = 0 then (dim - start_of_symbol_int_frac) / 2
       else (dim - 1 - start_of_symbol_int_frac) / 2
@@ -857,22 +903,22 @@ end = struct
     let int r = QQ.floor r |> QQ.of_zz in
     let frac r = QQ.modulo r QQ.one in
     let term_idx_of_dim dim =
-      if dim mod 2 = 0 then (dim - start_of_int_frac) / 2
+      if dim mod 2 = 0 then (dim - start_of_term_int_frac) / 2
       else (dim - 1 - start_of_symbol_int_frac) / 2
     in
     let interp_dim interp dim =
-      if dim >= start_of_int_frac + (2 * num_terms) then
+      if dim >= start_of_term_int_frac + (2 * num_terms) then
         let idx = sym_idx_of_dim dim in
         let value = Interpretation.real interp (Syntax.symbol_of_int idx) in
         if dim mod 2 = 0 then int value else frac value
-      else if dim >= start_of_int_frac && dim < start_of_symbol_int_frac
+      else if dim >= start_of_term_int_frac && dim < start_of_symbol_int_frac
       then
         let idx = term_idx_of_dim dim in
         let value = Interpretation.evaluate_term interp terms.(idx) in
         if dim mod 2 = 0 then int value else frac value
       else if dim >= 0 && dim < num_terms then
         Interpretation.evaluate_term interp terms.(dim)
-      else if dim >= num_terms && dim < start_of_int_frac then QQ.zero
+      else if dim >= num_terms && dim < start_of_term_int_frac then QQ.zero
       else
         begin
           logf "interp_dim: %d not defined" dim;
@@ -958,7 +1004,11 @@ end = struct
       let abstracted = P.local_project m to_project p in
       logf ~level:`debug "abstract_lw: abstracted @[%a@]@\n"
         (P.pp Format.pp_print_int) abstracted;
-      (abstracted, fun m -> m)
+      let restricted m dim =
+        if elim dim then failwith "abstract_lw: Dimension has been eliminated"
+        else m dim
+      in
+      (abstracted, restricted)
     in
     LocalAbstraction.{ abstract }
 
@@ -971,7 +1021,7 @@ module MixedCooper: sig
    *)
   val abstract_cooper:
     elim: (int -> bool) ->
-    ceiling: (V.t -> (int -> QQ.t) -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
+    ceiling: ((int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
     ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
 
 end = struct
@@ -1072,7 +1122,7 @@ end = struct
     (!glb, !has_upper_bound)
 
   (* For vectors v, v' in dimensions free of elim_dim,
-     [ceiling t m = t']  only if [t'] evaluated at [m] is the least integer
+     [ceiling m t = t']  only if [t'] evaluated at [m] is the least integer
      greater than or equal to [t] evaluated at [m].
      For a general lattice, orient its constraints to have positive coefficient
      in [elim_dim]. Then "integer" generalizes to a (finite-dimensional) vector
@@ -1095,13 +1145,13 @@ end = struct
       | (None, _) -> (`MinusInfinity, [], [])
       | (Some (kind, term, value), true) ->
          if Option.is_some (QQ.to_zz value) && kind = `Pos then
-           let (rounded, pcond, lcond) = ceiling term m in
+           let (rounded, pcond, lcond) = ceiling m term in
            let lb =
              V.add_term QQ.one Linear.const_dim rounded
            in
            (`Term (select_term lb), pcond, lcond)
          else
-           let (rounded, pcond, lcond) = ceiling term m in
+           let (rounded, pcond, lcond) = ceiling m term in
            (`Term (select_term rounded), pcond, lcond)
     in
     let polyhedron =
@@ -1124,14 +1174,8 @@ end = struct
     let l = L.basis (Plt.lattice_part plt) in
     let t = L.basis (Plt.tiling_part plt) in
     log_plt_constraints "abstract_cooper: abstracting" (p, l, t);
-    let collect_dimensions (p, l, t) =
-      p
-      |> collect_dimensions (fun (_, v) -> v)
-      |> IntSet.union (collect_dimensions (fun v -> v) l)
-      |> IntSet.union (collect_dimensions (fun v -> v) t)
-    in
     let elim_dimensions =
-      collect_dimensions (p, l, t)
+      Plt.constrained_dimensions plt
       |> IntSet.filter elim
     in
     let (projected_p, projected_l, projected_t) =
@@ -1158,10 +1202,14 @@ end = struct
       ~tiling_part:(L.hermitize projected_t)
 
   let abstract_cooper ~elim ~ceiling =
+    let restricted m dim =
+      if elim dim then failwith "abstract_cooper: Dimension has been eliminated"
+      else m dim
+    in
     LocalAbstraction.
     {
       abstract =
-        (fun m plt -> (abstract_cooper_ ~elim ~ceiling m plt, fun m -> m))
+        (fun m plt -> (abstract_cooper_ ~elim ~ceiling m plt, restricted))
     }
 
 end
@@ -1228,12 +1276,57 @@ end = struct
       in
       let dd = BatEnum.append (DD.enum_generators subspace_abstraction) recession_cone
                |> DD.of_generators (max_dim_in_projected + 1) in
-      (dd, (fun m -> m))
+      let restricted m dim =
+        if dim > max_dim_in_projected
+        then failwith "abstract_sc: Dimension has been eliminated"
+        else m dim
+      in
+      (dd, restricted)
     in
     LocalAbstraction.{ abstract }
 
 end
 
+module IntFracProjection: sig
+
+  val abstract_intfrac_plt:
+    elim:(int -> bool) ->
+    (Plt.intfrac Plt.t, int -> QQ.t, Plt.intfrac Plt.t, int -> QQ.t)
+      LocalAbstraction.t
+
+end = struct
+
+  module LW = LoosWeispfenning
+
+  let abstract_intfrac_plt ~elim =
+    let abstract m plt =
+      logf ~level:`debug "abstract_intfrac_plt...";
+      let must_be_integral dim =
+        (* If dim is supported in any positive integrality constraint,
+           dim itself is.
+         *)
+        L.member (V.of_term QQ.one dim) (Plt.lattice_part plt) in
+      let abstract_lw =
+        LW.abstract_lw
+          ~elim:(fun dim ->
+            elim dim &&
+              (* If an integrality assumption for an integer dimension is
+                 not used, it is sound to treat it as real-valued.
+               *)
+              not (must_be_integral dim)) in
+      let abstract_cooper =
+        MixedCooper.abstract_cooper
+          ~elim:(fun dim -> elim dim && must_be_integral dim)
+          ~ceiling:Plt.ceiling_int_frac
+      in
+      LocalAbstraction.apply2 
+        (Plt.abstract_poly_part abstract_lw
+         |> LocalAbstraction.compose abstract_cooper)
+        m plt
+    in
+    LocalAbstraction.{abstract}      
+end
+    
 module SeparateProjection: sig
 
   (** This abstraction does real projection for real-valued dimensions and
@@ -1242,7 +1335,7 @@ module SeparateProjection: sig
   val abstract_lw_cooper:
     elim: (int -> bool) ->
     ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
-  
+
 end = struct
 
   let collect_integer_dimensions l_vectors =
@@ -1288,7 +1381,7 @@ end = struct
       |> LocalAbstraction.compose
            (MixedCooper.abstract_cooper
               ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
-              ~ceiling:(fun v _ -> (v, [], [])))
+              ~ceiling:(fun _ v -> (v, [], [])))
     in
     LocalAbstraction.apply local_abstraction m plt
 
@@ -1389,12 +1482,17 @@ let formula_of_plt = Plt.formula_of_plt
 
 let abstract_to_standard_plt = Plt.abstract_to_standard_plt
 let abstract_to_intfrac_plt = Plt.abstract_to_intfrac_plt
-                   
+
 let abstract_lw = LoosWeispfenning.abstract_lw
 
 let abstract_sc = SubspaceCone.abstract_sc
 
 let abstract_cooper = MixedCooper.abstract_cooper
+
+let mk_term_of_dim terms dim =
+  let num_terms = Array.length terms in
+  if dim >= 0 && dim < num_terms then terms.(dim)
+  else failwith (Format.asprintf "term_of_dim: %d" dim)
 
 let convex_hull_sc has_mod_floor srk phi terms =
   let num_terms = Array.length terms in
@@ -1405,14 +1503,10 @@ let convex_hull_sc has_mod_floor srk phi terms =
     |> LocalAbstraction.compose
          (SubspaceCone.abstract_sc ~max_dim_in_projected:(num_terms - 1))
   in
-  let term_of_dim dim =
-    if dim >= 0 && dim < num_terms then terms.(dim)
-    else failwith (Format.asprintf "term_of_dim: %d" dim)
-  in
   let abstract =
     LocalGlobal.lift_dd_abstraction srk
       ~max_dim:(num_terms - 1)
-      ~term_of_dim
+      ~term_of_dim:(mk_term_of_dim terms)
       sc_abstraction
   in
   Abstraction.apply abstract phi
@@ -1423,17 +1517,68 @@ let cooper_project has_mod_floor srk phi terms =
                           (Syntax.symbols phi) in
   let cooper_abstraction =
     let elim dim = dim > num_terms in
-    let ceiling v _m = (v, [], []) in
+    let ceiling _m v = (v, [], []) in
     plt_abstraction
     |> LocalAbstraction.compose
          (MixedCooper.abstract_cooper ~elim ~ceiling)
   in
-  let term_of_dim dim =
-    if dim >= 0 && dim < num_terms then terms.(dim)
-    else failwith (Format.asprintf "term_of_dim: %d" dim)
+  let abstract =
+    LocalGlobal.lift_plt_abstraction srk ~term_of_dim:(mk_term_of_dim terms)
+      cooper_abstraction
   in
-  let abstract = LocalGlobal.lift_plt_abstraction srk ~term_of_dim
-                   cooper_abstraction
+  Abstraction.apply abstract phi
+
+let convex_hull_intfrac has_mod_floor srk phi terms =
+  let num_terms = Array.length terms in
+  let Plt.{start_of_term_int_frac; start_of_symbol_int_frac} =
+    Plt.int_frac_layout ~num_terms
+  in
+  let max_dim_in_projected = start_of_symbol_int_frac - 1 in
+  let define_original_dimensions num_terms start_of_term_int_frac =
+    let equations = BatEnum.empty () in
+    let sum dim = V.of_term QQ.one dim |> V.add_term QQ.one (dim + 1)
+    in
+    let rec loop dim intfrac_dim =
+      if dim < num_terms then
+        begin
+          BatEnum.push equations
+            (`Zero, V.of_term (QQ.of_int (-1)) dim |> V.add (sum intfrac_dim));
+          loop (dim + 1) (intfrac_dim + 2)
+        end
+      else
+        ()
+    in
+    loop 0 start_of_term_int_frac;
+    equations
+  in
+  let map_intfrac _m dd =
+    let equations = define_original_dimensions
+                      num_terms start_of_term_int_frac
+    in
+    let int_frac_term_dimensions =
+      BatList.of_enum
+        BatEnum.(start_of_term_int_frac --^ start_of_symbol_int_frac)
+    in
+    ( DD.meet_constraints dd (BatList.of_enum equations)
+      |> DD.project int_frac_term_dimensions
+    , fun m dim ->
+      if dim >= 0 && dim < num_terms then m dim
+      else failwith "convex_hull_intfrac: dimension has been eliminated"
+    )
+  in
+  let local_abs =
+    let open LocalAbstraction in
+    Plt.abstract_to_intfrac_plt has_mod_floor srk terms (Syntax.symbols phi)
+    |> compose
+         (IntFracProjection.abstract_intfrac_plt
+            ~elim:(fun dim -> dim > max_dim_in_projected))
+    |> compose
+         (SubspaceCone.abstract_sc ~max_dim_in_projected)
+    |> compose (inject map_intfrac)
+  in
+  let abstract =
+    LocalGlobal.lift_dd_abstraction srk ~max_dim:(num_terms - 1)
+      ~term_of_dim:(mk_term_of_dim terms) local_abs
   in
   Abstraction.apply abstract phi
 
@@ -1444,21 +1589,20 @@ let convex_hull_separate_projection has_mod_floor finalizer srk phi terms =
     let elim dim = dim > num_terms in
     Plt.abstract_to_standard_plt has_mod_floor srk terms (Syntax.symbols phi)
     |> compose (SeparateProjection.abstract_lw_cooper ~elim)
-    |> compose (inject (fun _ plt -> Plt.poly_part plt))
+    |> compose (inject (fun _ plt -> (Plt.poly_part plt, fun m -> m)))
     |> compose (Ddify.abstract ~max_dim_in_projected:(num_terms - 1))
     |> compose (inject finalizer)
   in
-  let term_of_dim dim =
-    if dim >= 0 && dim < num_terms then terms.(dim)
-    else failwith (Format.asprintf "term_of_dim: %d" dim)
-  in
-  let abstract = LocalGlobal.lift_dd_abstraction srk
-                   ~max_dim:(num_terms - 1) ~term_of_dim local_abs
+  let abstract =
+    LocalGlobal.lift_dd_abstraction srk
+      ~max_dim:(num_terms - 1) ~term_of_dim:(mk_term_of_dim terms) local_abs
   in
   Abstraction.apply abstract phi
 
 let convex_hull_lia has_mod_floor =
-  convex_hull_separate_projection has_mod_floor (fun _m dd -> DD.integer_hull dd)
+  convex_hull_separate_projection has_mod_floor
+    (fun _m dd -> (DD.integer_hull dd, fun m -> m))
 
 let convex_hull_lra has_mod_floor =
-  convex_hull_separate_projection has_mod_floor (fun _m dd -> dd)
+  convex_hull_separate_projection has_mod_floor
+    (fun _m dd -> (dd, fun m -> m))

@@ -70,7 +70,7 @@ val abstract_lw:
 
 val abstract_cooper:
     elim: (int -> bool) ->
-    ceiling: (V.t -> (int -> QQ.t) -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
+    ceiling: ((int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
     ('layout plt, int -> QQ.t, 'layout plt, int -> QQ.t) LocalAbstraction.t
 
 val abstract_sc:
@@ -80,6 +80,10 @@ val abstract_sc:
 val convex_hull_sc: [`ExpandModFloor | `NoExpandModFloor] ->
                     'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+
+val convex_hull_intfrac: [`ExpandModFloor | `NoExpandModFloor] ->
+                         'a Syntax.context -> 'a Syntax.formula ->
+                         ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
 
 val cooper_project: [`ExpandModFloor | `NoExpandModFloor] ->
                     'a Syntax.context -> 'a Syntax.formula ->

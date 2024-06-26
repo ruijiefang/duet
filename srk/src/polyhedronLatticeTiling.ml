@@ -226,7 +226,7 @@ module Plt : sig
   val top: 'layout t
 
   val formula_of_plt:
-    'a Syntax.context -> (int -> 'a Syntax.arith_term) -> 'layout t -> 'a formula
+    'a context -> (int -> 'a arith_term) -> 'layout t -> 'a formula
 
   val constrained_dimensions: 'layout t -> IntSet.t
 
@@ -1059,16 +1059,17 @@ end
 module Ddify: sig
 
   val abstract:
+    man:DD.closed Apron.Manager.t ->
     max_dim_in_projected: int ->
     (P.t, int -> QQ.t, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t
 
 end = struct
 
-  let abstract ~max_dim_in_projected =
+  let abstract ~man ~max_dim_in_projected =
     let abstract _m p =
       logf ~level:`debug "DDifying @[%a@] in ambient dimension %d" (P.pp pp_dim) p
         (max_dim_in_projected + 1);
-      let dd = P.dd_of (max_dim_in_projected + 1) p in
+      let dd = P.dd_of ~man (max_dim_in_projected + 1) p in
       let () = logf ~level:`debug "DDified@;" in
       (dd, (fun m -> m))
     in
@@ -1368,6 +1369,7 @@ end
 module SubspaceCone : sig
 
   val abstract_sc:
+    man:DD.closed Apron.Manager.t ->
     max_dim_in_projected: int ->
     ('layout Plt.t, int -> QQ.t, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t
 
@@ -1384,14 +1386,14 @@ end = struct
            | `Pos -> (`Nonneg, v)
          )
 
-  let abstract_sc ~max_dim_in_projected =
+  let abstract_sc ~man ~max_dim_in_projected =
     let abstract m plt =
       logf ~level:`debug "abstract_sc...";
       let abstract_lw =
         let abstract =
           LW.abstract_lw ~elim:(fun dim -> dim > max_dim_in_projected)
           |> LocalAbstraction.compose
-               (Ddify.abstract ~max_dim_in_projected)
+               (Ddify.abstract ~man ~max_dim_in_projected)
         in
         LocalAbstraction.apply abstract m
       in
@@ -1431,7 +1433,7 @@ end = struct
       in
       let dd = BatEnum.append (DD.enum_generators subspace_abstraction)
                  recession_cone
-               |> DD.of_generators (max_dim_in_projected + 1) in
+               |> DD.of_generators ~man (max_dim_in_projected + 1) in
       logf ~level:`debug "abstract_sc: combined dd = @[%a@]"
         (DD.pp pp_dim) dd;
       let restricted m dim =
@@ -1548,6 +1550,7 @@ module LocalGlobal: sig
     ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t
 
   val lift_dd_abstraction:
+    man:(DD.closed Apron.Manager.t) ->
     'a context -> max_dim:int -> term_of_dim:(int -> 'a Syntax.arith_term) ->
     ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t ->
     ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) Abstraction.t
@@ -1612,15 +1615,16 @@ end = struct
     in
     Abstraction.{abstract}
 
-  let lift_dd_abstraction (srk: 'a context) ~max_dim ~term_of_dim local_abs =
+  let lift_dd_abstraction ~man
+        (srk: 'a context) ~max_dim ~term_of_dim local_abs =
     let ambient_dim = max_dim + 1 in
     let formula_of dd =
       let fml = formula_of_dd srk term_of_dim dd in
       logf ~level:`debug "Blocking %a" (Syntax.Formula.pp srk) fml;
       fml
     in
-    let top = P.dd_of ambient_dim P.top in
-    let bottom = P.dd_of ambient_dim P.bottom in
+    let top = P.dd_of ~man ambient_dim P.top in
+    let bottom = P.dd_of ~man ambient_dim P.bottom in
     lift_abstraction ~max_dim_to_inspect:max_dim
       srk DD.join formula_of top bottom term_of_dim local_abs
 
@@ -1645,153 +1649,257 @@ end = struct
 
 end
 
+module AbstractTerm: sig
+
+  val mk_sc_abstraction:
+    man:DD.closed Apron.Manager.t ->
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a formula -> 'a arith_term array ->
+    ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
+      LocalAbstraction.t
+
+  val mk_cooper_abstraction:
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a formula -> 'a arith_term array ->
+    ('a formula, 'a Interpretation.interpretation, Plt.standard Plt.t, int -> Q.t)
+      LocalAbstraction.t
+
+  val mk_lw_cooper_abstraction:
+    man:DD.closed Apron.Manager.t ->
+    [`IntHullAfterProjection | `NoIntHullAfterProjection] ->
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a formula -> 'a arith_term array ->
+    ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
+      LocalAbstraction.t
+
+  val mk_intfrac_abstraction :
+    man:DD.closed Apron.Manager.t ->
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a formula -> 'a arith_term array ->
+    ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
+      LocalAbstraction.t
+
+end = struct
+
+  let mk_sc_abstraction ~man
+        expand_mod_floor srk phi terms =
+    let num_terms = Array.length terms in
+    let plt_abstraction =
+      Plt.abstract_to_standard_plt expand_mod_floor srk terms
+        (Syntax.symbols phi)
+    in
+    let sc_abstraction =
+      plt_abstraction
+      |> LocalAbstraction.compose
+           (SubspaceCone.abstract_sc ~man ~max_dim_in_projected:(num_terms - 1))
+    in
+    sc_abstraction
+
+  let mk_cooper_abstraction expand_mod_floor srk phi terms =
+    let num_terms = Array.length terms in
+    let plt_abstraction =
+      Plt.abstract_to_standard_plt expand_mod_floor srk terms
+        (Syntax.symbols phi) in
+    let cooper_abstraction =
+      let elim dim = dim > num_terms in
+      let ceiling _m v = (v, [], []) in
+      plt_abstraction
+      |> LocalAbstraction.compose
+           (MixedCooper.abstract_cooper ~elim ~ceiling)
+    in
+    cooper_abstraction
+
+  let mk_lw_cooper_abstraction ~man
+        hull_after_proj expand_mod_floor srk phi terms =
+    let finalizer =
+      match hull_after_proj with
+      | `IntHullAfterProjection ->
+         (fun _m dd ->
+           logf ~level:`debug "convex_hull_lw_cooper: taking integer hull...";
+           (DD.integer_hull dd, fun m -> m))
+      | `NoIntHullAfterProjection ->
+         (fun _m dd ->
+           logf ~level:`debug "convex_hull_lw_cooper: done";
+           (dd, fun m -> m))
+    in
+    let num_terms = Array.length terms in
+    let local_abs =
+      let open LocalAbstraction in
+      logf ~level:`debug "convex_hull_lw_cooper...";
+      Plt.abstract_to_standard_plt expand_mod_floor srk terms (Syntax.symbols phi)
+      |> compose (LwCooper.abstract_lw_cooper ~elim:(fun dim -> dim >= num_terms))
+      |> compose (inject (fun _ plt -> (Plt.poly_part plt, fun m -> m)))
+      |> compose (Ddify.abstract ~man ~max_dim_in_projected:(num_terms - 1))
+      |> compose (inject finalizer)
+    in
+    local_abs
+
+  let mk_intfrac_abstraction ~man
+        expand_mod_floor srk phi terms =
+    let num_terms = Array.length terms in
+    let Plt.{start_of_term_int_frac; start_of_symbol_int_frac} =
+      Plt.int_frac_layout ~num_terms
+    in
+    let max_dim_in_projected = start_of_symbol_int_frac - 1 in
+    let define_original_dimensions num_terms start_of_term_int_frac =
+      let equations = BatEnum.empty () in
+      let sum dim = V.of_term QQ.one dim |> V.add_term QQ.one (dim + 1)
+      in
+      let rec loop dim intfrac_dim =
+        if dim < num_terms then
+          begin
+            BatEnum.push equations
+              (`Zero, V.of_term (QQ.of_int (-1)) dim |> V.add (sum intfrac_dim));
+            loop (dim + 1) (intfrac_dim + 2)
+          end
+        else
+          ()
+      in
+      loop 0 start_of_term_int_frac;
+      (BatList.of_enum equations)
+    in
+    let map_intfrac _m dd =
+      let equations = define_original_dimensions
+                        num_terms start_of_term_int_frac
+      in
+      let int_frac_term_dimensions =
+        BatList.of_enum
+          BatEnum.(num_terms --^ start_of_symbol_int_frac)
+      in
+      let mapped_dd = DD.meet_constraints dd equations
+                      |> DD.project int_frac_term_dimensions
+                      |> DD.enum_constraints
+                      |> DD.of_constraints_closed ~man num_terms
+      in
+      logf ~level:`debug "DD in original dimensions: @[%a@]@;"
+        (DD.pp pp_dim) mapped_dd;
+      ( mapped_dd
+      , fun m dim ->
+        if dim >= 0 && dim < num_terms then m dim
+        else failwith "convex_hull_intfrac: dimension has been eliminated"
+      )
+    in
+    let local_abs =
+      let open LocalAbstraction in
+      Plt.abstract_to_intfrac_plt expand_mod_floor srk terms (Syntax.symbols phi)
+      |> compose
+           (IntFracProjection.abstract_intfrac_plt
+              ~elim:(fun dim -> dim > max_dim_in_projected))
+      |> compose
+           (SubspaceCone.abstract_sc ~man ~max_dim_in_projected)
+      |> compose (inject map_intfrac)
+    in
+    local_abs
+
+end
+
 type standard = Plt.standard
 type intfrac = Plt.intfrac
 type 'a plt = 'a Plt.t
 
 let formula_of_plt = Plt.formula_of_plt
 
-let abstract_to_standard_plt = Plt.abstract_to_standard_plt
-let abstract_to_intfrac_plt = Plt.abstract_to_intfrac_plt
-
-let abstract_lw = LoosWeispfenning.abstract_lw
-
-let abstract_sc = SubspaceCone.abstract_sc
-
-let abstract_cooper = MixedCooper.abstract_cooper
-
 let mk_term_of_dim terms dim =
   let num_terms = Array.length terms in
   if dim >= 0 && dim < num_terms then terms.(dim)
   else failwith (Format.asprintf "term_of_dim: %d" dim)
 
-let convex_hull_sc has_mod_floor srk phi terms =
-  let num_terms = Array.length terms in
-  let plt_abstraction = Plt.abstract_to_standard_plt has_mod_floor srk terms
-                          (Syntax.symbols phi) in
-  let sc_abstraction =
-    plt_abstraction
-    |> LocalAbstraction.compose
-         (SubspaceCone.abstract_sc ~max_dim_in_projected:(num_terms - 1))
-  in
-  let abstract =
-    LocalGlobal.lift_dd_abstraction srk
-      ~max_dim:(num_terms - 1)
-      ~term_of_dim:(mk_term_of_dim terms)
-      sc_abstraction
-  in
-  Abstraction.apply abstract phi
-
-let cooper_project has_mod_floor srk phi terms =
-  let num_terms = Array.length terms in
-  let plt_abstraction = Plt.abstract_to_standard_plt has_mod_floor srk terms
-                          (Syntax.symbols phi) in
-  let cooper_abstraction =
-    let elim dim = dim > num_terms in
-    let ceiling _m v = (v, [], []) in
-    plt_abstraction
-    |> LocalAbstraction.compose
-         (MixedCooper.abstract_cooper ~elim ~ceiling)
-  in
+let cooper_project srk phi terms =
+  let local_abs = AbstractTerm.mk_cooper_abstraction `ExpandModFloor
+                    srk phi terms in
   let abstract =
     LocalGlobal.lift_plt_abstraction srk ~term_of_dim:(mk_term_of_dim terms)
-      cooper_abstraction
+      local_abs
   in
   Abstraction.apply abstract phi
 
-let convex_hull_intfrac has_mod_floor srk phi terms =
-  let num_terms = Array.length terms in
-  let Plt.{start_of_term_int_frac; start_of_symbol_int_frac} =
-    Plt.int_frac_layout ~num_terms
-  in
-  let max_dim_in_projected = start_of_symbol_int_frac - 1 in
-  let define_original_dimensions num_terms start_of_term_int_frac =
-    let equations = BatEnum.empty () in
-    let sum dim = V.of_term QQ.one dim |> V.add_term QQ.one (dim + 1)
-    in
-    let rec loop dim intfrac_dim =
-      if dim < num_terms then
-        begin
-          BatEnum.push equations
-            (`Zero, V.of_term (QQ.of_int (-1)) dim |> V.add (sum intfrac_dim));
-          loop (dim + 1) (intfrac_dim + 2)
-        end
-      else
-        ()
-    in
-    loop 0 start_of_term_int_frac;
-    (BatList.of_enum equations)
-  in
-  let map_intfrac _m dd =
-    let equations = define_original_dimensions
-                      num_terms start_of_term_int_frac
-    in
-    let int_frac_term_dimensions =
-      BatList.of_enum
-        BatEnum.(num_terms --^ start_of_symbol_int_frac)
-    in
-    let mapped_dd = DD.meet_constraints dd equations
-                    |> DD.project int_frac_term_dimensions
-                    |> DD.enum_constraints
-                    |> DD.of_constraints_closed num_terms
-    in
-    logf ~level:`debug "DD in original dimensions: @[%a@]@;"
-      (DD.pp pp_dim) mapped_dd;
-    ( mapped_dd
-    , fun m dim ->
-      if dim >= 0 && dim < num_terms then m dim
-      else failwith "convex_hull_intfrac: dimension has been eliminated"
-    )
-  in
+let sc_abstraction_of solver man terms model =
+  let phi = Abstract.Solver.get_formula solver in
+  let srk = Abstract.Solver.get_context solver in
+  let local_abs = AbstractTerm.mk_sc_abstraction ~man `ExpandModFloor
+                      srk phi terms in
+  LocalAbstraction.apply local_abs model phi
+
+let lw_cooper_abstraction_of finalize solver man terms model =
+  let phi = Abstract.Solver.get_formula solver in
+  let srk = Abstract.Solver.get_context solver in
   let local_abs =
-    let open LocalAbstraction in
-    Plt.abstract_to_intfrac_plt has_mod_floor srk terms (Syntax.symbols phi)
-    |> compose
-         (IntFracProjection.abstract_intfrac_plt
-            ~elim:(fun dim -> dim > max_dim_in_projected))
-    |> compose
-         (SubspaceCone.abstract_sc ~max_dim_in_projected)
-    |> compose (inject map_intfrac)
+    AbstractTerm.mk_lw_cooper_abstraction ~man finalize `ExpandModFloor srk phi
+      terms
   in
+  LocalAbstraction.apply local_abs model phi
+
+let intfrac_abstraction_of solver man terms model =
+  let phi = Abstract.Solver.get_formula solver in
+  let srk = Abstract.Solver.get_context solver in
+  let local_abs =
+    AbstractTerm.mk_intfrac_abstraction ~man `ExpandModFloor srk phi
+      terms
+  in
+  LocalAbstraction.apply local_abs model phi
+
+let convex_hull_of_lira_model how solver man terms model =
+  let m = match model with
+    | `LIRA m -> m
+    | `LIRR _ -> invalid_arg "Unsupported"
+  in
+  match how with
+  | `SubspaceCone -> sc_abstraction_of solver man terms m
+  | `IntFrac -> intfrac_abstraction_of solver man terms m
+  | `LwCooper finalizer ->
+     begin
+       match finalizer with
+       | `IntHullAfterProjection ->
+          lw_cooper_abstraction_of `IntHullAfterProjection solver man terms m
+       | `NoIntHullAfterProjection ->
+          lw_cooper_abstraction_of `NoIntHullAfterProjection solver man terms m
+     end
+
+
+let convex_hull_sc ?(man=Polka.manager_alloc_loose()) srk phi terms =
+  let local_abs = AbstractTerm.mk_sc_abstraction ~man `ExpandModFloor srk
+                    phi terms in
+  let num_terms = Array.length terms in
   let abstract =
-    LocalGlobal.lift_dd_abstraction srk ~max_dim:(num_terms - 1)
+    LocalGlobal.lift_dd_abstraction srk ~man ~max_dim:(num_terms - 1)
+      ~term_of_dim:(mk_term_of_dim terms) local_abs
+  in
+  Abstraction.apply abstract phi
+
+let convex_hull_intfrac ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
+  let num_terms = Array.length terms in
+  let local_abs =
+    AbstractTerm.mk_intfrac_abstraction ~man `ExpandModFloor srk phi terms in
+  let abstract =
+    LocalGlobal.lift_dd_abstraction srk ~man ~max_dim:(num_terms - 1)
       ~term_of_dim:(mk_term_of_dim terms) local_abs
   in
   let projected_dd_in_original_dims = Abstraction.apply abstract phi in
-  logf ~level:`debug "projected DD: @[%a@]" (DD.pp pp_dim)
+  logf ~level:`debug "convex_hull_intfrac result: @[%a@]" (DD.pp pp_dim)
     projected_dd_in_original_dims;
   projected_dd_in_original_dims
 
-let convex_hull_lw_cooper hull_after_proj has_mod_floor srk phi terms =
-  let finalizer =
-    match hull_after_proj with
-    | `IntHullAfterProjection ->
-       (fun _m dd ->
-         logf ~level:`debug "convex_hull_lw_cooper: taking integer hull...";
-         (DD.integer_hull dd, fun m -> m))
-    | `NoIntHullAfterProjection ->
-       (fun _m dd ->
-         logf ~level:`debug "convex_hull_lw_cooper: done";
-         (dd, fun m -> m))
-  in
+let convex_hull_lw_cooper ?(man=(Polka.manager_alloc_loose ()))
+      hull_after_proj srk phi terms =
   let num_terms = Array.length terms in
   let local_abs =
-    let open LocalAbstraction in
-    logf ~level:`debug "convex_hull_lw_cooper...";
-    Plt.abstract_to_standard_plt has_mod_floor srk terms (Syntax.symbols phi)
-    |> compose (LwCooper.abstract_lw_cooper ~elim:(fun dim -> dim >= num_terms))
-    |> compose (inject (fun _ plt -> (Plt.poly_part plt, fun m -> m)))
-    |> compose (Ddify.abstract ~max_dim_in_projected:(num_terms - 1))
-    |> compose (inject finalizer)
-  in
+    AbstractTerm.mk_lw_cooper_abstraction ~man hull_after_proj `ExpandModFloor
+      srk phi terms in
   let abstract =
-    LocalGlobal.lift_dd_abstraction srk
+    LocalGlobal.lift_dd_abstraction srk ~man
       ~max_dim:(num_terms - 1) ~term_of_dim:(mk_term_of_dim terms) local_abs
   in
   Abstraction.apply abstract phi
 
-let convex_hull_lia has_mod_floor =
-  convex_hull_lw_cooper `IntHullAfterProjection has_mod_floor
+let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
+  match how with
+  | `SubspaceCone -> convex_hull_sc ~man srk phi terms
+  | `IntFrac -> convex_hull_intfrac ~man srk phi terms
+  | `LwCooper finalize -> convex_hull_lw_cooper finalize ~man srk phi terms
 
-let convex_hull_lra has_mod_floor =
-  convex_hull_lw_cooper `NoIntHullAfterProjection has_mod_floor
+let convex_hull_lia srk phi terms =
+  convex_hull (`LwCooper `IntHullAfterProjection) srk phi terms
+
+let convex_hull_lra srk phi terms =
+  convex_hull (`LwCooper `NoIntHullAfterProjection) srk phi terms
+

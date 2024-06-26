@@ -196,7 +196,7 @@ let run_eliminate (what: [`IntegerQuantifiersOnly | `AllQuantifiers]) abstract f
       do_qe filter abstract phi in
     match Smt.entails srk phi_with_int_constraints (formula_of_dd terms hull) with
     | `Yes -> Format.printf "Result: success"
-    | `No -> Format.printf "Result: unsound projection (fail implication check)"
+    | `No -> Format.printf "Result: unsound elimination (fail implication check)"
     | `Unknown -> Format.printf "Result: unknown"
   with
   | LatticePolyhedron.PositiveIneqOverRealVar (v, dim) ->
@@ -355,7 +355,7 @@ let compare_projection
        List.fold_left
          (fun l y -> test x y :: l)
          (test_all_pairs test ys) ys
-  in    
+  in
   let test (meth1, (_, _, hull1)) (meth2, (_, _, hull2)) =
     let hull1_phi, hull2_phi =
       formula_of_dd terms hull1, formula_of_dd terms hull2 in
@@ -373,7 +373,7 @@ let compare_projection
   match unexpected with
   | _ :: _ ->
      List.iter (fun (meth1, meth2, result, _) ->
-         Format.printf "Result: unsound projection (%s is %a %s)@;"
+         Format.printf "Result: unsound elimination (%s is %a %s)@;"
            (string_of meth1)
            (fun fmt comparison ->
              match comparison with
@@ -400,6 +400,311 @@ let compare_projection
               (string_of meth2)
           ) unequal_hulls
      | [] -> Format.printf "Result: all hulls equal@;"
+
+module ConvexHull = struct
+
+  module S = Syntax.Symbol.Set
+
+  let pp_dim fmt dim = Format.fprintf fmt "(dim %d)" dim
+
+  let is_int_of_symbols symbols =
+    Syntax.Symbol.Set.fold
+      (fun sym l -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
+      )
+      symbols
+      []
+
+  let dd_subset dd1 dd2 =
+    BatEnum.for_all
+      (fun cnstrnt ->
+        DD.implies dd1 cnstrnt)
+      (DD.enum_constraints dd2)
+
+  let elim_quantifiers quantifiers symbols =
+    S.filter
+      (fun s -> not (List.exists (fun (_, elim) -> s = elim) quantifiers))
+      symbols
+
+  let elim_all_reals _quantifiers symbols =
+    S.filter
+      (fun s -> match Syntax.typ_symbol srk s with
+                | `TyInt -> true
+                | _ -> false
+      )
+      symbols
+
+  let pp_symbol fmt sym =
+    Format.fprintf fmt "%a: %a"
+      (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)
+
+  let pp_symbols fmt set =
+    Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+      (fun fmt sym ->
+        Format.fprintf fmt "%a: %a"
+          (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym))
+      fmt (S.to_list set)
+
+  let convex_hull how
+        ?(filter=elim_quantifiers)
+        ?(int_constraints_of = (fun int_symbols _real_symbols ->
+            is_int_of_symbols int_symbols))
+        phi =
+    let (qf, phi) = Quantifier.normalize srk phi in
+    if List.exists (fun (q, _) -> q = `Forall) qf then
+      failwith "universal quantification not supported";
+    let module PLT = PolyhedronLatticeTiling in
+    let symbols = Syntax.symbols phi in
+    let symbols_to_keep = filter qf symbols in
+    let terms =
+      symbols_to_keep
+      |> (fun set -> S.fold (fun sym terms -> Ctx.mk_const sym :: terms) set [])
+      |> Array.of_list
+    in
+    let (int_symbols, real_symbols) =
+      let is_int sym =
+        match Syntax.typ_symbol srk sym with
+        | `TyInt -> true
+        | _ -> false
+      in
+      let is_real sym =
+        match Syntax.typ_symbol srk sym with
+        | `TyReal -> true
+        | _ -> false
+      in
+      let symbols = Syntax.symbols phi in
+      (S.filter is_int symbols, S.filter is_real symbols)
+    in
+    let integer_constraints = int_constraints_of int_symbols real_symbols
+    in
+    let symbols_to_eliminate =
+      S.filter (fun sym -> not (S.mem sym symbols_to_keep)) symbols
+    in
+    Format.printf "Taking convex hull of formula: @[%a@]@;"
+      (Syntax.Formula.pp srk) phi;
+    Format.printf "Symbols to keep: @[%a@]@;" pp_symbols symbols_to_keep;
+    Format.printf "Symbols to eliminate: @[%a@]@;" pp_symbols symbols_to_eliminate;
+    Format.printf "Integer constraints: @[%a@]@;"
+      (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
+         (Syntax.Formula.pp srk))
+      integer_constraints;
+    let how =
+      match how with
+      | `SubspaceCone -> `SubspaceCone
+      | `IntFrac -> `IntFrac
+      | `LwCooperIntHull -> `LwCooper `IntHullAfterProjection
+      | `LwCooperNoIntHull -> `LwCooper `NoIntHullAfterProjection
+    in
+    let result =
+      PLT.convex_hull how srk (Syntax.mk_and srk (phi :: integer_constraints)) terms in
+    Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
+      (Syntax.Formula.pp srk)
+      (PLT.formula_of_dd srk (fun dim -> terms.(dim)) result);
+    result
+
+  let test_with_exact_convex_hull_when_int_constraints_are_pure
+        how phi =
+    let ideal_result =
+      (* When mod constraints etc. involve only integer-typed variables,
+         this method is exact; only LW elimination is involved.
+       *)
+      convex_hull `LwCooperIntHull ~filter:elim_all_reals
+        ~int_constraints_of:(fun _ _ -> []) phi
+    in
+    let alg_result =
+      (*
+        This tests both real and integer elimination because:
+        (1) integrality constraints for integer-typed symbols are introduced, and
+        (2) terms are a copy of symbols to keep, so all symbols are eliminated,
+            not just the target ones.
+       *)
+      convex_hull how ~filter:elim_all_reals phi
+    in
+    if DD.equal ideal_result alg_result then
+      Format.printf "Result: success"
+    else
+      Format.printf "Result: failure (hulls are not equal)"
+
+  let test_with_approximate_real_convex_hull_and_ignore_ints how phi =
+    Format.printf "Testing against approximate real convex hull@\n";
+    let approximate_real_hull =
+      (*
+        Note that the result will not be the same as the hull of the formula
+        with all variables being real-valued, because the SMT solver preserves
+        the original integrality constraints in phi.
+       *)
+      convex_hull `LwCooperNoIntHull ~filter:elim_all_reals
+        ~int_constraints_of:(fun _ _ -> []) phi
+    in
+    let () =
+      Format.printf "@\nApproximate real hull: @[%a@]@\n@\n"
+        (DD.pp pp_dim) approximate_real_hull
+    in
+    let alg_result =
+      (*
+        This tests only real elimination because no integrality constraints
+        are introduced.
+        Any subset of the real symbols can be eliminated, as long as we use the
+        same set for the approximate real hull.
+       *)
+      convex_hull how ~filter:elim_all_reals
+        ~int_constraints_of:(fun _ _ -> []) phi
+    in
+    let () =
+      Format.printf "@\nAlgorithm result: @[%a@]@\n\n" (DD.pp pp_dim) alg_result
+    in
+    if dd_subset alg_result approximate_real_hull then
+      Format.printf "Result: success"
+    else
+      Format.printf
+        "Result: failure (@[%a@] is not a subset of the real approximation @[%a@])"
+        (DD.pp pp_dim) alg_result
+        (DD.pp pp_dim) approximate_real_hull
+
+  let compare_with_real how phi =
+    (* test_with_exact_convex_hull_when_int_constraints_are_pure
+      how phi *)
+    test_with_approximate_real_convex_hull_and_ignore_ints how phi
+
+  let compare_sc_with_int_frac phi =
+    Format.printf "Comparing convex hulls computed by SC abstraction and by IF projection@\n";
+    (*
+    let real_hull = convex_hull `LwCooperNoIntHull
+                      ~int_constraints_of:(fun _ _ -> []) phi in
+    let () =
+      Format.printf "@\nReal hull: @[%a@]@\n@\n" (DD.pp pp_dim) real_hull in
+    let lw_cooper_hull = convex_hull `LwCooperIntHull phi
+    in
+    let () =
+      Format.printf "@\nLW-Cooper hull: @[%a@]@\n@\n" (DD.pp pp_dim) lw_cooper_hull in
+     *)
+    let sc_hull = convex_hull `SubspaceCone phi in
+    let () =
+      Format.printf "@\nSC hull: @[%a@]@\n@\n" (DD.pp pp_dim) sc_hull
+    in
+    let intfrac_hull = convex_hull `IntFrac phi in
+    let () =
+      Format.printf "@\nInt-Frac hull: @[%a@]@\n\n" (DD.pp pp_dim) intfrac_hull
+    in
+    if DD.equal sc_hull intfrac_hull then
+      Format.printf "Result: success"
+    else
+      if dd_subset sc_hull intfrac_hull then
+        Format.printf "Result: failure (SC hull is more precise)"
+      else if dd_subset intfrac_hull sc_hull then
+        Format.printf "Result: failure (IF hull is more precise)"
+      else
+        Format.printf "Result: failure (SC hull and IF hull incomparable)"
+
+  (*
+  (* Real convex hull is an over-approximation *)
+  let convex_hull_with_no_integrality_constraints how =
+    convex_hull how ~int_constraints_of:(fun _int_syms _real_syms -> [])
+
+  (* (Mixed) Cooper projection loses finite image property, but is still sound.
+   *)
+  let convex_hull_only_eliminate_ints how =
+    convex_hull how
+      ~filter_quantifier:(fun (_, sym) ->
+        match Syntax.typ_symbol srk sym with
+        | `TyInt -> true
+        | _ -> false
+      )
+
+  (* Real projection is exact *)
+  let convex_hull_only_eliminate_reals how =
+    convex_hull how
+      ~filter_quantifier:(fun (_, sym) ->
+        match Syntax.typ_symbol srk sym with
+        | `TyReal -> true
+        | _ -> false
+      )
+
+  (* Only successful for tasks with only integer variables present. *)
+  let convex_hull_pure_lia how =
+    convex_hull how
+      ~int_constraints_of:(fun int_syms real_syms ->
+        if Symbol.Set.is_empty real_syms then
+          is_int_of_symbols int_syms
+        else
+          begin
+            invalid_arg "Result: real symbols present"
+          end
+      )
+
+  let compare_with_real how phi =
+    (*
+      Tests:
+
+      1. (Exact)
+         Let x be real-valued and y be integer-valued.
+         (exists x. F /\ Int(y)) = (exists y. exists x. F /\ Int(y) /\ t = y)[t |-> y].
+
+         clconvhull(exists x. F /\ Int(y)) can be computed by
+         real elimination of x followed by integer-hull
+         (make sure all remaining variables are integral).
+         On the RHS, we should get the same result if we take Int(y) into
+         account.
+
+      2. (Subsumption)
+         Let y be arbitrary (real-valued or integer-valued).
+         Let x be real-valued.
+         (exists x. F) = (exists y. exists x. F /\ t = y)[t |-> y].
+         clconvhull(exists x. F) can be computed by real elimination of x.
+         On the RHS, we should get the same result if we drop Int(y) from
+         the constraints.
+         The SMT solver will however take Int(y) into account, so the best we
+         can do is to test
+
+         (exists y. exists x. F /\ t = y)[t |-> y] |= (exists x. F).
+
+         We may also take integrality of y into account:
+
+         (exists y. exists x. F /\ Int(y) /\ t = y)[t |-> y] |= (exists x. F).
+     *)
+
+    let real_exact =
+
+    in
+    let eliminate_only_reals =
+      convex_hull_only_eliminate_reals how
+    in
+    let real_approximation =
+      convex_hull_with_no_integrality_constraints `LwCooperNoIntHull
+    in
+    let assume_all_reals =
+      convex_hull_with_no_integrality_constraints how in
+
+    let compare_on_exact =
+      let true_dd = real_exact phi in
+      let candidate_dd = eliminate_only_reals phi in
+      if DD.equal true_dd candidate_dd then true else false
+    in
+    let compare_approximate =
+      let candidate_dd = assume_all_reals phi in
+      let approximate_dd = real_approximation phi in
+      dd_subset candidate_dd approximate_dd
+    in
+    if compare_on_exact && compare_approximate then
+      Format.printf "Result: success"
+    else if not compare_on_exact then
+      Format.printf "Result: unsound elimination (no int constraints; hulls not equal)"
+    else
+      Format.printf
+        "Result: unsound elimination (hull with integrality constraints is
+         larger than approximate hull on no int constraints)"
+   *)
+
+  let convex_hull_sc phi = convex_hull `SubspaceCone phi
+
+  let convex_hull_intfrac phi = convex_hull `IntFrac phi
+
+(*
+  let convex_hull_lra phi =
+    convex_hull_with_no_integrality_constraints `LwCooperNoIntHull phi
+ *)
+
+end
+
 
 let spec_list = [
   ("-simsat",
@@ -466,102 +771,67 @@ let spec_list = [
   , " Compute the convex hull of an existential linear arithmetic formula (silently ignoring real-typed quantifiers)");
    *)
 
-  ("-lira-convex-hull-sc",
-   Arg.String (fun file ->
-       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       if List.exists (fun (q, _) -> q = `Forall) qf then
-         failwith "universal quantification not supported";
-       let module S = Syntax.Symbol.Set in
-       let module PLT = PolyhedronLatticeTiling in
-       let terms = S.filter
-                     (fun sym -> not (List.exists (fun (_, quant) -> quant = sym) qf))
-                     (Syntax.symbols phi)
-                   |> (fun set -> S.fold (fun sym terms -> Ctx.mk_const sym :: terms) set [])
-                   |> Array.of_list
-       in
-       let integer_constraints =
-         S.fold
-           (fun sym l ->
-             match Syntax.typ_symbol srk sym with
-             | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
-             | _ -> l
-           )
-           (Syntax.symbols phi)
-           []
-       in
-       Format.printf "Symbols to eliminate: @[%a@]@;"
-         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
-            (fun fmt sym ->
-              Format.fprintf fmt "%a: %a"
-                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
-         (List.map snd qf);
-       let _hull =
-         PLT.convex_hull_sc `ExpandModFloor
-           srk (Syntax.mk_and srk (phi :: integer_constraints))
-           terms in
-       (*
-       Format.printf "Symbols to eliminate: @[%a@]@;"
-         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
-            (fun fmt sym ->
-              Format.fprintf fmt "%a: %a"
-                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
-         (List.map snd qf);
-       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         (Syntax.Formula.pp srk)
-         (PLT.formula_of_dd srk (fun dim -> terms.(dim)) hull);
-        *)
-       Format.printf "Result: success"
-     ),
-   "Compute the convex hull of an existential formula in linear integer-real arithmetic"
+  ("-lira-convex-hull-sc"
+  , Arg.String
+      (fun file ->
+          ignore (ConvexHull.convex_hull `SubspaceCone (load_formula file));
+          Format.printf "Result: success"
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     using the subspace-and-cone abstraction"
   );
 
-  ("-lira-convex-hull-separate-projection",
-   Arg.String (fun file ->
-       let (qf, phi) = Quantifier.normalize srk (load_formula file) in
-       if List.exists (fun (q, _) -> q = `Forall) qf then
-         failwith "universal quantification not supported";
-       let module S = Syntax.Symbol.Set in
-       let module PLT = PolyhedronLatticeTiling in
-       let terms = S.filter
-                     (fun sym -> not (List.exists (fun (_, quant) -> quant = sym) qf))
-                     (Syntax.symbols phi)
-                   |> (fun set -> S.fold (fun sym terms -> Ctx.mk_const sym :: terms) set [])
-                   |> Array.of_list
-       in
-       let integer_constraints =
-         S.fold
-           (fun sym l ->
-             match Syntax.typ_symbol srk sym with
-             | `TyInt -> Syntax.mk_is_int srk (Syntax.mk_const srk sym) :: l
-             | _ -> l
-           )
-           (Syntax.symbols phi)
-           []
-       in
-       Format.printf "Symbols to eliminate: @[%a@]@;"
-         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
-            (fun fmt sym ->
-              Format.fprintf fmt "%a: %a"
-                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
-         (List.map snd qf);
-       let _hull =
-         PLT.convex_hull_sc `ExpandModFloor
-           srk (Syntax.mk_and srk (phi :: integer_constraints))
-           terms in
-       (*
-       Format.printf "Symbols to eliminate: @[%a@]@;"
-         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
-            (fun fmt sym ->
-              Format.fprintf fmt "%a: %a"
-                (Syntax.pp_symbol srk) sym pp_typ (typ_symbol srk sym)))
-         (List.map snd qf);
-       Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
-         (Syntax.Formula.pp srk)
-         (PLT.formula_of_dd srk (fun dim -> terms.(dim)) hull);
-        *)
-       Format.printf "Result: success"
-     ),
-   "Compute the convex hull of an existential formula in linear integer-real arithmetic"
+  ("-lira-convex-hull-intfrac"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull `IntFrac (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     using integer-fractional polyhedra-lattice-tilings"
+  );
+
+  (*
+  ("-lira-convex-hull-lw"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull_lra (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real
+     arithmetic with all integrality constraints ignored, i.e., LRA."
+  );
+   *)
+
+  (*
+  ("-lia-convex-hull"
+  , Arg.String (convex_hull `PureInt)
+  , "Compute the convex hull of an existential formula in linear integer arithmetic
+     using Cooper's projection and Gomory-Chvatal for the integer hull."
+  );
+   *)
+
+  ("-test-convex-hull-sc"
+  , Arg.String (fun file ->
+        ConvexHull.compare_with_real `SubspaceCone (load_formula file))
+  , "Test subspace-cone convex hull of an existential formula in LIRA against
+     the convex hull computed by Loos-Weispfenning."
+  );
+
+  ("-test-convex-hull-intfrac"
+  , Arg.String (fun file ->
+        ConvexHull.compare_with_real `IntFrac (load_formula file))
+  , "Test integer-fractional convex hull of an existential formula in LIRA against
+     the convex hull computed by Loos-Weispfenning."
+  );
+
+  ("-test-convex-hull-sc-vs-intfrac"
+  , Arg.String (fun file ->
+        ConvexHull.compare_sc_with_int_frac (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the one computed by projection in
+     integer-fractional space"
   );
 
   ("-convex-hull",

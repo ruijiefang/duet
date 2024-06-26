@@ -812,9 +812,9 @@ end = struct
   let abstract_to_plt
         expansion
         srk
-        ?(universe_p=(BatList.enum []))
-        ?(universe_l=(BatList.enum []))
-        ?(universe_t=(BatList.enum []))
+        ?(universe_p=[])
+        ?(universe_l=[])
+        ?(universe_t=[])
         univ_translation =
     let abstract m phi =
       logf ~level:`debug "abstract_to_plt...";
@@ -831,13 +831,13 @@ end = struct
         (lincond.p_cond, lincond.l_cond, lincond.t_cond);
       let imp_p =
         Polyhedron.of_constraints
-          (BatEnum.append universe_p (BatList.enum lincond.p_cond))
+          (BatEnum.append (BatList.enum universe_p) (BatList.enum lincond.p_cond))
       in
       let imp_l =
-        L.hermitize (List.rev_append (BatList.of_enum universe_l) lincond.l_cond)
+        L.hermitize (List.rev_append universe_l lincond.l_cond)
       in
       let imp_t =
-        L.hermitize (List.rev_append (BatList.of_enum universe_t) lincond.t_cond)
+        L.hermitize (List.rev_append universe_t lincond.t_cond)
       in
       let plt = { poly_part = imp_p
                 ; lattice_part = imp_l
@@ -967,7 +967,10 @@ end = struct
         t_conds := BatEnum.append (BatList.enum lincond.t_cond) !t_conds
       )
       terms;
-    (!p_conds, !l_conds, !t_conds)
+    ( BatList.of_enum !p_conds
+    , BatList.of_enum !l_conds
+    , BatList.of_enum !t_conds
+    )
 
   let get_max_dim layout num_terms symbols =
     match layout with
@@ -1000,8 +1003,9 @@ end = struct
     in
     let (universe_p, universe_l, universe_t) =
       mk_term_definitions `Standard srk dim_of_symbol terms in
-    let interp_dim = mk_interp_dim `Standard terms in
     logf ~level:`debug "abstract_to_standard_plt...";
+    log_plt_constraints "term definitions" (universe_p, universe_l, universe_t);
+    let interp_dim = mk_interp_dim `Standard terms in
     abstract_to_plt expansion srk ~universe_p ~universe_l ~universe_t interp_dim
       
   (* LIRA PLT layout:
@@ -1036,7 +1040,8 @@ end = struct
     let (universe_p, universe_l, universe_t) =
       mk_term_definitions `IntFrac srk int_dim_of_symbol terms
     in
-    logf ~level:`debug "abstract_to_intfrac_plt...";
+    logf ~level:`debug "abstract_to_intfrac_plt...";    
+    log_plt_constraints "term definitions" (universe_p, universe_l, universe_t);
     let interp_dim = mk_interp_dim `IntFrac terms in
     abstract_to_plt expansion srk
       ~universe_p ~universe_l ~universe_t interp_dim
@@ -1061,8 +1066,8 @@ end = struct
 
   let abstract ~max_dim_in_projected =
     let abstract _m p =
-      logf ~level:`debug "DDifying @[%a@] with dimension %d" (P.pp pp_dim) p
-        max_dim_in_projected;
+      logf ~level:`debug "DDifying @[%a@] in ambient dimension %d" (P.pp pp_dim) p
+        (max_dim_in_projected + 1);
       let dd = P.dd_of (max_dim_in_projected + 1) p in
       let () = logf ~level:`debug "DDified@;" in
       (dd, (fun m -> m))
@@ -1389,20 +1394,24 @@ end = struct
       let closed_p = close_constraints (P.enum_constraints (Plt.poly_part plt))
                      |> P.of_constraints in
       let l_constraints = L.basis (Plt.lattice_part plt) in
+      logf ~level:`debug "abstract_sc: lattice constraints: @[%a@]"
+        (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
+           pp_vector)
+        l_constraints;
+      let subspace_constraints =
+        List.map
+          (fun v ->
+            ( `Zero
+            , V.add_term
+                (QQ.negate (Linear.evaluate_affine m v))
+                Linear.const_dim
+                v
+            )
+          )
+          l_constraints
+      in
       let polyhedron_abstraction = abstract_lw closed_p in
       let subspace_abstraction =
-        let subspace_constraints =
-          List.map
-            (fun v ->
-              ( `Zero
-              , V.add_term
-                  (QQ.negate (Linear.evaluate_affine m v))
-                  Linear.const_dim
-                  v
-              )
-            )
-            l_constraints
-        in
         match subspace_constraints with
         | [] -> polyhedron_abstraction
         | _ ->
@@ -1419,7 +1428,8 @@ end = struct
       let dd = BatEnum.append (DD.enum_generators subspace_abstraction)
                  recession_cone
                |> DD.of_generators (max_dim_in_projected + 1) in
-      logf ~level:`debug "abstract_sc: combined";
+      logf ~level:`debug "abstract_sc: combined dd = @[%a@]"
+        (DD.pp pp_dim) dd;
       let restricted m dim =
         if dim > max_dim_in_projected
         then failwith "abstract_sc: Dimension has been eliminated"
@@ -1552,21 +1562,40 @@ end = struct
     LocalAbstraction.
     { abstract = (fun _x c -> abstraction.abstract c) }
 
-  let lift_abstraction srk join formula_of top bottom term_of_dim local_abs =
+  let lift_abstraction ?(max_dim_to_inspect = -1)
+        srk join formula_of top bottom term_of_dim local_abs =
+    let of_model phi m =
+      match m with
+      | `LIRR _ -> assert false
+      | `LIRA m ->
+         let () =
+           let rec evaluate n l =
+             if n < 0 then l
+             else
+               let term = term_of_dim n in
+               let l' = (term, Interpretation.evaluate_term m term) :: l in
+               evaluate (n - 1) l'
+           in
+           logf ~level:`debug "model: @[%a@]@;"
+             (Format.pp_print_list
+                ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
+                (fun fmt (t, value) ->
+                  Format.fprintf fmt "(%a, %a)"
+                    (Syntax.ArithTerm.pp srk) t
+                    QQ.pp value)
+             )
+             (evaluate max_dim_to_inspect [])
+         in
+         let (result, _univ_translation) =
+           local_abs.LocalAbstraction.abstract m phi
+         in
+         result
+    in
     let abstract phi =
       let domain =
         Abstract.
         { join
-        ; of_model =
-            (fun m ->
-              match m with
-              | `LIRR _ -> assert false
-              | `LIRA m ->
-                 let (result, _univ_translation) =
-                   local_abs.LocalAbstraction.abstract m phi
-                 in
-                 result
-            )
+        ; of_model = of_model phi
         ; formula_of
         ; top
         ; bottom
@@ -1581,10 +1610,15 @@ end = struct
 
   let lift_dd_abstraction (srk: 'a context) ~max_dim ~term_of_dim local_abs =
     let ambient_dim = max_dim + 1 in
-    let formula_of dd = formula_of_dd srk term_of_dim dd in
+    let formula_of dd =
+      let fml = formula_of_dd srk term_of_dim dd in
+      logf ~level:`debug "Blocking %a" (Syntax.Formula.pp srk) fml;
+      fml
+    in
     let top = P.dd_of ambient_dim P.top in
     let bottom = P.dd_of ambient_dim P.bottom in
-    lift_abstraction srk DD.join formula_of top bottom term_of_dim local_abs
+    lift_abstraction ~max_dim_to_inspect:max_dim
+      srk DD.join formula_of top bottom term_of_dim local_abs
 
   let lift_plt_abstraction srk ~term_of_dim local_abs =
     let local_abs' =
@@ -1729,11 +1763,11 @@ let convex_hull_lw_cooper hull_after_proj has_mod_floor srk phi terms =
     match hull_after_proj with
     | `IntHullAfterProjection ->
        (fun _m dd ->
-         logf "convex_hull_lw_cooper: taking integer hull...";
+         logf ~level:`debug "convex_hull_lw_cooper: taking integer hull...";
          (DD.integer_hull dd, fun m -> m))
     | `NoIntHullAfterProjection ->
        (fun _m dd ->
-         logf "convex_hull_lw_cooper: done";
+         logf ~level:`debug "convex_hull_lw_cooper: done";
          (dd, fun m -> m))
   in
   let num_terms = Array.length terms in

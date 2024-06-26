@@ -164,11 +164,11 @@ let log_plt_constraints str (p, l, t) =
 
 let test_level = ref `debug
 
-let test_point_in_polyhedron level str m p =
-  if Log.level_leq level !test_level then
+let test_point_in_polyhedron str m p =
+  if Log.level_leq !my_verbosity_level !test_level then
     List.iter
       (fun (kind, v) ->
-        logf "%s: testing @[%a@]" str pp_pconstr (kind, v);
+        logf ~level:`debug "%s: testing @[%a@]" str pp_pconstr (kind, v);
         let result = Linear.evaluate_affine m v in
         match kind with
         | `Zero ->
@@ -183,11 +183,11 @@ let test_point_in_polyhedron level str m p =
       p
   else ()
 
-let test_point_in_lattice is_int level str m l =
-  if Log.level_leq level !test_level then
+let test_point_in_lattice is_int str m l =
+  if Log.level_leq !my_verbosity_level !test_level then
     List.iter
       (fun v ->
-        logf "%s: testing %a(%a)"
+        logf ~level:`debug "%s: testing %a(%a)"
           str
           (fun fmt is_int -> match is_int with
                              | `IsInt -> Format.fprintf fmt "Int"
@@ -1007,7 +1007,7 @@ end = struct
     log_plt_constraints "term definitions" (universe_p, universe_l, universe_t);
     let interp_dim = mk_interp_dim `Standard terms in
     abstract_to_plt expansion srk ~universe_p ~universe_l ~universe_t interp_dim
-      
+
   (* LIRA PLT layout:
      0 ... len(terms) - 1 represent terms.
      Let n be the first even integer >= len(terms).
@@ -1025,7 +1025,7 @@ end = struct
       int_frac_layout ~num_terms in
     let max_dim = get_max_dim `IntFrac num_terms symbols in
     logf ~level:`debug
-      "initial int-frac plt abstraction: max_dim: %d, num_terms = %d, 
+      "initial int-frac plt abstraction: max_dim: %d, num_terms = %d,
        start_of_term_int_frac = %d, start_of_symbol_int_frac = %d@;"
       max_dim num_terms start_of_term_int_frac start_of_symbol_int_frac;
     let int_dim_of_symbol sym =
@@ -1040,7 +1040,7 @@ end = struct
     let (universe_p, universe_l, universe_t) =
       mk_term_definitions `IntFrac srk int_dim_of_symbol terms
     in
-    logf ~level:`debug "abstract_to_intfrac_plt...";    
+    logf ~level:`debug "abstract_to_intfrac_plt...";
     log_plt_constraints "term definitions" (universe_p, universe_l, universe_t);
     let interp_dim = mk_interp_dim `IntFrac terms in
     abstract_to_plt expansion srk
@@ -1096,10 +1096,10 @@ end = struct
         (Format.pp_print_list ~pp_sep:(fun fmt _ -> Format.fprintf fmt ", ")
            Format.pp_print_int)
         to_project
-        (P.pp pp_dim) p;      
+        (P.pp pp_dim) p;
       let abstracted = P.local_project m to_project p in
       logf ~level:`debug "abstract_lw: abstracted.@\n";
-      test_point_in_polyhedron !my_verbosity_level "abstract_lw" m
+      test_point_in_polyhedron "abstract_lw" m
         (BatList.of_enum (P.enum_constraints abstracted));
       let restricted m dim =
         if elim dim then failwith "abstract_lw: Dimension has been eliminated"
@@ -1196,12 +1196,6 @@ end = struct
   let glb_for dim p m =
     let has_upper_bound = ref false in
     let argmax (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
-      logf ~level:`debug
-        "Comparing %a, %a against %a, %a@;"
-        pp_pconstr (kind1, V.add_term QQ.one dim (V.negate lower_bound1))
-        QQ.pp b1
-        pp_pconstr (kind2, V.add_term QQ.one dim (V.negate lower_bound2))
-        QQ.pp b2;
       if b1 < b2 then (kind2, lower_bound2, b2)
       else if b2 < b1 then (kind1, lower_bound1, b1)
       else
@@ -1275,7 +1269,7 @@ end = struct
                     lcm_denom_elim_dim_in_lt
       in
       logf ~level:`debug
-        "select_term: calculating delta: value of elim dim = %a, 
+        "select_term: calculating delta: value of elim dim = %a,
          value of lower bound = %a, delta = %a@;"
         QQ.pp (m elim_dim) QQ.pp (Linear.evaluate_affine m lower) QQ.pp delta;
       let term = V.add_term delta Linear.const_dim lower in
@@ -1318,9 +1312,9 @@ end = struct
     in
     let tiling = virtual_sub_l term_selected elim_dim t
     in
-    test_point_in_polyhedron !my_verbosity_level "cooper_one" m polyhedron;
-    test_point_in_lattice `IsInt !my_verbosity_level "cooper_one" m lattice;
-    test_point_in_lattice `NotInt !my_verbosity_level "cooper_one" m tiling;
+    test_point_in_polyhedron "cooper_one" m polyhedron;
+    test_point_in_lattice `IsInt "cooper_one" m lattice;
+    test_point_in_lattice `NotInt "cooper_one" m tiling;
     (polyhedron, lattice, tiling)
 
   let abstract_cooper_ ~elim ~ceiling m plt =

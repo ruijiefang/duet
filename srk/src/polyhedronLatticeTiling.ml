@@ -1176,8 +1176,7 @@ end = struct
       match vt with
       | `PlusInfinity
         | `MinusInfinity ->
-         let delta = QQ.modulo (Linear.evaluate_affine m v)
-                       lcm_denom_dim_in_lt in
+         let delta = QQ.modulo (m dim) lcm_denom_dim_in_lt in
          Some (substitute_for_in (V.of_term delta Linear.const_dim) dim v)
       | `Term t ->
          Some (substitute_for_in t dim v)
@@ -1197,6 +1196,12 @@ end = struct
   let glb_for dim p m =
     let has_upper_bound = ref false in
     let argmax (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
+      logf ~level:`debug
+        "Comparing %a, %a against %a, %a@;"
+        pp_pconstr (kind1, V.add_term QQ.one dim (V.negate lower_bound1))
+        QQ.pp b1
+        pp_pconstr (kind2, V.add_term QQ.one dim (V.negate lower_bound2))
+        QQ.pp b2;
       if b1 < b2 then (kind2, lower_bound2, b2)
       else if b2 < b1 then (kind1, lower_bound1, b1)
       else
@@ -1262,15 +1267,16 @@ end = struct
      If [ceiling] has finite image (for each t), [abstract_cooper_one] has.
    *)
   let cooper_one ceiling lcm_denom_elim_dim_in_lt elim_dim m (p, l, t) =
-    logf ~level:`debug "cooper_one: eliminating %d" elim_dim;
+    logf ~level:`debug "cooper_one: eliminating %d, lcm of denom is %a"
+      elim_dim QQ.pp lcm_denom_elim_dim_in_lt;
     let select_term lower =
       let delta = QQ.modulo
                     (QQ.sub (m elim_dim) (Linear.evaluate_affine m lower))
                     lcm_denom_elim_dim_in_lt
       in
       logf ~level:`debug
-        "select_term: calculating delta: value of elim dim = @[%a@], 
-         value of lower bound = @[%a@], delta = %a@;"
+        "select_term: calculating delta: value of elim dim = %a, 
+         value of lower bound = %a, delta = %a@;"
         QQ.pp (m elim_dim) QQ.pp (Linear.evaluate_affine m lower) QQ.pp delta;
       let term = V.add_term delta Linear.const_dim lower in
       logf ~level:`debug "cooper_one: selected term @[%a@]@;" pp_vector term;
@@ -1278,11 +1284,15 @@ end = struct
     in
     let (term_selected, pcond, lcond) =
       match glb_for elim_dim p m with
-      | (_, false) -> (`PlusInfinity, [], [])
-      | (None, _) -> (`MinusInfinity, [], [])
+      | (_, false) ->
+         logf ~level:`debug "abstract_cooper: selecting +infty";
+         (`PlusInfinity, [], [])
+      | (None, _) ->
+         logf ~level:`debug "abstract_cooper: selecting -infty";
+         (`MinusInfinity, [], [])
       | (Some (kind, term, value), true) ->
          logf ~level:`debug "abstract_cooper: selecting term based on @[%a@]"
-           pp_pconstr (kind, V.add_term (QQ.of_int (-1)) elim_dim term);
+           pp_pconstr (kind, V.add_term QQ.one elim_dim (V.negate term));
          let (rounded, pcond, lcond) = ceiling m term in
          if Option.is_some (QQ.to_zz value) && kind = `Pos then
            let lb = V.add_term QQ.one Linear.const_dim rounded
@@ -1716,7 +1726,7 @@ let convex_hull_intfrac has_mod_floor srk phi terms =
         ()
     in
     loop 0 start_of_term_int_frac;
-    equations
+    (BatList.of_enum equations)
   in
   let map_intfrac _m dd =
     let equations = define_original_dimensions
@@ -1726,7 +1736,7 @@ let convex_hull_intfrac has_mod_floor srk phi terms =
       BatList.of_enum
         BatEnum.(num_terms --^ start_of_symbol_int_frac)
     in
-    let mapped_dd = DD.meet_constraints dd (BatList.of_enum equations)
+    let mapped_dd = DD.meet_constraints dd equations
                     |> DD.project int_frac_term_dimensions
                     |> DD.enum_constraints
                     |> DD.of_constraints_closed num_terms

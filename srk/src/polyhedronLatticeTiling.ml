@@ -1108,7 +1108,10 @@ end = struct
           pp_vector direction;
         let u = List.map (V.dot direction) lt in
         let gcd = List.fold_left (fun a b -> QQ.gcd a b) QQ.zero u in
-        let rescaled = V.scalar_mul (QQ.inverse gcd) direction in
+        let rescaled =
+          if QQ.equal QQ.zero gcd then direction
+          else V.scalar_mul (QQ.inverse gcd) direction
+        in
         let min = function
           | `PlusInfinity, `PlusInfinity -> `PlusInfinity
           | `PlusInfinity, `Num n -> `Num n

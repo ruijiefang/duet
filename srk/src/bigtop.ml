@@ -78,7 +78,9 @@ module ConvexHull : sig
   val convex_hull:
     ?filter:(Quantifier.quantifier_prefix -> Syntax.Symbol.Set.t -> Syntax.Symbol.Set.t) ->
     [ `SubspaceCone
+    | `SubspaceConeAccelerated
     | `IntFrac
+    | `IntFracAccelerated
     | `LwCooperIntHull
     | `LwCooperNoIntHull
     | `LwOnly ] ->
@@ -86,13 +88,17 @@ module ConvexHull : sig
 
   val compare:
     (DD.closed DD.t -> DD.closed DD.t -> bool) ->
-    [`SubspaceCone | `IntFrac | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
-    [`SubspaceCone | `IntFrac | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
+    [`SubspaceCone | `SubspaceConeAccelerated
+     | `IntFrac | `IntFracAccelerated
+     | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
+    [`SubspaceCone | `SubspaceConeAccelerated
+     | `IntFrac | `IntFracAccelerated
+     | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
     Ctx.t formula -> unit
 
 end = struct
 
-  module S = Syntax.Symbol.Set  
+  module S = Syntax.Symbol.Set
 
   let pp_dim fmt dim = Format.fprintf fmt "(dim %d)" dim
 
@@ -123,7 +129,9 @@ end = struct
 
   let pp_alg fmt = function
     | `SubspaceCone -> Format.fprintf fmt "SubspaceCone"
+    | `SubspaceConeAccelerated -> Format.fprintf fmt "SubspaceConeAccelerated"
     | `IntFrac -> Format.fprintf fmt "IntFrac"
+    | `IntFracAccelerated -> Format.fprintf fmt "IntFracAccelerated"
     | `LwCooperIntHull ->
        Format.fprintf fmt "LW + Cooper with integer hull after projection"
     | `LwCooperNoIntHull ->
@@ -178,7 +186,9 @@ end = struct
     let how =
       match how with
       | `SubspaceCone -> `SubspaceCone
+      | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
       | `IntFrac -> `IntFrac
+      | `IntFracAccelerated -> `IntFracAccelerated
       | `LwCooperIntHull -> `LwCooper `IntHullAfterProjection
       | `LwCooperNoIntHull -> `LwCooper `NoIntHullAfterProjection
     in
@@ -193,14 +203,16 @@ end = struct
     let translate_int_type_into_constraints how int_symbols _real_symbols =
       match how with
       | `LwOnly -> []
-      (* Lw is the real relaxation of the convex hull; 
-       note that the result is not the exact convex hull of 
+      (* Lw is the real relaxation of the convex hull;
+       note that the result is not the exact convex hull of
        (exists x. phi) even if x is real, because
        the standard PLT abstraction makes a copy of the variables to keep
        and eliminates all original variables, including the integral ones.
        *)
       | `SubspaceCone
+        | `SubspaceConeAccelerated
         | `IntFrac
+        | `IntFracAccelerated
         | `LwCooperIntHull
         | `LwCooperNoIntHull -> is_int_of_symbols int_symbols
     in
@@ -209,7 +221,9 @@ end = struct
       (match how with
        | `LwOnly -> `LwCooperNoIntHull
        | `SubspaceCone -> `SubspaceCone
+       | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
        | `IntFrac -> `IntFrac
+       | `IntFracAccelerated -> `IntFracAccelerated
        | `LwCooperIntHull -> `LwCooperIntHull
        | `LwCooperNoIntHull -> `LwCooperNoIntHull
       )
@@ -308,10 +322,31 @@ let spec_list = [
      using the subspace-and-cone abstraction"
   );
 
+  ("-lira-convex-hull-sc-accelerated"
+  , Arg.String
+      (fun file ->
+          ignore (ConvexHull.convex_hull `SubspaceConeAccelerated (load_formula file));
+          Format.printf "Result: success"
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     using the subspace-and-cone abstraction"
+  );
+
   ("-lira-convex-hull-intfrac"
   , Arg.String
       (fun file ->
         ignore (ConvexHull.convex_hull `IntFrac (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     using integer-fractional polyhedra-lattice-tilings"
+  );
+
+  ("-lira-convex-hull-intfrac-accelerated"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull `IntFracAccelerated (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic
@@ -348,7 +383,29 @@ let spec_list = [
         ConvexHull.compare DD.equal `SubspaceCone `IntFrac (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection in
-     integer-fractional space"
+     integer-fractional space."
+  );
+
+  ("-compare-convex-hull-sc-accelerated"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceCone `SubspaceConeAccelerated (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the accelerated version."
+  );
+
+  ("-compare-convex-hull-intfrac-accelerated"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `IntFrac `IntFracAccelerated (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the integer-fractional projection against the accelerated version."
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-intfrac-accelerated"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `IntFracAccelerated (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the one computed by projection in
+     integer-fractional space."
   );
 
   ("-compare-convex-hull-sc-vs-lwcooper"

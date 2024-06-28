@@ -66,7 +66,9 @@ val convex_hull_of_lira_model:
 
 val convex_hull:
   [ `SubspaceCone
+  | `SubspaceConeAccelerated
   | `IntFrac
+  | `IntFracAccelerated
   | `LwCooper of [`IntHullAfterProjection | `NoIntHullAfterProjection]
   ] ->
   ?man:(DD.closed Apron.Manager.t) ->

@@ -1069,7 +1069,7 @@ end
 
 module ModelSearch: sig
   
-  val extrapolate: integer_point:V.t -> rational_point:V.t -> 'a Plt.t -> V.t list
+  val extrapolate: integer_point:V.t -> direction:V.t -> 'a Plt.t -> V.t list
 
   val model_to_vector: IntSet.t -> (int -> QQ.t) -> V.t
 
@@ -1082,32 +1082,20 @@ end = struct
       dimensions
       V.zero
 
-  (*
-  let interpolate ~integer_point ~rational_point lattice_vectors =
-    let direction = V.sub rational_point integer_point in
-    if V.equal V.zero direction then integer_point
-    else
-      let u = List.map (V.dot direction) lattice_vectors in
-      let gcd = List.fold_left (fun a b -> QQ.gcd a b) QQ.zero u in
-      let rescaled = V.scalar_mul (QQ.inverse gcd) direction in
-      V.add integer_point rescaled
-   *)
-
-  let extrapolate ~integer_point ~rational_point plt =
+  let extrapolate ~integer_point ~direction plt =
     let lt = List.rev_append
                (L.basis (Plt.tiling_part plt))
                (L.basis (Plt.lattice_part plt)) in
-    let direction = V.sub rational_point integer_point in
     if V.equal V.zero direction then [integer_point]
     else
       begin
         logf ~level:`debug
-          "extrapolate: integer point is @[%a@]@; rational point is @[%a@]@; direction is @[%a@]@;"
+          "extrapolate: integer point is @[%a@]@; direction is @[%a@]@;"
           pp_vector integer_point
-          pp_vector rational_point
           pp_vector direction;
         let u = List.map (V.dot direction) lt in
         let gcd = List.fold_left (fun a b -> QQ.gcd a b) QQ.zero u in
+        let integral_direction = not (QQ.equal QQ.zero gcd) in
         let rescaled =
           if QQ.equal QQ.zero gcd then direction
           else V.scalar_mul (QQ.inverse gcd) direction
@@ -1116,37 +1104,59 @@ end = struct
           | `PlusInfinity, `PlusInfinity -> `PlusInfinity
           | `PlusInfinity, `Num n -> `Num n
           | `Num n, `PlusInfinity -> `Num n
-          | `Num n1, `Num n2 -> `Num (ZZ.min n1 n2)
+          | `Num n1, `Num n2 -> `Num (QQ.min n1 n2)
         in
         let (coeff_neg_dirn, coeff_pos_dirn) =
           BatEnum.fold
             (fun (max_neg_dirn, max_pos_dirn) (kind, v) ->
               let eval_base = QQ.add (V.dot v integer_point) (V.coeff Linear.const_dim v) in
-              let eval_integer_ray = V.dot v rescaled in
+              let eval_rescaled_direction = V.dot v rescaled in
               let (curr_num_steps_neg_dirn, curr_num_steps_pos_dirn) =
                 match kind with
                 | `Zero ->
-                   if QQ.equal QQ.zero eval_integer_ray then
+                   if QQ.equal QQ.zero eval_rescaled_direction then
                      (`PlusInfinity, `PlusInfinity)
                    else
-                     (`Num ZZ.zero, `Num ZZ.zero)
+                     (`Num QQ.zero, `Num QQ.zero)
                 | `Nonneg
                   | `Pos ->
-                   if QQ.equal QQ.zero eval_integer_ray then
+                   if QQ.equal QQ.zero eval_rescaled_direction then
                      (`PlusInfinity, `PlusInfinity)
                    else
-                     let num_steps = QQ.idiv eval_base (QQ.abs eval_integer_ray) in
-                     let remainder = QQ.modulo eval_base (QQ.abs eval_integer_ray) in
-                     if QQ.lt QQ.zero eval_integer_ray && kind = `Pos
-                        && QQ.equal QQ.zero remainder then
-                       (`Num (ZZ.sub num_steps ZZ.one), `PlusInfinity)
-                     else if QQ.lt QQ.zero eval_integer_ray then
-                       (`Num num_steps, `PlusInfinity)
-                     else if QQ.lt eval_integer_ray QQ.zero && kind = `Pos
-                             && QQ.equal QQ.zero remainder then
-                       (`PlusInfinity, `Num (ZZ.sub num_steps ZZ.one))
-                     else
-                       (`PlusInfinity, `Num num_steps)
+                     let num_steps =
+                       if integral_direction then
+                         QQ.of_zz (QQ.idiv eval_base (QQ.abs eval_rescaled_direction))
+                       else 
+                         QQ.div eval_base (QQ.abs eval_rescaled_direction)
+                     in
+                     let remainder =
+                       if integral_direction then
+                         QQ.modulo eval_base (QQ.abs eval_rescaled_direction)
+                       else QQ.zero
+                     in
+                     match ( QQ.lt QQ.zero eval_rescaled_direction
+                           , integral_direction )
+                     with
+                     | (true, true) ->
+                        if QQ.equal QQ.zero remainder && kind = `Pos then
+                          (`Num (QQ.sub num_steps QQ.one), `PlusInfinity)
+                        else
+                          (`Num num_steps, `PlusInfinity)
+                     | (false, true) ->
+                        if QQ.equal QQ.zero remainder && kind = `Pos then
+                          (`PlusInfinity, `Num (QQ.sub num_steps QQ.one))
+                        else
+                          (`PlusInfinity, `Num num_steps)
+                     | (true, false) ->
+                        if QQ.equal QQ.zero remainder && kind = `Pos then
+                          (`Num (QQ.div num_steps (QQ.of_int 2)), `PlusInfinity)
+                        else
+                          (`Num num_steps, `PlusInfinity)
+                     | (false, false) ->
+                        if QQ.equal QQ.zero remainder && kind = `Pos then
+                          (`PlusInfinity, `Num (QQ.div num_steps (QQ.of_int 2)))
+                        else
+                          (`Num num_steps, `PlusInfinity)
               in
               ( min (max_neg_dirn, curr_num_steps_neg_dirn)
               , min (max_pos_dirn, curr_num_steps_pos_dirn)
@@ -1156,20 +1166,19 @@ end = struct
             (P.enum_constraints (Plt.poly_part plt))
         in
         let translate coeff =
-          if ZZ.equal coeff ZZ.zero then
+          if QQ.equal QQ.zero coeff then
             None
           else
-            Some (V.add integer_point (V.scalar_mul (QQ.of_zz coeff) rescaled))
+            Some (V.add integer_point (V.scalar_mul coeff rescaled))
         in
         match (coeff_neg_dirn, coeff_pos_dirn) with
         | (`Num n1), (`Num n2) ->
-           BatList.filter_map translate [ZZ.negate n1; n2]
+           BatList.filter_map translate [QQ.negate n1; n2]
         | (`Num n1, `PlusInfinity) ->
-           BatList.filter_map translate [ZZ.negate n1; ZZ.of_int 100]
+           BatList.filter_map translate [QQ.negate n1]
         | (`PlusInfinity, `Num n2) ->
-           BatList.filter_map translate [ZZ.of_int (-100); n2]
-        | (`PlusInfinity, `PlusInfinity) ->
-           BatList.filter_map translate [ZZ.of_int (-100); ZZ.of_int 100]
+           BatList.filter_map translate [n2]
+        | (`PlusInfinity, `PlusInfinity) -> []
       end
 
 end
@@ -1380,20 +1389,6 @@ end = struct
         else ZZ.lcm lcm (QQ.denominator coeff)
       )
       ZZ.one vectors
-
-  let model_to_vector m term =
-    V.fold (fun dim _coeff v ->
-        if dim <> Linear.const_dim then V.add_term (m dim) dim v
-        else v)
-      term V.zero 
-
-  let _rational_point_on_lower_bound m term dim =
-    model_to_vector m term
-    |> V.add_term (Linear.evaluate_affine m term) dim
-
-  let _original_integer_point_above m lower dim =
-    model_to_vector m lower
-    |> V.add_term (m dim) dim
 
   (* For vectors v, v' in dimensions free of elim_dim,
      [ceiling m t = t']  only if [t'] evaluated at [m] is the least integer
@@ -1849,7 +1844,8 @@ end = struct
        let rational_point = univ_translation1 interp2
                             |> ModelSearch.model_to_vector dimensions in
        let points =
-         ModelSearch.extrapolate ~integer_point ~rational_point plt1
+         let direction = V.sub rational_point integer_point in
+         ModelSearch.extrapolate ~integer_point ~direction plt1
        in
        log_plt_constraints ~level:`debug "diversifying within"
          ( BatList.of_enum (P.enum_constraints (Plt.poly_part plt1))
@@ -1874,11 +1870,9 @@ end = struct
       Plt.abstract_to_standard_plt expand_mod_floor srk terms symbols
     in
     let sc_abstraction =
-      plt_abstraction
-      |> LocalAbstraction.compose
-           (SubspaceCone.abstract_sc ~man ~max_dim_in_projected:(num_terms - 1))
+      SubspaceCone.abstract_sc ~man ~max_dim_in_projected:(num_terms - 1)
     in
-    sc_abstraction
+    plt_abstraction |> LocalAbstraction.compose sc_abstraction
 
   let mk_sc_abstraction_with_acceleration ~man
         expand_mod_floor srk terms symbols =

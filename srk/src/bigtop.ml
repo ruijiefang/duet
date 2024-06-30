@@ -79,6 +79,8 @@ module ConvexHull : sig
     ?filter:(Quantifier.quantifier_prefix -> Syntax.Symbol.Set.t -> Syntax.Symbol.Set.t) ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
+    | `Subspace
+    | `Subspace
     | `IntFrac
     | `IntFracAccelerated
     | `LwCooperIntRealHull
@@ -89,10 +91,10 @@ module ConvexHull : sig
 
   val compare:
     (DD.closed DD.t -> DD.closed DD.t -> bool) ->
-    [`SubspaceCone | `SubspaceConeAccelerated
+    [`SubspaceCone | `SubspaceConeAccelerated | `Subspace
      | `IntFrac | `IntFracAccelerated
      | `LwCooperIntRealHull | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
-    [`SubspaceCone | `SubspaceConeAccelerated
+    [`SubspaceCone | `SubspaceConeAccelerated | `Subspace
      | `IntFrac | `IntFracAccelerated
      | `LwCooperIntRealHull | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
     Ctx.t formula -> unit
@@ -131,6 +133,7 @@ end = struct
   let pp_alg fmt = function
     | `SubspaceCone -> Format.fprintf fmt "SubspaceCone"
     | `SubspaceConeAccelerated -> Format.fprintf fmt "SubspaceConeAccelerated"
+    | `Subspace -> Format.fprintf fmt "Subspace"
     | `IntFrac -> Format.fprintf fmt "IntFrac"
     | `IntFracAccelerated -> Format.fprintf fmt "IntFracAccelerated"
     | `LwCooperIntRealHull ->
@@ -190,6 +193,7 @@ end = struct
       match how with
       | `SubspaceCone -> `SubspaceCone
       | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+      | `Subspace -> `Subspace
       | `IntFrac -> `IntFrac
       | `IntFracAccelerated -> `IntFracAccelerated
       | `LwCooperIntRealHull -> `LwCooper `IntRealHullAfterProjection
@@ -215,6 +219,7 @@ end = struct
        *)
       | `SubspaceCone
         | `SubspaceConeAccelerated
+        | `Subspace
         | `IntFrac
         | `IntFracAccelerated
         | `LwCooperIntRealHull
@@ -227,6 +232,7 @@ end = struct
        | `LwOnly -> `LwCooperNoIntHull
        | `SubspaceCone -> `SubspaceCone
        | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+       | `Subspace -> `Subspace
        | `IntFrac -> `IntFrac
        | `IntFracAccelerated -> `IntFracAccelerated
        | `LwCooperIntRealHull -> `LwCooperIntRealHull
@@ -473,6 +479,12 @@ let spec_list = [
   ("-compare-convex-hull-sc-vs-lwcooper"
   , Arg.String (fun file ->
         ConvexHull.compare DD.equal `SubspaceCone `LwCooperNoIntHull (load_formula file))
+  , ""
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-subspace"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `Subspace (load_formula file))
   , ""
   );
 

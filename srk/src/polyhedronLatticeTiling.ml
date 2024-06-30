@@ -1886,6 +1886,14 @@ module AbstractTerm: sig
     ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
       LocalAbstraction.t
 
+  (* To remove *)
+  val mk_subspace_abstraction_with_acceleration:
+    man:DD.closed Apron.Manager.t ->
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a arith_term array -> Symbol.Set.t ->
+    ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
+      LocalAbstraction.t
+
   val mk_cooper_abstraction:
     [ `ExpandModFloor | `NoExpandModFloor ] ->
     'a context -> 'a arith_term array -> Symbol.Set.t ->
@@ -2012,6 +2020,26 @@ end = struct
           assert (Interpretation.evaluate_formula interp phi)
         ) !models;
       abstract_multiple_models plt_abstraction sc_abstraction !models phi
+    in
+    LocalAbstraction.{abstract}
+
+  let mk_subspace_abstraction_with_acceleration ~man
+        expand_mod_floor srk terms symbols =
+    let models = ref [] in
+    let plt_abstraction =
+      Plt.abstract_to_standard_plt expand_mod_floor srk terms symbols
+    in
+    let dd_dimension = Array.length terms - 1 in
+    let subspace_abstraction =
+      SubspaceCone.abstract_subspace ~man ~max_dim_in_projected:dd_dimension
+    in
+    let abstract interp phi =
+      models := interp :: !models;
+      BatList.iter
+        (fun interp ->
+          assert (Interpretation.evaluate_formula interp phi)
+        ) !models;
+      abstract_multiple_models plt_abstraction subspace_abstraction !models phi
     in
     LocalAbstraction.{abstract}
 
@@ -2270,6 +2298,20 @@ let convex_hull_sc ?(man=Polka.manager_alloc_loose()) speed srk phi terms =
   in
   Abstraction.apply abstract phi
 
+let convex_hull_subspace ?(man=Polka.manager_alloc_loose()) srk phi terms =
+  let local_abs =
+    AbstractTerm.mk_subspace_abstraction_with_acceleration ~man
+      `ExpandModFloor srk terms (Syntax.symbols phi)
+  in
+  let num_terms = Array.length terms in
+  let abstract =
+    LocalGlobal.lift_dd_abstraction srk ~man ~max_dim:(num_terms - 1)
+      ~term_of_dim:(mk_term_of_dim terms)
+      local_abs
+  in
+  Abstraction.apply abstract phi
+  
+
 let convex_hull_intfrac ?(man=(Polka.manager_alloc_loose ())) speed srk phi terms =
   let num_terms = Array.length terms in
   let local_abs =
@@ -2306,6 +2348,7 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   match how with
   | `SubspaceCone -> convex_hull_sc ~man `SingleModel srk phi terms
   | `SubspaceConeAccelerated -> convex_hull_sc ~man `Accelerate srk phi terms
+  | `Subspace -> convex_hull_subspace ~man srk phi terms
   | `IntFrac -> convex_hull_intfrac ~man `SingleModel srk phi terms
   | `IntFracAccelerated -> convex_hull_intfrac ~man `Accelerate srk phi terms
   | `LwCooper finalize -> convex_hull_lw_cooper finalize ~man srk phi terms

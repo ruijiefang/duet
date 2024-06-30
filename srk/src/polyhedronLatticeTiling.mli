@@ -70,6 +70,7 @@ val convex_hull_of_lira_model:
 val convex_hull:
   [ `SubspaceCone
   | `SubspaceConeAccelerated
+  | `Subspace
   | `IntFrac
   | `IntFracAccelerated
   | `LwCooper of

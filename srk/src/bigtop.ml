@@ -81,6 +81,7 @@ module ConvexHull : sig
     | `SubspaceConeAccelerated
     | `IntFrac
     | `IntFracAccelerated
+    | `LwCooperIntRealHull
     | `LwCooperIntHull
     | `LwCooperNoIntHull
     | `LwOnly ] ->
@@ -90,10 +91,10 @@ module ConvexHull : sig
     (DD.closed DD.t -> DD.closed DD.t -> bool) ->
     [`SubspaceCone | `SubspaceConeAccelerated
      | `IntFrac | `IntFracAccelerated
-     | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
+     | `LwCooperIntRealHull | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
     [`SubspaceCone | `SubspaceConeAccelerated
      | `IntFrac | `IntFracAccelerated
-     | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
+     | `LwCooperIntRealHull | `LwCooperIntHull | `LwCooperNoIntHull | `LwOnly] ->
     Ctx.t formula -> unit
 
 end = struct
@@ -132,6 +133,8 @@ end = struct
     | `SubspaceConeAccelerated -> Format.fprintf fmt "SubspaceConeAccelerated"
     | `IntFrac -> Format.fprintf fmt "IntFrac"
     | `IntFracAccelerated -> Format.fprintf fmt "IntFracAccelerated"
+    | `LwCooperIntRealHull ->
+       Format.fprintf fmt "LW + Cooper with mixed hull after projection"
     | `LwCooperIntHull ->
        Format.fprintf fmt "LW + Cooper with integer hull after projection"
     | `LwCooperNoIntHull ->
@@ -189,6 +192,7 @@ end = struct
       | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
       | `IntFrac -> `IntFrac
       | `IntFracAccelerated -> `IntFracAccelerated
+      | `LwCooperIntRealHull -> `LwCooper `IntRealHullAfterProjection
       | `LwCooperIntHull -> `LwCooper `IntHullAfterProjection
       | `LwCooperNoIntHull -> `LwCooper `NoIntHullAfterProjection
     in
@@ -213,6 +217,7 @@ end = struct
         | `SubspaceConeAccelerated
         | `IntFrac
         | `IntFracAccelerated
+        | `LwCooperIntRealHull
         | `LwCooperIntHull
         | `LwCooperNoIntHull -> is_int_of_symbols int_symbols
     in
@@ -224,6 +229,7 @@ end = struct
        | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
        | `IntFrac -> `IntFrac
        | `IntFracAccelerated -> `IntFracAccelerated
+       | `LwCooperIntRealHull -> `LwCooperIntRealHull
        | `LwCooperIntHull -> `LwCooperIntHull
        | `LwCooperNoIntHull -> `LwCooperNoIntHull
       )
@@ -250,36 +256,6 @@ end = struct
       else
         Format.printf "Result: failure (%a and %a hull incomparable)"
           pp_alg alg1 pp_alg alg2
-
-  (*
-    Tests:
-
-      1. (Exact)
-         Let x be real-valued and y be integer-valued.
-         (exists x. F /\ Int(y)) = (exists y. exists x. F /\ Int(y) /\ t = y)[t |-> y].
-
-         clconvhull(exists x. F /\ Int(y)) can be computed by
-         real elimination of x followed by integer-hull
-         (make sure all remaining variables are integral).
-         On the RHS, we should get the same result if we take Int(y) into
-         account.
-
-      2. (Subsumption)
-         Let y be arbitrary (real-valued or integer-valued).
-         Let x be real-valued.
-         (exists x. F) = (exists y. exists x. F /\ t = y)[t |-> y].
-         clconvhull(exists x. F) can be computed by real elimination of x.
-         On the RHS, we should get the same result if we drop Int(y) from
-         the constraints.
-         The SMT solver will however take Int(y) into account, so the best we
-         can do is to test
-
-         (exists y. exists x. F /\ t = y)[t |-> y] |= (exists x. F).
-
-         We may also take integrality of y into account:
-
-         (exists y. exists x. F /\ Int(y) /\ t = y)[t |-> y] |= (exists x. F).
-   *)
 
 end
 
@@ -353,19 +329,58 @@ let spec_list = [
      using integer-fractional polyhedra-lattice-tilings"
   );
 
-  ("-lira-convex-hull-lw-cooper-nointhull"
+  ("-lira-convex-hull-lw"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `LwCooperNoIntHull (load_formula file));
+        ignore (ConvexHull.convex_hull `LwOnly (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real
      arithmetic with all integrality constraints ignored, i.e., LRA."
   );
 
+  ("-lira-convex-hull-lwcooper"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull `LwCooperNoIntHull (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real
+     arithmetic by projection using Loos-Weispfenning elimination for variables not
+     occurring in integrality constraints and sound Cooper elimination for variables
+     that occur in integrality constraints."
+  );
+
+  ("-lira-convex-hull-lwcooper-inthull"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull `LwCooperIntHull (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real
+     arithmetic by projection using Loos-Weispfenning elimination for variables not
+     occurring in integrality constraints and sound Cooper elimination for variables
+     that occur in integrality constraints, and taking the integer hull at the end.
+     This is sound if all variables remaining are integral."
+  );
+
+  ("-lira-convex-hull-lwcooper-mixedhull"
+  , Arg.String
+      (fun file ->
+        ignore (ConvexHull.convex_hull `LwCooperIntRealHull (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real
+     arithmetic by projection using Loos-Weispfenning elimination for variables not
+     occurring in integrality constraints and sound Cooper elimination for variables
+     that occur in integrality constraints, and taking the mixed hull at the end."
+  );
+
   ("-compare-convex-hull-sc-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare ConvexHull.dd_subset `SubspaceCone `LwOnly
+        ConvexHull.compare
+          DD.equal
+          `SubspaceCone `LwOnly
           (load_formula file))
   , "Test subspace-cone convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
@@ -373,7 +388,9 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare ConvexHull.dd_subset `SubspaceConeAccelerated `LwOnly
+        ConvexHull.compare (* ConvexHull.dd_subset *)
+          DD.equal
+          `SubspaceConeAccelerated `LwOnly
           (load_formula file))
   , "Test subspace-cone convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
@@ -381,7 +398,7 @@ let spec_list = [
 
   ("-compare-convex-hull-intfrac-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare ConvexHull.dd_subset `IntFrac `LwOnly (load_formula file))
+        ConvexHull.compare DD.equal `IntFrac `LwOnly (load_formula file))
   , "Test integer-fractional convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
   );
@@ -432,12 +449,31 @@ let spec_list = [
      integer-fractional space."
   );
 
+  ("-compare-convex-hull-sc-accelerated-vs-lwcooper"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperNoIntHull (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the one computed by projection using
+     Loos-Weispfenning elimination for variables not occurring in integrality constraints
+     and sound Cooper elimination for variables that occur in integrality constraints."
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-lwcooper-inthull"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntHull (load_formula file))
+  , ""
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-lwcooper-mixedhull"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntRealHull (load_formula file))
+  , ""
+  );
+
   ("-compare-convex-hull-sc-vs-lwcooper"
   , Arg.String (fun file ->
         ConvexHull.compare DD.equal `SubspaceCone `LwCooperNoIntHull (load_formula file))
-  , "Test the convex hull of an existential formula in LIRA computed by
-     the subspace-cone abstraction against the one computed by projection in
-     integer-fractional space"
+  , ""
   );
 
   ("-convex-hull",

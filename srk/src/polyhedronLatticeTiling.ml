@@ -873,22 +873,14 @@ end = struct
 
   let formula_of_plt srk term_of_dim plt =
     let phis_p =
-      BatEnum.fold
-        (fun phis constr -> formula_p srk term_of_dim constr :: phis)
-        []
-        (P.enum_constraints plt.poly_part)
+      BatEnum.map (formula_p srk term_of_dim) (P.enum_constraints plt.poly_part)
+      |> BatList.of_enum
     in
     let phis_l =
-      BatList.fold
-        (fun phis lconstr -> formula_l srk term_of_dim lconstr :: phis)
-        []
-        (L.basis plt.lattice_part)
+      List.map (formula_l srk term_of_dim) (L.basis plt.lattice_part)
     in
     let phis_t =
-      BatList.fold
-        (fun phis tconstr -> formula_t srk term_of_dim tconstr :: phis)
-        []
-        (L.basis plt.tiling_part)
+      List.map (formula_t srk term_of_dim) (L.basis plt.tiling_part)
     in
     mk_and srk (phis_p @ phis_l @ phis_t)
 
@@ -1064,6 +1056,140 @@ end = struct
       ({ plt with poly_part = p' }, p_translate)
     in
     LocalAbstraction.{abstract}
+
+end
+
+module LocalGlobal: sig
+
+  open Syntax
+  open Interpretation
+
+  val localize:
+    ('concept1, 'point1, 'concept2, 'point2) Abstraction.t ->
+    ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t
+
+  val lift_abstraction:
+    ?show:('a interpretation -> unit) ->
+    'a context ->
+    join:('concept2 -> 'concept2 -> 'concept2) ->
+    formula_of_source:('concept1 -> 'a formula) ->
+    univ_translation:('a Interpretation.interpretation -> 'point1) ->
+    formula_of_target:('concept2 -> 'a formula) ->
+    top:'concept2 ->
+    bottom:'concept2 ->
+    ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t ->
+    ('concept1, 'point1, 'concept2, 'point2) Abstraction.t
+
+  val lift_dd_abstraction:
+    man:(DD.closed Apron.Manager.t) ->
+    'a context -> max_dim:int -> term_of_dim:(int -> 'a Syntax.arith_term) ->
+    ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t ->
+    ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) Abstraction.t
+
+  val lift_plt_abstraction:
+    'a context -> term_of_dim:(int -> 'a Syntax.arith_term) ->
+    ('a formula, 'a interpretation, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t ->
+    ('a formula, 'a interpretation, 'layout Plt.t list, int -> QQ.t) Abstraction.t
+
+end = struct
+
+  open Syntax
+     
+  let localize
+        (abstraction : ('concept1, 'point1, 'concept2, 'point2) Abstraction.t) =
+    LocalAbstraction.
+    { abstract = (fun _x c -> abstraction.abstract c) }
+
+  let dump_model_up_to srk term_of_dim max_dim_to_inspect interp =
+    let rec evaluate n l =
+      if n < 0 then l
+      else
+        let term = term_of_dim n in
+        let l' = (term, Interpretation.evaluate_term interp term) :: l in
+        evaluate (n - 1) l'
+    in
+    logf ~level:`debug "model: @[%a@]@;"
+      (Format.pp_print_list
+         ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
+         (fun fmt (t, value) ->
+           Format.fprintf fmt "(%a, %a)"
+             (Syntax.ArithTerm.pp srk) t
+             QQ.pp value)
+      )
+      (evaluate max_dim_to_inspect [])
+
+  let lift_abstraction ?(show=(fun _m -> ()))
+        (srk: 'a context) ~join ~formula_of_source ~univ_translation
+        ~formula_of_target ~top ~bottom
+        local_abs =
+    let counter = ref 0 in
+    let of_model src m =
+      match m with
+      | `LIRR _ -> assert false
+      | `LIRA m ->
+         let () = show m in
+         logf ~level:`info "Abstraction loop iteration: %d" !counter;
+         counter := !counter + 1;
+         LocalAbstraction.apply local_abs (univ_translation m) src
+    in
+    let abstract src =
+      let domain =
+        Abstract.
+        { join
+        ; of_model = of_model src
+        ; formula_of = formula_of_target
+        ; top
+        ; bottom
+        }
+      in
+      let solver = Abstract.Solver.make srk ~theory:`LIRA (formula_of_source src) in
+      ( Abstract.Solver.abstract solver domain
+      , (fun m ->
+          let (_, univ_translation') = LocalAbstraction.apply2 local_abs m src in
+          logf ~level:`debug
+            "Warning: universe translation should be constant for lifting to be sound";
+          univ_translation' m)
+      )
+    in
+    Abstraction.{abstract}
+
+  let lift_dd_abstraction ~man
+        (srk: 'a context) ~max_dim ~term_of_dim
+        local_abs =
+    let ambient_dim = max_dim + 1 in
+    let formula_of_target dd =
+      let fml = formula_of_dd srk term_of_dim dd in
+      logf ~level:`debug "Blocking %a" (Syntax.Formula.pp srk) fml;
+      fml
+    in
+    let top = P.dd_of ~man ambient_dim P.top in
+    let bottom = P.dd_of ~man ambient_dim P.bottom in
+    lift_abstraction ~show:(dump_model_up_to srk term_of_dim max_dim)
+      srk ~join:DD.join
+      ~formula_of_source:(fun phi -> phi)
+      ~univ_translation:(fun interp -> interp)
+      ~formula_of_target ~top ~bottom local_abs
+
+  let lift_plt_abstraction srk ~term_of_dim local_abs =
+    let local_abs' =
+      let abstract m phi =
+        let ((plt: 'b Plt.t), univ_translation) =
+          local_abs.LocalAbstraction.abstract m phi in
+        ([plt], univ_translation)
+      in
+      LocalAbstraction.{abstract}
+    in
+    let join plts1 plts2 = plts1 @ plts2 in
+    let formula_of_target plts =
+      let to_block = mk_or srk (List.map (Plt.formula_of_plt srk term_of_dim) plts) in
+      logf ~level:`debug "blocking: @[%a@]" (Syntax.Formula.pp srk) to_block;
+      to_block
+    in
+    let top = [Plt.top] in
+    let bottom = [] in
+    lift_abstraction srk ~join
+      ~formula_of_source:(fun phi -> phi) ~univ_translation:(fun interp -> interp)
+      ~formula_of_target ~top ~bottom local_abs'
 
 end
 
@@ -1525,6 +1651,12 @@ module SubspaceCone : sig
     max_dim_in_projected: int ->
     ('layout Plt.t, int -> QQ.t, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t
 
+  (* For testing only *)
+  val abstract_subspace:
+    man:DD.closed Apron.Manager.t ->
+    max_dim_in_projected: int ->
+    ('layout Plt.t, int -> QQ.t, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t
+
 end = struct
 
   module LW = LoosWeispfenning
@@ -1594,6 +1726,50 @@ end = struct
         else m dim
       in
       (dd, restricted)
+    in
+    LocalAbstraction.{ abstract }
+
+  let abstract_subspace ~man ~max_dim_in_projected =
+    let abstract m plt =
+      let abstract_lw =
+        let abstract =
+          LW.abstract_lw ~elim:(fun dim -> dim > max_dim_in_projected)
+          |> LocalAbstraction.compose
+               (Ddify.abstract ~man ~max_dim_in_projected)
+        in
+        LocalAbstraction.apply abstract m
+      in
+      let closed_p = close_constraints (P.enum_constraints (Plt.poly_part plt))
+                     |> P.of_constraints in
+      let l_constraints = L.basis (Plt.lattice_part plt) in
+      let subspace_constraints =
+        List.map
+          (fun v ->
+            ( `Zero
+            , V.add_term
+                (QQ.negate (Linear.evaluate_affine m v))
+                Linear.const_dim
+                v
+            )
+          )
+          l_constraints
+      in
+      let polyhedron_abstraction = abstract_lw closed_p in
+      let subspace_abstraction =
+        match subspace_constraints with
+        | [] -> polyhedron_abstraction
+        | _ ->
+           BatEnum.append (BatList.enum subspace_constraints)
+             (P.enum_constraints closed_p)
+           |> P.of_constraints
+           |> abstract_lw
+      in
+      let restricted m dim =
+        if dim > max_dim_in_projected
+        then failwith "abstract_sc: Dimension has been eliminated"
+        else m dim
+      in
+      (subspace_abstraction, restricted)
     in
     LocalAbstraction.{ abstract }
 
@@ -1694,116 +1870,6 @@ end = struct
 
 end
 
-module LocalGlobal: sig
-
-  open Syntax
-  open Interpretation
-
-  val localize:
-    ('concept1, 'point1, 'concept2, 'point2) Abstraction.t ->
-    ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t
-
-  val lift_dd_abstraction:
-    man:(DD.closed Apron.Manager.t) ->
-    'a context -> max_dim:int -> term_of_dim:(int -> 'a Syntax.arith_term) ->
-    ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) LocalAbstraction.t ->
-    ('a formula, 'a interpretation, DD.closed DD.t, int -> QQ.t) Abstraction.t
-
-  val lift_plt_abstraction:
-    'a context -> term_of_dim:(int -> 'a Syntax.arith_term) ->
-    ('a formula, 'a interpretation, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t ->
-    ('a formula, 'a interpretation, 'layout Plt.t list, int -> QQ.t) Abstraction.t
-
-end = struct
-
-  open Syntax
-
-  let localize
-        (abstraction : ('concept1, 'point1, 'concept2, 'point2) Abstraction.t) =
-    LocalAbstraction.
-    { abstract = (fun _x c -> abstraction.abstract c) }
-
-  let lift_abstraction ?(max_dim_to_inspect = -1)
-        srk join formula_of top bottom term_of_dim local_abs =
-    let counter = ref 0 in
-    let of_model phi m =
-      match m with
-      | `LIRR _ -> assert false
-      | `LIRA m ->
-         let () =
-           let rec evaluate n l =
-             if n < 0 then l
-             else
-               let term = term_of_dim n in
-               let l' = (term, Interpretation.evaluate_term m term) :: l in
-               evaluate (n - 1) l'
-           in
-           logf ~level:`debug "model: @[%a@]@;"
-             (Format.pp_print_list
-                ~pp_sep:(fun fmt () -> Format.fprintf fmt "; ")
-                (fun fmt (t, value) ->
-                  Format.fprintf fmt "(%a, %a)"
-                    (Syntax.ArithTerm.pp srk) t
-                    QQ.pp value)
-             )
-             (evaluate max_dim_to_inspect [])
-         in
-         logf ~level:`info "Abstraction loop iteration: %d" !counter;
-         counter := !counter + 1;
-         LocalAbstraction.apply local_abs m phi
-    in
-    let abstract phi =
-      let domain =
-        Abstract.
-        { join
-        ; of_model = of_model phi
-        ; formula_of
-        ; top
-        ; bottom
-        }
-      in
-      let solver = Abstract.Solver.make srk ~theory:`LIRA phi in
-      ( Abstract.Solver.abstract solver domain
-      , fun interp -> (fun dim -> Interpretation.evaluate_term interp (term_of_dim dim))
-      )
-    in
-    Abstraction.{abstract}
-
-  let lift_dd_abstraction ~man
-        (srk: 'a context) ~max_dim ~term_of_dim
-        local_abs =
-    let ambient_dim = max_dim + 1 in
-    let formula_of dd =
-      let fml = formula_of_dd srk term_of_dim dd in
-      logf ~level:`debug "Blocking %a" (Syntax.Formula.pp srk) fml;
-      fml
-    in
-    let top = P.dd_of ~man ambient_dim P.top in
-    let bottom = P.dd_of ~man ambient_dim P.bottom in
-    lift_abstraction ~max_dim_to_inspect:max_dim
-      srk DD.join formula_of top bottom term_of_dim local_abs
-
-  let lift_plt_abstraction srk ~term_of_dim local_abs =
-    let local_abs' =
-      let abstract m phi =
-        let ((plt: 'b Plt.t), univ_translation) =
-          local_abs.LocalAbstraction.abstract m phi in
-        ([plt], univ_translation)
-      in
-      LocalAbstraction.{abstract}
-    in
-    let join plts1 plts2 = plts1 @ plts2 in
-    let formula_of plts =
-      let to_block = mk_or srk (List.map (Plt.formula_of_plt srk term_of_dim) plts) in
-      logf ~level:`debug "blocking: @[%a@]" (Syntax.Formula.pp srk) to_block;
-      to_block
-    in
-    let top = [Plt.top] in
-    let bottom = [] in
-    lift_abstraction srk join formula_of top bottom term_of_dim local_abs'
-
-end
-
 module AbstractTerm: sig
 
   val mk_sc_abstraction:
@@ -1828,7 +1894,9 @@ module AbstractTerm: sig
 
   val mk_lw_cooper_abstraction:
     man:DD.closed Apron.Manager.t ->
-    [`IntHullAfterProjection | `NoIntHullAfterProjection] ->
+    [ `IntRealHullAfterProjection
+    | `IntHullAfterProjection
+    | `NoIntHullAfterProjection] ->
     [ `ExpandModFloor | `NoExpandModFloor ] ->
     'a context -> 'a arith_term array -> Symbol.Set.t ->
     ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
@@ -1849,6 +1917,37 @@ module AbstractTerm: sig
       LocalAbstraction.t
 
 end = struct
+
+  (* TODO: Refactor this and abstract_multiple_models *)
+  let abstract_multiple_points local_abs plt points =
+    match points with
+    | [] -> invalid_arg "at least one point is needed"
+    | [point] -> LocalAbstraction.apply2 local_abs point plt
+    | point1 :: point2 :: _ ->
+       let dimensions = Plt.constrained_dimensions plt in
+       let integer_point = ModelSearch.model_to_vector dimensions point1 in
+       let rational_point = ModelSearch.model_to_vector dimensions point2 in
+       let points =
+         let direction = V.sub rational_point integer_point in
+         ModelSearch.extrapolate ~integer_point ~direction plt
+       in
+       log_plt_constraints ~level:`debug "diversifying within"
+         ( BatList.of_enum (P.enum_constraints (Plt.poly_part plt))
+         , L.basis (Plt.lattice_part plt)
+         , L.basis (Plt.tiling_part plt));
+       logf ~level:`debug "diversified points: @[%a@]@\n@[%a@]@;"
+         pp_vector integer_point
+         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt "@\n")
+            pp_vector)
+         points;
+       let points = List.map (fun v dim -> V.coeff dim v) points in
+       let (dd1, univ_translation) =
+         LocalAbstraction.apply2 local_abs point1 plt in
+       let dd = List.map (fun m -> LocalAbstraction.apply local_abs m plt)
+                  points
+                |> List.fold_left DD.join dd1
+       in
+       (dd, univ_translation)
 
   let abstract_multiple_models abstract_to_plt abstract_to_dd models phi =
     let end_to_end = abstract_to_plt |> LocalAbstraction.compose abstract_to_dd in
@@ -1929,27 +2028,71 @@ end = struct
     in
     cooper_abstraction
 
+  let integer_real_hull ~man srk terms =
+    let num_terms = Array.length terms in
+    let accelerated_sc_abstraction =
+      let abstract_sc =
+        SubspaceCone.abstract_sc ~man ~max_dim_in_projected:(num_terms-1)
+      in
+      let points = ref [] in
+      let abstract point plt =
+        points := point :: !points;
+        abstract_multiple_points abstract_sc plt !points
+      in
+      LocalAbstraction.{abstract}
+    in
+    let abs =
+      LocalGlobal.lift_abstraction
+        srk ~join:DD.join
+        ~formula_of_source:(Plt.formula_of_plt srk (fun dim -> terms.(dim)))
+        ~univ_translation:(fun interp dim -> Interpretation.evaluate_term interp terms.(dim))
+        ~formula_of_target:(formula_of_dd srk (fun dim -> terms.(dim)))
+        ~top:(P.dd_of ~man num_terms P.top)
+        ~bottom:(P.dd_of ~man num_terms P.bottom)
+        (* (SubspaceCone.abstract_sc ~man ~max_dim_in_projected:(num_terms-1)) *)
+        accelerated_sc_abstraction
+    in
+    abs
+
   let mk_lw_cooper_abstraction ~man
         hull_after_proj expand_mod_floor srk terms symbols =
+    let num_terms = Array.length terms in
     let finalizer =
       match hull_after_proj with
+      | `IntRealHullAfterProjection ->
+         (fun _m plt ->
+           (Abstraction.apply (integer_real_hull ~man srk terms) plt, (fun m -> m)))
       | `IntHullAfterProjection ->
-         (fun _m dd ->
-           logf ~level:`debug "convex_hull_lw_cooper: taking integer hull...";
+         (fun _m plt ->
+           let p = Plt.poly_part plt in
+           let cnstrnts = BatEnum.empty () in
+           BatEnum.iter (fun (kind, v) ->
+               match kind with
+               | `Pos ->
+                  let sharpened =
+                    V.scalar_mul (QQ.of_zz (V.common_denominator v)) v
+                    |> V.add_term (QQ.of_int (-1)) Linear.const_dim
+                  in
+                  BatEnum.push cnstrnts (`Nonneg, sharpened)
+               | _ -> BatEnum.push cnstrnts (kind, v)
+             )
+             (P.enum_constraints p);
+           let dd = DD.of_constraints_closed ~man num_terms cnstrnts in
+           logf ~level:`debug
+             "convex_hull_lw_cooper: taking integer hull assuming all remaining 
+              variables are integral...";
            (DD.integer_hull dd, fun m -> m))
       | `NoIntHullAfterProjection ->
-         (fun _m dd ->
-           logf ~level:`debug "convex_hull_lw_cooper: done";
+         (fun _m plt ->
+           let dd = P.dd_of ~man num_terms (Plt.poly_part plt) in
+           logf ~level:`debug "convex_hull_lw_cooper: done";           
            (dd, fun m -> m))
     in
-    let num_terms = Array.length terms in
     let local_abs =
       let open LocalAbstraction in
       logf ~level:`debug "convex_hull_lw_cooper...";
       Plt.abstract_to_standard_plt expand_mod_floor srk terms symbols
       |> compose (LwCooper.abstract_lw_cooper ~elim:(fun dim -> dim >= num_terms))
-      |> compose (inject (fun _ plt -> (Plt.poly_part plt, fun m -> m)))
-      |> compose (Ddify.abstract ~man ~max_dim_in_projected:(num_terms - 1))
       |> compose (inject finalizer)
     in
     local_abs
@@ -2101,6 +2244,8 @@ let convex_hull_of_lira_model how solver man terms model =
   | `LwCooper finalizer ->
      begin
        match finalizer with
+       | `IntRealHullAfterProjection ->
+          lw_cooper_abstraction_of `IntRealHullAfterProjection solver man terms m
        | `IntHullAfterProjection ->
           lw_cooper_abstraction_of `IntHullAfterProjection solver man terms m
        | `NoIntHullAfterProjection ->

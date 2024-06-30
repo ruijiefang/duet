@@ -59,7 +59,10 @@ val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
 val convex_hull_of_lira_model:
   [ `SubspaceCone
   | `IntFrac
-  | `LwCooper of [`IntHullAfterProjection | `NoIntHullAfterProjection]] ->
+  | `LwCooper of
+      [ `IntRealHullAfterProjection
+      | `IntHullAfterProjection
+      | `NoIntHullAfterProjection]] ->
   'a Abstract.Solver.t -> DD.closed Apron.Manager.t ->
   ('a Syntax.arith_term) array -> 'a Abstract.smt_model ->
   DD.closed DD.t
@@ -69,7 +72,10 @@ val convex_hull:
   | `SubspaceConeAccelerated
   | `IntFrac
   | `IntFracAccelerated
-  | `LwCooper of [`IntHullAfterProjection | `NoIntHullAfterProjection]
+  | `LwCooper of
+      [ `IntRealHullAfterProjection
+      | `IntHullAfterProjection
+      | `NoIntHullAfterProjection]
   ] ->
   ?man:(DD.closed Apron.Manager.t) ->
   'a Syntax.context -> 'a Syntax.formula ->

@@ -371,9 +371,25 @@ let spec_list = [
      the convex hull computed by Loos-Weispfenning."
   );
 
+  ("-compare-convex-hull-sc-accelerated-vs-real"
+  , Arg.String (fun file ->
+        ConvexHull.compare ConvexHull.dd_subset `SubspaceConeAccelerated `LwOnly
+          (load_formula file))
+  , "Test subspace-cone convex hull of an existential formula in LIRA against
+     the convex hull computed by Loos-Weispfenning."
+  );
+
   ("-compare-convex-hull-intfrac-vs-real"
   , Arg.String (fun file ->
         ConvexHull.compare ConvexHull.dd_subset `IntFrac `LwOnly (load_formula file))
+  , "Test integer-fractional convex hull of an existential formula in LIRA against
+     the convex hull computed by Loos-Weispfenning."
+  );
+
+  ("-compare-convex-hull-intfrac-accelerated-vs-real"
+  , Arg.String (fun file ->
+        ConvexHull.compare ConvexHull.dd_subset `IntFracAccelerated `LwOnly
+          (load_formula file))
   , "Test integer-fractional convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
   );
@@ -403,6 +419,14 @@ let spec_list = [
   ("-compare-convex-hull-sc-accelerated-vs-intfrac-accelerated"
   , Arg.String (fun file ->
         ConvexHull.compare DD.equal `SubspaceConeAccelerated `IntFracAccelerated (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the one computed by projection in
+     integer-fractional space."
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-intfrac"
+  , Arg.String (fun file ->
+        ConvexHull.compare DD.equal `SubspaceConeAccelerated `IntFrac (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection in
      integer-fractional space."

@@ -1241,12 +1241,21 @@ end
 
 module MixedCooper: sig
 
+  (* Let PLT(x, Y) be a PLT in dimensions R^{x \cup Y}.
+     [round_up: Q^{x \cup Y} -> Term(Y) -> Term(Y)] is a function such that
+     for all terms [t], [t'] and [m] in PLT(x, Y),
+     [round_up m t = t'] only if m(t(y)) <= m(t'(y)) <= m(x).
+     
+     If [ceiling] has finite image for each [t], [abstract_cooper] is a 
+     local abstraction that has finite image.
+   *)
+
   (* Dimensions to be eliminated must take on only integer values in the
      universe.
    *)
   val abstract_cooper:
     elim: (int -> bool) ->
-    ceiling: ((int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)) ->
+    round_up: ((int -> QQ.t) -> V.t -> V.t) ->
     ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
 
 end = struct
@@ -1297,14 +1306,14 @@ end = struct
   (* TODO: Verify that there is only one possibility in the range
      [0, lcm of denom)
    *)
-  let virtual_sub_l lcm_denom_dim_in_lt m vt dim v =
+  let virtual_sub_l modulus m vt dim v =
     let (coeff, _) = V.pivot dim v in
     if QQ.equal coeff QQ.zero then Some v
     else
       match vt with
       | `PlusInfinity
         | `MinusInfinity ->
-         let delta = QQ.modulo (m dim) lcm_denom_dim_in_lt in
+         let delta = QQ.modulo (m dim) modulus in
          Some (substitute_for_in (V.of_term delta Linear.const_dim) dim v)
       | `Term t ->
          Some (substitute_for_in t dim v)
@@ -1320,7 +1329,7 @@ end = struct
       )
       constraints;
     BatList.of_enum result |> List.rev
-
+    
   let glb_for dim p m =
     let has_upper_bound = ref false in
     let argmax (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
@@ -1381,85 +1390,97 @@ end = struct
       p;
     (!glb, !has_upper_bound)
 
-  let lcm_denom dim vectors =
-    List.fold_left
-      (fun lcm v ->
-        let coeff = V.coeff dim v in
-        if QQ.equal QQ.zero coeff then lcm
-        else ZZ.lcm lcm (QQ.denominator coeff)
-      )
-      ZZ.one vectors
-
-  (* For vectors v, v' in dimensions free of elim_dim,
-     [ceiling m t = t']  only if [t'] evaluated at [m] is the least integer
-     greater than or equal to [t] evaluated at [m].
-     For a general lattice, orient its constraints to have positive coefficient
-     in [elim_dim]. Then "integer" generalizes to a (finite-dimensional) vector
-     of integers, and "least integer" means least in product order.
-     If [ceiling] has finite image (for each t), [abstract_cooper_one] has.
-   *)
-  let cooper_one ceiling lcm_denom_elim_dim_in_lt elim_dim m (p, l, t) =
-    logf ~level:`debug "cooper_one: eliminating %d, lcm of denom is %a"
-      elim_dim QQ.pp lcm_denom_elim_dim_in_lt;
-    let select_term lower =
-      let delta = QQ.modulo
-                    (QQ.sub (m elim_dim) (Linear.evaluate_affine m lower))
-                    lcm_denom_elim_dim_in_lt
-      in
-      let term = V.add_term delta Linear.const_dim lower in
-      logf ~level:`debug
-        "select_term: calculating delta: value of elim dimension %d = %a,
-         value of lower bound = %a, lcm_denom_elim_dim = %a, delta = %a@;"
-        elim_dim
-        QQ.pp (m elim_dim)
-        QQ.pp (Linear.evaluate_affine m lower)
-        QQ.pp lcm_denom_elim_dim_in_lt
-        QQ.pp delta;
-      logf ~level:`debug "cooper_one: selected term @[%a@]@;" pp_vector term;
-      term
+  (*
+  let generalized_ceiling elim_dim m (p, l, t) =
+    let plt =
+      Plt.mk_plt
+        ~poly_part:(P.of_constraints (BatList.enum p))
+        ~lattice_part:(L.hermitize l)
+        ~tiling_part:(L.hermitize t)
     in
-    let (term_selected, pcond, lcond) =
+    let dimensions = Plt.constrained_dimensions plt in
+    let integer_point = ModelSearch.model_to_vector dimensions m in
+    let direction = V.of_term QQ.one elim_dim in
+    let points = ModelSearch.extrapolate ~integer_point ~direction plt in
+    let least_point =
+      List.fold_left
+        (fun least point ->
+          if QQ.leq (V.coeff elim_dim least) (V.coeff elim_dim point) then
+            least
+          else
+            point
+        )
+        integer_point points
+    in
+    least_point
+   *)
+
+  let select_term elim_dim modulus round_up (kind, lower) m =
+    let rounded = round_up m lower in
+    let lower_point = Linear.evaluate_affine m lower in
+    let rounded_point = Linear.evaluate_affine m rounded in
+    let remainder = QQ.modulo (QQ.sub (m elim_dim) rounded_point) modulus in
+    let delta = match (kind, QQ.equal QQ.zero remainder) with
+      | (`Zero, _)
+        | (`Nonneg, _) 
+        | (`Pos, false) -> remainder
+      | (`Pos, true) ->
+         assert (QQ.leq lower_point rounded_point);
+         if QQ.lt lower_point rounded_point then QQ.zero
+         else modulus
+    in
+    let term = V.add_term delta Linear.const_dim rounded in
+    logf ~level:`debug
+      "select_term: calculating term: value of elim dimension %d = %a,
+       value of lower bound = %a, value of rounded = %a, 
+       modulus = %a, remainder = %a, chosen point = %a@;"
+      elim_dim
+      QQ.pp (m elim_dim)
+      QQ.pp (Linear.evaluate_affine m lower)
+      QQ.pp (Linear.evaluate_affine m rounded)
+      QQ.pp modulus
+      QQ.pp remainder
+      QQ.pp (QQ.add rounded_point delta);
+    logf ~level:`debug
+      "select_term: lower bound term: @[%a@]@; rounded term: @[%a@]@; selected term: @[%a@]"
+      pp_vector lower pp_vector rounded pp_vector term;
+    term
+
+  let cooper_one round_up elim_dim m (p, l, t) =
+    logf ~level:`debug "cooper_one: eliminating %d" elim_dim;
+    let gcd_coeffs =
+      List.fold_left (fun gcd v -> QQ.gcd (V.coeff elim_dim v) gcd) QQ.zero
+        (List.rev_append l t)
+    in
+    let modulus =
+      (* Better than just lcm of denoms, e.g., smaller steps for coeffs 5/2, 5/3 *)
+      assert (not (QQ.equal QQ.zero gcd_coeffs));
+      QQ.inverse gcd_coeffs
+    in
+    let select_term = select_term elim_dim modulus round_up in
+    let term_selected =
       match glb_for elim_dim p m with
       | (_, false) ->
          logf ~level:`debug "abstract_cooper: selecting +infty";
-         (`PlusInfinity, [], [])
+         `PlusInfinity
       | (None, _) ->
          logf ~level:`debug "abstract_cooper: selecting -infty";
-         (`MinusInfinity, [], [])
-      | (Some (kind, term, value), true) ->
+         `MinusInfinity
+      | (Some (kind, term, _value), true) ->
          logf ~level:`debug "abstract_cooper: selecting term based on @[%a@]"
            pp_pconstr (kind, V.add_term QQ.one elim_dim (V.negate term));
-         let (rounded, pcond, lcond) = ceiling m term in
-         if Option.is_some (QQ.to_zz value) && kind = `Pos then
-           let lb = V.add_term QQ.one Linear.const_dim rounded
-           in
-           logf ~level:`debug
-             "selecting term based on rounding + 1: @[%a@]" pp_vector
-             rounded;
-           (`Term (select_term lb), pcond, lcond)
-         else
-           let (rounded, pcond, lcond) = ceiling m term in
-           logf ~level:`debug "selecting term based on just rounding: @[%a@]" pp_vector rounded;
-           (`Term (select_term rounded), pcond, lcond)
+         `Term (select_term (kind, term) m)
     in
-    let polyhedron =
-      virtual_sub virtual_sub_p term_selected elim_dim p
-      |> List.rev_append pcond
-    in
-    let virtual_sub_l =
-      virtual_sub (virtual_sub_l lcm_denom_elim_dim_in_lt m)
-    in
-    let lattice = virtual_sub_l term_selected elim_dim l
-                  |> List.rev_append lcond
-    in
-    let tiling = virtual_sub_l term_selected elim_dim t
-    in
+    let polyhedron = virtual_sub virtual_sub_p term_selected elim_dim p in
+    let virtual_sub_lattice = virtual_sub (virtual_sub_l modulus m) in
+    let lattice = virtual_sub_lattice term_selected elim_dim l in
+    let tiling = virtual_sub_lattice term_selected elim_dim t in
     test_point_in_polyhedron "cooper_one" m polyhedron;
     test_point_in_lattice `IsInt "cooper_one" m lattice;
     test_point_in_lattice `NotInt "cooper_one" m tiling;
     (polyhedron, lattice, tiling)
 
-  let abstract_cooper_ ~elim ~ceiling m plt =
+  let abstract_cooper_ ~elim ~round_up m plt =
     let open Plt in
     let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
     let l = L.basis (Plt.lattice_part plt) in
@@ -1474,8 +1495,7 @@ end = struct
     let (projected_p, projected_l, projected_t) =
       IntSet.fold
         (fun elim_dim (p, l, t) ->
-          let lcm = lcm_denom elim_dim (List.rev_append l t) in
-          cooper_one ceiling (QQ.of_zz lcm) elim_dim m (p, l, t)
+          cooper_one round_up elim_dim m (p, l, t)
         )
         elim_dimensions
         (p, l, t)
@@ -1485,7 +1505,7 @@ end = struct
       ~lattice_part:(L.hermitize projected_l)
       ~tiling_part:(L.hermitize projected_t)
 
-  let abstract_cooper ~elim ~ceiling =
+  let abstract_cooper ~elim ~round_up =
     let restricted m dim =
       if elim dim then failwith "abstract_cooper: Dimension has been eliminated"
       else m dim
@@ -1493,7 +1513,7 @@ end = struct
     LocalAbstraction.
     {
       abstract =
-        (fun m plt -> (abstract_cooper_ ~elim ~ceiling m plt, restricted))
+        (fun m plt -> (abstract_cooper_ ~elim ~round_up m plt, restricted))
     }
 
 end
@@ -1609,7 +1629,7 @@ end = struct
       let abstract_cooper =
         MixedCooper.abstract_cooper
           ~elim:(fun dim -> elim dim && must_be_integral dim)
-          ~ceiling:Plt.ceiling_int_frac
+          ~round_up:(fun m t -> let (t', _, _) = Plt.ceiling_int_frac m t in t')
       in
       LocalAbstraction.apply2
         (Plt.abstract_poly_part abstract_lw
@@ -1628,7 +1648,7 @@ module LwCooper: sig
     elim: (int -> bool) ->
     ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
 
-end = struct
+end = struct    
 
   let abstract_lw_cooper_ ~elim m plt =
     let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
@@ -1646,12 +1666,14 @@ end = struct
       LoosWeispfenning.abstract_lw
         ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim)
     in
+    let abstract_cooper =
+      MixedCooper.abstract_cooper
+        ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
+        ~round_up:(fun _ v -> v)
+    in
     let local_abstraction =
       Plt.abstract_poly_part abstract_lw
-      |> LocalAbstraction.compose
-           (MixedCooper.abstract_cooper
-              ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
-              ~ceiling:(fun _ v -> (v, [], [])))
+      |> LocalAbstraction.compose abstract_cooper
     in
     let (plt, univ_translation) =
       LocalAbstraction.apply2 local_abstraction m plt in
@@ -1900,10 +1922,10 @@ end = struct
       Plt.abstract_to_standard_plt expand_mod_floor srk terms symbols in
     let cooper_abstraction =
       let elim dim = dim > num_terms in
-      let ceiling _m v = (v, [], []) in
+      let round_up _m v = v in
       plt_abstraction
       |> LocalAbstraction.compose
-           (MixedCooper.abstract_cooper ~elim ~ceiling)
+           (MixedCooper.abstract_cooper ~elim ~round_up)
     in
     cooper_abstraction
 

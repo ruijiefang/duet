@@ -502,11 +502,6 @@ let spec_list = [
   , ""
   );
 
-  ("-disable-lira"
-  , Arg.Clear ConvexHull.enable_lira
-  , "Use real relaxation when computing convex hulls"
-  );
-
   ("-convex-hull",
    Arg.String (fun file ->
        let (qf, phi) = Quantifier.normalize srk (load_formula file) in

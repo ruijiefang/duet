@@ -1380,7 +1380,12 @@ let _ =
   CmdLine.register_config
     ("-dump-hulls",
      Arg.Set Srk.ConvexHull.dump_hull,
-     " Output convex hull goals in SMTLIB2 format")
+     " Output convex hull goals in SMTLIB2 format");
+  CmdLine.register_config
+    ("-disable-lira"
+    , Arg.Clear ConvexHull.enable_lira
+    , "Use real relaxation when computing convex hulls"
+    )
 
 let _ =
   CmdLine.register_pass

@@ -32,6 +32,8 @@ module LocalGlobal: sig
     ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t
 
   val lift_dd_abstraction:
+    ?solver: 'a Abstract.Solver.t option ->
+    ?bottom: DD.closed DD.t option ->
     man:(DD.closed Apron.Manager.t) ->
     'a Syntax.context -> max_dim:int -> term_of_dim:(int -> 'a Syntax.arith_term) ->
     ('a Syntax.formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> QQ.t)
@@ -66,6 +68,22 @@ val convex_hull_of_lira_model:
   'a Abstract.Solver.t -> DD.closed Apron.Manager.t ->
   ('a Syntax.arith_term) array -> 'a Abstract.smt_model ->
   DD.closed DD.t
+
+val abstract: 'a Abstract.Solver.t ->
+              [ `SubspaceCone
+              | `SubspaceConeAccelerated
+              | `Subspace
+              | `IntFrac
+              | `IntFracAccelerated
+              | `LwCooper of
+                  [ `IntRealHullAfterProjection
+                  | `IntHullAfterProjection
+                  | `NoIntHullAfterProjection]
+              ] ->
+              ?man:(DD.closed Apron.Manager.t) ->
+              ?bottom:(DD.closed DD.t option) ->
+              'a Syntax.arith_term array ->
+              DD.closed DD.t
 
 val convex_hull:
   [ `SubspaceCone

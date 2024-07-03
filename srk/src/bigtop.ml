@@ -71,7 +71,9 @@ let print_result = function
   | `Unsat -> Format.printf "unsat@\n"
   | `Unknown -> Format.printf "unknown@\n"
 
-module ConvexHull : sig
+module ConvHull : sig
+
+  val ignore_quantifiers_in_convhull: unit -> unit
 
   val dd_subset: DD.closed DD.t -> DD.closed DD.t -> bool
 
@@ -102,6 +104,10 @@ module ConvexHull : sig
 end = struct
 
   module S = Syntax.Symbol.Set
+
+  let ignore_quantifiers = ref false
+
+  let ignore_quantifiers_in_convhull () = ignore_quantifiers := true
 
   let pp_dim fmt dim = Format.fprintf fmt "(dim %d)" dim
 
@@ -227,6 +233,9 @@ end = struct
         | `LwCooperNoIntHull -> is_int_of_symbols int_symbols
     in
     let int_constraints_of = translate_int_type_into_constraints how in
+    let filter =
+        if !ignore_quantifiers then (fun _ s -> s) else filter
+    in
     convex_hull_
       (match how with
        | `LwOnly -> `LwCooperNoIntHull
@@ -293,10 +302,15 @@ let spec_list = [
    Arg.Set generator_rep,
    " Print generator representation of convex hull");
 
+  ("-no-projection",
+   Arg.Unit (fun () -> ConvHull.ignore_quantifiers_in_convhull ()),
+   "Ignore existential quantifiers when computing convex hull"
+  );
+
   ("-lira-convex-hull-sc"
   , Arg.String
       (fun file ->
-          ignore (ConvexHull.convex_hull `SubspaceCone (load_formula file));
+          ignore (ConvHull.convex_hull `SubspaceCone (load_formula file));
           Format.printf "Result: success"
       )
   ,
@@ -307,7 +321,7 @@ let spec_list = [
   ("-lira-convex-hull-sc-accelerated"
   , Arg.String
       (fun file ->
-          ignore (ConvexHull.convex_hull `SubspaceConeAccelerated (load_formula file));
+          ignore (ConvHull.convex_hull `SubspaceConeAccelerated (load_formula file));
           Format.printf "Result: success"
       )
   ,
@@ -318,7 +332,7 @@ let spec_list = [
   ("-lira-convex-hull-intfrac"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `IntFrac (load_formula file));
+        ignore (ConvHull.convex_hull `IntFrac (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic
@@ -328,7 +342,7 @@ let spec_list = [
   ("-lira-convex-hull-intfrac-accelerated"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `IntFracAccelerated (load_formula file));
+        ignore (ConvHull.convex_hull `IntFracAccelerated (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic
@@ -338,7 +352,7 @@ let spec_list = [
   ("-lira-convex-hull-lw"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `LwOnly (load_formula file));
+        ignore (ConvHull.convex_hull `LwOnly (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real
@@ -348,7 +362,7 @@ let spec_list = [
   ("-lira-convex-hull-lwcooper"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `LwCooperNoIntHull (load_formula file));
+        ignore (ConvHull.convex_hull `LwCooperNoIntHull (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real
@@ -360,7 +374,7 @@ let spec_list = [
   ("-lira-convex-hull-lwcooper-inthull"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `LwCooperIntHull (load_formula file));
+        ignore (ConvHull.convex_hull `LwCooperIntHull (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real
@@ -373,7 +387,7 @@ let spec_list = [
   ("-lira-convex-hull-lwcooper-mixedhull"
   , Arg.String
       (fun file ->
-        ignore (ConvexHull.convex_hull `LwCooperIntRealHull (load_formula file));
+        ignore (ConvHull.convex_hull `LwCooperIntRealHull (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real
@@ -384,7 +398,7 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare
+        ConvHull.compare
           DD.equal
           `SubspaceCone `LwOnly
           (load_formula file))
@@ -394,7 +408,7 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare (* ConvexHull.dd_subset *)
+        ConvHull.compare (* ConvHull.dd_subset *)
           DD.equal
           `SubspaceConeAccelerated `LwOnly
           (load_formula file))
@@ -404,14 +418,14 @@ let spec_list = [
 
   ("-compare-convex-hull-intfrac-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `IntFrac `LwOnly (load_formula file))
+        ConvHull.compare DD.equal `IntFrac `LwOnly (load_formula file))
   , "Test integer-fractional convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
   );
 
   ("-compare-convex-hull-intfrac-accelerated-vs-real"
   , Arg.String (fun file ->
-        ConvexHull.compare ConvexHull.dd_subset `IntFracAccelerated `LwOnly
+        ConvHull.compare ConvHull.dd_subset `IntFracAccelerated `LwOnly
           (load_formula file))
   , "Test integer-fractional convex hull of an existential formula in LIRA against
      the convex hull computed by Loos-Weispfenning."
@@ -419,7 +433,7 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-vs-intfrac"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceCone `IntFrac (load_formula file))
+        ConvHull.compare DD.equal `SubspaceCone `IntFrac (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection in
      integer-fractional space."
@@ -427,21 +441,21 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceCone `SubspaceConeAccelerated (load_formula file))
+        ConvHull.compare DD.equal `SubspaceCone `SubspaceConeAccelerated (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the accelerated version."
   );
 
   ("-compare-convex-hull-intfrac-accelerated"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `IntFrac `IntFracAccelerated (load_formula file))
+        ConvHull.compare DD.equal `IntFrac `IntFracAccelerated (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the integer-fractional projection against the accelerated version."
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-intfrac-accelerated"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `IntFracAccelerated (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `IntFracAccelerated (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection in
      integer-fractional space."
@@ -449,7 +463,7 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated-vs-intfrac"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `IntFrac (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `IntFrac (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection in
      integer-fractional space."
@@ -457,7 +471,7 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated-vs-lwcooper"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperNoIntHull (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `LwCooperNoIntHull (load_formula file))
   , "Test the convex hull of an existential formula in LIRA computed by
      the subspace-cone abstraction against the one computed by projection using
      Loos-Weispfenning elimination for variables not occurring in integrality constraints
@@ -466,26 +480,31 @@ let spec_list = [
 
   ("-compare-convex-hull-sc-accelerated-vs-lwcooper-inthull"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntHull (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntHull (load_formula file))
   , ""
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-lwcooper-mixedhull"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntRealHull (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `LwCooperIntRealHull (load_formula file))
   , ""
   );
 
   ("-compare-convex-hull-sc-vs-lwcooper"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceCone `LwCooperNoIntHull (load_formula file))
+        ConvHull.compare DD.equal `SubspaceCone `LwCooperNoIntHull (load_formula file))
   , ""
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-subspace"
   , Arg.String (fun file ->
-        ConvexHull.compare DD.equal `SubspaceConeAccelerated `Subspace (load_formula file))
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `Subspace (load_formula file))
   , ""
+  );
+
+  ("-disable-lira"
+  , Arg.Unit ConvexHull.disable_lira
+  , "Use real relaxation when computing convex hulls"
   );
 
   ("-convex-hull",

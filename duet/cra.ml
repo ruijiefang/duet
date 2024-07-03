@@ -855,6 +855,7 @@ let mk_query ts entry =
 
 let analyze file =
   populate_offset_table file;
+  ConvexHull.dump_hull_prefix := file.filename;
   match file.entry_points with
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
@@ -1375,7 +1376,11 @@ let _ =
          | "LIRA" -> Syntax.set_theory srk `LIRA;
          | "LIRR" -> Syntax.set_theory srk `LIRR
          | th -> failwith ("Unrecognized theory: " ^ th)),
-     " Set background theory (LIRA, LIRR)")
+     " Set background theory (LIRA, LIRR)");
+  CmdLine.register_config
+    ("-dump-hulls",
+     Arg.Set Srk.ConvexHull.dump_hull,
+     " Output convex hull goals in SMTLIB2 format")
 
 let _ =
   CmdLine.register_pass

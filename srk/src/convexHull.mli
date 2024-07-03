@@ -2,7 +2,10 @@ open Syntax
 
 type t = DD.closed DD.t
 
-val disable_lira: unit -> unit
+val enable_lira: bool ref
+
+val dump_hull: bool ref
+val dump_hull_prefix : string ref
 
 (** Given terms [t_0,...,t_n], compute the closed convex hull all points [ {
    (t_0(x),...,t_n(x)) : x |= F } ], where [F] is the underlying formula of

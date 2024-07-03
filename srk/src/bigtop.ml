@@ -503,7 +503,7 @@ let spec_list = [
   );
 
   ("-disable-lira"
-  , Arg.Unit ConvexHull.disable_lira
+  , Arg.Clear ConvexHull.enable_lira
   , "Use real relaxation when computing convex hulls"
   );
 

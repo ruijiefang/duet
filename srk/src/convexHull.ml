@@ -1,6 +1,8 @@
 open Syntax
 open BatPervasives
 
+include Log.Make (struct let name = "ConvexHull" end)
+
 module Solver = Abstract.Solver
 module V = Linear.QQVector
 module LM = Linear.MakeLinearMap(QQ)(SrkUtil.Int)(V)(V)
@@ -11,7 +13,9 @@ type t = DD.closed DD.t
 
 let enable_lira = ref true
 
-let disable_lira () = enable_lira := false
+let nb_hulls = ref 0
+let dump_hull = ref false
+let dump_hull_prefix = ref ""
 
 let of_model_lira solver man terms =
   match !enable_lira with
@@ -111,7 +115,34 @@ let of_model_lirr solver man terms =
         | None -> ());
     DD.of_constraints_closed ~man dim constraints
 
+
 let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
+  if !dump_hull then begin
+      let phi = Abstract.Solver.get_formula solver in
+      let srk = Abstract.Solver.get_context solver in
+      let query =
+        List.fold_left (fun definitions term ->
+            let s = mk_symbol srk ?name:(Some "term_to_project_onto") `TyReal
+            in
+            (Syntax.mk_eq srk (Syntax.mk_const srk s) term :: definitions)
+          )
+          []
+          (Array.to_list terms)
+        |> Syntax.mk_and srk
+        |> (fun phi' -> Syntax.mk_and srk [phi ; phi'])
+      in
+      let filename =
+        Format.sprintf "%shull%d.smt2" (!dump_hull_prefix) (!nb_hulls)
+      in
+      let chan = Stdlib.open_out filename in
+      let formatter = Format.formatter_of_out_channel chan in
+      logf ~level:`always "Writing convex hull query to %s" filename;
+      Syntax.pp_smtlib2 srk formatter query;
+      Format.pp_print_newline formatter ();
+      Stdlib.close_out chan;
+      incr nb_hulls
+    end;
+
   match !enable_lira with
   | true -> PolyhedronLatticeTiling.abstract solver `SubspaceConeAccelerated
               ~man ~bottom terms

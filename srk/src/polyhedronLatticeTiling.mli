@@ -60,17 +60,21 @@ val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
 
 val convex_hull_of_lira_model:
   [ `SubspaceCone
+  | `SubspaceConeAccelerated
   | `IntFrac
+  | `IntFracAccelerated
   | `LwCooper of
       [ `IntRealHullAfterProjection
       | `IntHullAfterProjection
-      | `NoIntHullAfterProjection]] ->
-  'a Abstract.Solver.t -> DD.closed Apron.Manager.t ->
+      | `NoIntHullAfterProjection
+      ]
+  | `Lw ] ->
+  'a Abstract.Solver.t ->  
+  DD.closed Apron.Manager.t ->
   ('a Syntax.arith_term) array -> 'a Abstract.smt_model ->
   DD.closed DD.t
 
-val abstract: 'a Abstract.Solver.t ->
-              [ `SubspaceCone
+val abstract: [ `SubspaceCone
               | `SubspaceConeAccelerated
               | `Subspace
               | `IntFrac
@@ -80,6 +84,7 @@ val abstract: 'a Abstract.Solver.t ->
                   | `IntHullAfterProjection
                   | `NoIntHullAfterProjection]
               ] ->
+              'a Abstract.Solver.t ->
               ?man:(DD.closed Apron.Manager.t) ->
               ?bottom:(DD.closed DD.t option) ->
               'a Syntax.arith_term array ->
@@ -102,8 +107,8 @@ val convex_hull:
 
 val convex_hull_lia:
   'a Syntax.context -> 'a Syntax.formula ->
-  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+  ('a Syntax.arith_term) Array.t -> DD.closed DD.t
 
 val convex_hull_lra:
   'a Syntax.context -> 'a Syntax.formula ->
-  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+  ('a Syntax.arith_term) Array.t -> DD.closed DD.t

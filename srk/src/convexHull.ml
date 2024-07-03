@@ -23,6 +23,8 @@ let of_model_lira solver man terms =
      PolyhedronLatticeTiling.convex_hull_of_lira_model `SubspaceCone
        solver man terms
   | false ->
+     PolyhedronLatticeTiling.convex_hull_of_lira_model `Lw solver man terms
+     (*
      let srk = Solver.get_context solver in
      let phi = Solver.get_formula solver in
      (* Map linear terms over the symbols in phi to the range [-1, n], such that
@@ -92,6 +94,7 @@ let of_model_lira solver man terms =
         Polyhedron.local_project valuation elim_dims cube
         |> Polyhedron.meet dim_constraint_polyhedron
         |> Polyhedron.dd_of ~man dim
+      *)
 
 let of_model_lirr solver man terms =
   let srk = Solver.get_context solver in
@@ -114,7 +117,6 @@ let of_model_lirr solver man terms =
         | Some vec -> BatEnum.push constraints (`Nonneg, vec)
         | None -> ());
     DD.of_constraints_closed ~man dim constraints
-
 
 let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
   if !dump_hull then begin
@@ -144,7 +146,7 @@ let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
     end;
 
   match !enable_lira with
-  | true -> PolyhedronLatticeTiling.abstract solver `SubspaceConeAccelerated
+  | true -> PolyhedronLatticeTiling.abstract `SubspaceConeAccelerated solver
               ~man ~bottom terms
   | false ->
      let join = DD.join in
@@ -180,7 +182,6 @@ let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
        Abstract.{ join; top; of_model; bottom; formula_of }
      in
      Solver.abstract solver domain
-
 
 let conv_hull ?(man=Polka.manager_alloc_loose ()) srk phi terms =
   let solver = Solver.make srk phi in

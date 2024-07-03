@@ -234,13 +234,13 @@ module Plt : sig
     (int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)
 
   val abstract_to_standard_plt:
-    [`ExpandModFloor | `NoExpandModFloor ] ->
+    [`ExpandModFloor | `NoExpandModFloor] ->
     'a context -> 'a arith_term array -> Symbol.Set.t ->
     ('a formula, 'a Interpretation.interpretation, standard t, int -> Q.t)
       LocalAbstraction.t
 
   val abstract_to_intfrac_plt:
-    [`ExpandModFloor | `NoExpandModFloor ] ->
+    [`ExpandModFloor | `NoExpandModFloor] ->
     'a context -> 'a arith_term array -> Symbol.Set.t ->
     ('a formula, 'a Interpretation.interpretation, intfrac t, int -> Q.t)
       LocalAbstraction.t
@@ -1923,6 +1923,13 @@ module AbstractTerm: sig
     ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
       LocalAbstraction.t
 
+  val mk_lw_abstraction:
+    man:DD.closed Apron.Manager.t ->
+    [ `ExpandModFloor | `NoExpandModFloor ] ->
+    'a context -> 'a arith_term array -> Symbol.Set.t ->
+    ('a formula, 'a Interpretation.interpretation, DD.closed DD.t, int -> Q.t)
+      LocalAbstraction.t
+
   val mk_intfrac_abstraction:
     man:DD.closed Apron.Manager.t ->
     [ `ExpandModFloor | `NoExpandModFloor ] ->
@@ -2138,6 +2145,19 @@ end = struct
     in
     local_abs
 
+  let mk_lw_abstraction ~man expand_mod_floor srk terms symbols =
+    let num_terms = Array.length terms in
+    let drop_integrality _m plt = (Plt.poly_part plt, fun m -> m) in
+    let local_abs =
+      let open LocalAbstraction in
+      logf ~level:`debug "convex_hull_lw...";
+      Plt.abstract_to_standard_plt expand_mod_floor srk terms symbols
+      |> compose {abstract = drop_integrality}
+      |> compose (LoosWeispfenning.abstract_lw ~elim:(fun dim -> dim >= num_terms))
+      |> compose (Ddify.abstract ~man ~max_dim_in_projected:(num_terms - 1))
+    in
+    local_abs
+
   let mk_map_intfrac_to_original_dimensions man terms =
     let num_terms = Array.length terms in
     let Plt.{start_of_term_int_frac; start_of_symbol_int_frac} =
@@ -2249,73 +2269,9 @@ let cooper_project srk phi terms =
   in
   Abstraction.apply abstract phi
 
-let sc_abstraction_of solver man terms model =
+let local_abstraction_of_lira_model how solver man terms =
   let phi = Abstract.Solver.get_formula solver in
   let srk = Abstract.Solver.get_context solver in
-  let local_abs = AbstractTerm.mk_sc_abstraction ~man `ExpandModFloor
-                      srk terms (Syntax.symbols phi) in
-  LocalAbstraction.apply local_abs model phi
-
-let lw_cooper_abstraction_of finalize solver man terms model =
-  let phi = Abstract.Solver.get_formula solver in
-  let srk = Abstract.Solver.get_context solver in
-  let local_abs =
-    AbstractTerm.mk_lw_cooper_abstraction ~man finalize `ExpandModFloor srk
-      terms (Syntax.symbols phi)
-  in
-  LocalAbstraction.apply local_abs model phi
-
-let intfrac_abstraction_of solver man terms model =
-  let phi = Abstract.Solver.get_formula solver in
-  let srk = Abstract.Solver.get_context solver in
-  let local_abs =
-    AbstractTerm.mk_intfrac_abstraction ~man `ExpandModFloor srk
-      terms (Syntax.symbols phi)
-  in
-  LocalAbstraction.apply local_abs model phi
-
-let convex_hull_of_lira_model how solver man terms model =
-  let m = match model with
-    | `LIRA m -> m
-    | `LIRR _ -> invalid_arg "Unsupported"
-  in
-  match how with
-  | `SubspaceCone -> sc_abstraction_of solver man terms m
-  | `IntFrac -> intfrac_abstraction_of solver man terms m
-  | `LwCooper finalizer ->
-     begin
-       match finalizer with
-       | `IntRealHullAfterProjection ->
-          lw_cooper_abstraction_of `IntRealHullAfterProjection solver man terms m
-       | `IntHullAfterProjection ->
-          lw_cooper_abstraction_of `IntHullAfterProjection solver man terms m
-       | `NoIntHullAfterProjection ->
-          lw_cooper_abstraction_of `NoIntHullAfterProjection solver man terms m
-     end
-
-let convex_hull_sc ?(man=Polka.manager_alloc_loose()) speed srk phi terms =
-  let local_abs =
-    match speed with
-    | `SingleModel ->
-       AbstractTerm.mk_sc_abstraction ~man
-         `ExpandModFloor srk terms (Syntax.symbols phi)
-    | `Accelerate ->
-       AbstractTerm.mk_sc_abstraction_with_acceleration ~man
-         `ExpandModFloor srk terms (Syntax.symbols phi)
-  in
-  let num_terms = Array.length terms in
-  let abstract =
-    LocalGlobal.lift_dd_abstraction srk ~man ~max_dim:(num_terms - 1)
-      ~term_of_dim:(mk_term_of_dim terms)
-      local_abs
-  in
-  Abstraction.apply abstract phi
-
-let abstract solver how ?(man=Polka.manager_alloc_loose ()) ?(bottom=None)
-      terms =
-  let phi = Abstract.Solver.get_formula solver in
-  let srk = Abstract.Solver.get_context solver in
-  let num_terms = Array.length terms in
   let local_abs =
     match how with
     | `SubspaceCone ->
@@ -2336,7 +2292,27 @@ let abstract solver how ?(man=Polka.manager_alloc_loose ()) ?(bottom=None)
     | `LwCooper hull_after_proj ->
        AbstractTerm.mk_lw_cooper_abstraction ~man hull_after_proj `ExpandModFloor
          srk terms (Syntax.symbols phi)
+    | `Lw ->
+       AbstractTerm.mk_lw_abstraction ~man `ExpandModFloor srk terms
+         (Syntax.symbols phi)
   in
+  local_abs
+
+let convex_hull_of_lira_model how solver man terms model =
+  let local_abs = local_abstraction_of_lira_model how solver man terms in
+  let phi = Abstract.Solver.get_formula solver in
+  let m = match model with
+    | `LIRA m -> m
+    | `LIRR _ -> invalid_arg "Unsupported"
+  in
+  LocalAbstraction.apply local_abs m phi
+
+let abstract how solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None)
+      terms =
+  let phi = Abstract.Solver.get_formula solver in
+  let srk = Abstract.Solver.get_context solver in
+  let num_terms = Array.length terms in
+  let local_abs = local_abstraction_of_lira_model how solver man terms in
   let abstract =
     LocalGlobal.lift_dd_abstraction ~solver:(Some solver) ~bottom
       srk ~man ~max_dim:(num_terms - 1)
@@ -2348,12 +2324,12 @@ let abstract solver how ?(man=Polka.manager_alloc_loose ()) ?(bottom=None)
 let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   let solver = Abstract.Solver.make srk phi in
   match how with
-  | `SubspaceCone -> convex_hull_sc ~man `SingleModel srk phi terms
-  | `SubspaceConeAccelerated -> convex_hull_sc ~man `Accelerate srk phi terms
-  | `Subspace -> abstract solver `Subspace ~man terms
-  | `IntFrac -> abstract solver ~man `IntFrac terms
-  | `IntFracAccelerated -> abstract solver ~man `IntFracAccelerated terms
-  | `LwCooper finalize -> abstract solver (`LwCooper finalize) ~man terms
+  | `SubspaceCone -> abstract `SubspaceCone solver ~man terms
+  | `SubspaceConeAccelerated -> abstract `SubspaceConeAccelerated solver ~man terms
+  | `Subspace -> abstract `Subspace solver ~man terms
+  | `IntFrac -> abstract `IntFrac solver ~man terms
+  | `IntFracAccelerated -> abstract `IntFracAccelerated solver ~man terms
+  | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
 
 let convex_hull_lia srk phi terms =
   convex_hull (`LwCooper `IntHullAfterProjection) srk phi terms

@@ -522,10 +522,9 @@ module LinearSpan = struct
       | `LIRA _ -> assert false
       | `LIRR m ->
         let ideal = PolynomialCone.get_ideal (Lirr.Model.nonnegative_cone m) in
-        Log.error ">> %a" (I.pp (_pp_numeric_dim "x")) ideal;
         let shift =
           QQXs.substitute (fun i ->
-              let i' = if i > 0 then i + dim else i in
+              let i' = if i >= 0 then i + dim else i in
               QQXs.of_dim i')
         in
         let reduced =

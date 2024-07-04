@@ -1,0 +1,5 @@
+./regression/cra/code/div_mod_sanity.c:26 >> a == (a / b) * b + a % b
+./regression/cra/code/div_mod_sanity.c:32 >> a % b >= 0
+
+2 errors total
+12 safe assertions

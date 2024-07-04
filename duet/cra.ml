@@ -230,14 +230,11 @@ let mk_mod_c99 left right =
     Ctx.mk_and [Ctx.mk_leq zero t
                ; Ctx.mk_not (Ctx.mk_lt t zero)]
   in
-  let m = Ctx.mk_mod left right in
   Ctx.mk_ite
     (pos left)
-    m
-    (Ctx.mk_ite
-       (pos right)
-       (Ctx.mk_sub m right)
-       (Ctx.mk_add [m; right]))
+    (Ctx.mk_mod left right)
+    (Ctx.mk_neg (Ctx.mk_mod (Ctx.mk_neg left) right))
+
 
 let int_binop op left right =
   match op with
@@ -356,19 +353,15 @@ and tr_bexpr bexpr =
                 let ta = tr_expr_val a in
                 let tb = tr_expr_val b in
                 let sign_constraint =
-                  if k >= 0 then
-                    Syntax.mk_iff Ctx.context
-                      (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                      (Ctx.mk_leq (Ctx.mk_int 0) tb)
-                  else
-                    Syntax.mk_iff Ctx.context
-                      (Ctx.mk_leq ta (Ctx.mk_int 0))
-                      (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                  (* C99: remainder has same sign as dividend *)
+                  if k = 0 then []
+                  else if k > 0 then [Ctx.mk_leq (Ctx.mk_int 0) ta]
+                  else [Ctx.mk_leq ta (Ctx.mk_int 0)]
                 in
                 (Ctx.mk_and
-                  [(Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
-                    |> Ctx.mk_is_int
-                  ; sign_constraint])
+                  (((Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
+                   |> Ctx.mk_is_int)
+                   :: sign_constraint))
             | _ ->
               Ctx.mk_eq x y
             else 
@@ -380,17 +373,15 @@ and tr_bexpr bexpr =
             match rx, ry with
             | (BinaryOp (a, Mod, b, _), Constant (CInt (k, _))) ->
               (* a mod b != k <==> (a + r - k)/b is an integer for some 1 <= r
-                 <= |b|-1 or k has the wrong sign (positive when signs of a/b
-                 are the different, or negative when they are the same *)
+                 <= |b|-1 or k has the wrong sign (should be same as the sign
+                 of a) *)
               let ta = tr_expr_val a in
               let tb = tr_expr_val b in
               let r = nondet_const "rem" `TyInt in
               begin
                 if k >= 0 then
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq ta (Ctx.mk_int 0))
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq ta (Ctx.mk_int 0))
                     ; Ctx.mk_and
                         [ Ctx.mk_leq (Ctx.mk_int 0) r
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -400,9 +391,7 @@ and tr_bexpr bexpr =
                         ; Ctx.mk_is_int (Ctx.mk_div (Ctx.mk_sub ta r) tb)]]
                 else
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq (Ctx.mk_int 0) ta)
                     ; Ctx.mk_and
                         [ Ctx.mk_leq r (Ctx.mk_int 0)
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -883,7 +872,9 @@ let analyze file =
             Ctx.mk_and [K.guard path; Ctx.mk_not phi]
             |> SrkSimplify.simplify_terms srk
           in
-          logf "Path condition:@\n%a"
+          logf "Path condition to %s:%d:@\n%a"
+            loc.Cil.file
+            loc.Cil.line
             (Syntax.pp_smtlib2 Ctx.context) path_condition;
           dump_goal loc path_condition;
           if !monotone then

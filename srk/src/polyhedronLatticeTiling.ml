@@ -2332,6 +2332,7 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   | `IntFrac -> abstract `IntFrac solver ~man terms
   | `IntFracAccelerated -> abstract `IntFracAccelerated solver ~man terms
   | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
+  | `Lw -> abstract `Lw solver ~man terms
 
 let convex_hull_lia srk phi terms =
   convex_hull (`LwCooper `IntHullAfterProjection) srk phi terms

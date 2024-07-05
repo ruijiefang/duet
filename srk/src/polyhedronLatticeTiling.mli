@@ -69,7 +69,7 @@ val convex_hull_of_lira_model:
       | `NoIntHullAfterProjection
       ]
   | `Lw ] ->
-  'a Abstract.Solver.t ->  
+  'a Abstract.Solver.t ->
   DD.closed Apron.Manager.t ->
   ('a Syntax.arith_term) array -> 'a Abstract.smt_model ->
   DD.closed DD.t
@@ -83,6 +83,7 @@ val abstract: [ `SubspaceCone
                   [ `IntRealHullAfterProjection
                   | `IntHullAfterProjection
                   | `NoIntHullAfterProjection]
+              | `Lw
               ] ->
               'a Abstract.Solver.t ->
               ?man:(DD.closed Apron.Manager.t) ->
@@ -100,6 +101,7 @@ val convex_hull:
       [ `IntRealHullAfterProjection
       | `IntHullAfterProjection
       | `NoIntHullAfterProjection]
+  | `Lw
   ] ->
   ?man:(DD.closed Apron.Manager.t) ->
   'a Syntax.context -> 'a Syntax.formula ->

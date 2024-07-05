@@ -6,7 +6,7 @@ module V = Linear.QQVector
 
 include Log.Make (struct let name = "polyhedronLatticeTiling" end)
 
-let () = my_verbosity_level := `info
+let () = my_verbosity_level := `debug
 
 module LocalAbstraction : sig
 
@@ -1098,7 +1098,7 @@ module LocalGlobal: sig
 end = struct
 
   open Syntax
-     
+
   let localize
         (abstraction : ('concept1, 'point1, 'concept2, 'point2) Abstraction.t) =
     LocalAbstraction.
@@ -1135,7 +1135,9 @@ end = struct
          let () = show m in
          logf ~level:`info "Abstraction loop iteration: %d" !counter;
          counter := !counter + 1;
-         LocalAbstraction.apply local_abs (univ_translation m) src
+         let result = LocalAbstraction.apply local_abs (univ_translation m) src in
+         logf ~level:`info "Abstraction loop iteration %d done" (!counter - 1);
+         result
     in
     let abstract src =
       let domain =
@@ -1207,7 +1209,7 @@ end = struct
 end
 
 module ModelSearch: sig
-  
+
   val extrapolate: integer_point:V.t -> direction:V.t -> 'a Plt.t -> V.t list
 
   val model_to_vector: IntSet.t -> (int -> QQ.t) -> V.t
@@ -1265,7 +1267,7 @@ end = struct
                      let num_steps =
                        if integral_direction then
                          QQ.of_zz (QQ.idiv eval_base (QQ.abs eval_rescaled_direction))
-                       else 
+                       else
                          QQ.div eval_base (QQ.abs eval_rescaled_direction)
                      in
                      let remainder =
@@ -1384,8 +1386,8 @@ module MixedCooper: sig
      [round_up: Q^{x \cup Y} -> Term(Y) -> Term(Y)] is a function such that
      for all terms [t], [t'] and [m] in PLT(x, Y),
      [round_up m t = t'] only if m(t(y)) <= m(t'(y)) <= m(x).
-     
-     If [ceiling] has finite image for each [t], [abstract_cooper] is a 
+
+     If [ceiling] has finite image for each [t], [abstract_cooper] is a
      local abstraction that has finite image.
    *)
 
@@ -1468,7 +1470,7 @@ end = struct
       )
       constraints;
     BatList.of_enum result |> List.rev
-    
+
   let glb_for dim p m =
     let has_upper_bound = ref false in
     let argmax (kind1, lower_bound1, b1) (kind2, lower_bound2, b2) =
@@ -1561,7 +1563,7 @@ end = struct
     let remainder = QQ.modulo (QQ.sub (m elim_dim) rounded_point) modulus in
     let delta = match (kind, QQ.equal QQ.zero remainder) with
       | (`Zero, _)
-        | (`Nonneg, _) 
+        | (`Nonneg, _)
         | (`Pos, false) -> remainder
       | (`Pos, true) ->
          assert (QQ.leq lower_point rounded_point);
@@ -1571,7 +1573,7 @@ end = struct
     let term = V.add_term delta Linear.const_dim rounded in
     logf ~level:`debug
       "select_term: calculating term: value of elim dimension %d = %a,
-       value of lower bound = %a, value of rounded = %a, 
+       value of lower bound = %a, value of rounded = %a,
        modulus = %a, remainder = %a, chosen point = %a@;"
       elim_dim
       QQ.pp (m elim_dim)
@@ -1837,7 +1839,7 @@ module LwCooper: sig
     elim: (int -> bool) ->
     ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
 
-end = struct    
+end = struct
 
   let abstract_lw_cooper_ ~elim m plt =
     let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
@@ -2011,7 +2013,7 @@ end = struct
                 |> List.fold_left DD.join dd1
        in
        (dd, fun interp -> univ_translation2 (univ_translation1 interp))
-    
+
   let mk_sc_abstraction ~man
         expand_mod_floor srk terms symbols =
     let num_terms = Array.length terms in
@@ -2127,13 +2129,13 @@ end = struct
              (P.enum_constraints p);
            let dd = DD.of_constraints_closed ~man num_terms cnstrnts in
            logf ~level:`debug
-             "convex_hull_lw_cooper: taking integer hull assuming all remaining 
+             "convex_hull_lw_cooper: taking integer hull assuming all remaining
               variables are integral...";
            (DD.integer_hull dd, fun m -> m))
       | `NoIntHullAfterProjection ->
          (fun _m plt ->
            let dd = P.dd_of ~man num_terms (Plt.poly_part plt) in
-           logf ~level:`debug "convex_hull_lw_cooper: done";           
+           logf ~level:`debug "convex_hull_lw_cooper: done";
            (dd, fun m -> m))
     in
     let local_abs =

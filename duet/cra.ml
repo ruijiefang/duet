@@ -90,45 +90,79 @@ let map_value f = function
   | VPos v -> VPos (f v)
   | VWidth v -> VWidth (f v)
 
-module V = struct
-  module I = struct
-    type t = value [@@deriving ord]
-    let pp formatter = function
-      | VVal v -> Var.pp formatter v
-      | VWidth v -> Format.fprintf formatter "%a@@width" Var.pp v
-      | VPos v -> Format.fprintf formatter "%a@@pos" Var.pp v
-    let show = SrkUtil.mk_show pp
-    let equal x y = compare x y = 0
-    let hash = function
-      | VVal v -> Hashtbl.hash (Var.hash v, 0)
-      | VPos v -> Hashtbl.hash (Var.hash v, 1)
-      | VWidth v -> Hashtbl.hash (Var.hash v, 2)
-  end
-  include I
-
-  let sym_to_var = Hashtbl.create 991
-  let var_to_sym = ValueHT.create 991
-
-  let typ v = tr_typ (Var.get_type (var_of_value v))
-
-  let symbol_of var =
-    if ValueHT.mem var_to_sym var then
-      ValueHT.find var_to_sym var
-    else begin
-      let sym = Ctx.mk_symbol ~name:(show var) (typ var) in
-      ValueHT.add var_to_sym var sym;
-      Hashtbl.add sym_to_var sym var;
-      sym
+  module V = struct
+    module I = struct
+      type t = value [@@deriving ord]
+      let pp formatter = function
+        | VVal v -> Var.pp formatter v
+        | VWidth v -> Format.fprintf formatter "%a@@width" Var.pp v
+        | VPos v -> Format.fprintf formatter "%a@@pos" Var.pp v
+      let show = SrkUtil.mk_show pp
+      let equal x y = compare x y = 0
+      let hash = function
+        | VVal v -> Hashtbl.hash (Var.hash v, 0)
+        | VPos v -> Hashtbl.hash (Var.hash v, 1)
+        | VWidth v -> Hashtbl.hash (Var.hash v, 2)
     end
+    include I
+  
+  
+  
+    let sym_to_var = Hashtbl.create 991
+    let var_to_sym = ValueHT.create 991
+    let prophecy_vars = ValueHT.create 991 (* var -> var mapping *)
+    let var_of_prophecy_vars = ValueHT.create 991 (* reverse mapping of prophecy_vars *)
 
-  let of_symbol sym =
-    if Hashtbl.mem sym_to_var sym then
-      Some (Hashtbl.find sym_to_var sym)
-    else
-      None
+    let typ v = tr_typ (Var.get_type (var_of_value v))
+  
+    let symbol_of var =
+      if ValueHT.mem var_to_sym var then
+        ValueHT.find var_to_sym var
+      else begin
+        let sym = Ctx.mk_symbol ~name:(show var) (typ var) in
+        ValueHT.add var_to_sym var sym;
+        Hashtbl.add sym_to_var sym var;
+        sym
+      end
+  
+    let of_symbol sym =
+      if Hashtbl.mem sym_to_var sym then
+        Some (Hashtbl.find sym_to_var sym)
+      else
+        None
+  
+    let is_global = Var.is_global % var_of_value
 
-  let is_global = Var.is_global % var_of_value
-end
+    let make_var sym is_global =
+      let v = 
+        begin match is_global with 
+        | true ->  
+          Varinfo.mk_global (Syntax.show_symbol srk sym) (Concrete (Int 8)) 
+        | false -> 
+          Varinfo.mk_local (Syntax.show_symbol srk sym) (Concrete (Int 8))
+        end |> Var.mk 
+        in 
+      Hashtbl.add sym_to_var sym (VVal v);
+      ValueHT.add var_to_sym (VVal v) sym;
+      VVal v
+    
+    let prophesize var = 
+      let sym = symbol_of var in 
+      let sym_name = (Syntax.show_symbol srk sym) ^ "_prophecy" in
+      let sym' = Syntax.mk_symbol srk ~name:sym_name (Syntax.typ_symbol srk sym) in 
+      let var' = make_var sym' false in 
+      ValueHT.add prophecy_vars var var'; 
+      ValueHT.add var_of_prophecy_vars var' var;
+      var' 
+
+    let var_of_prophecy_var var' = ValueHT.find_opt var_of_prophecy_vars var'
+    let prophecy_var_of_var var = ValueHT.find_opt prophecy_vars var 
+    let is_prophecy_var v = 
+      match var_of_prophecy_var v with 
+      | Some _ -> true 
+      | None -> false
+  end
+  
 
 module K = struct
   module Tr = Transition.Make(Ctx)(V)

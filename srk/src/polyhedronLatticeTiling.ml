@@ -235,15 +235,16 @@ module Plt : sig
 
   (* An expansion defines how terms are expanded into vectors;
      floor and modulo terms correspond to fresh dimensions starting at free_dim.
-     type 'a expansion
    *)
 
-  (*
-  val mk_standard_expansion: (Syntax.symbol -> int) -> free_dim:int -> expansion
+  type 'a expansion
+
+  val mk_standard_expansion:
+    'a Syntax.context -> dim_of_symbol:(Syntax.symbol -> int) -> free_dim:int -> 'a expansion
 
   val abstract_to_plt:
-    expansion ->
-    (('a Syntax.arith_term) IntMap.t) ref ->
+    'a expansion ->
+    ?curr_term_of_dim:(('a Syntax.arith_term) IntMap.t) ref ->
     'a context ->
     ?universe_p:(P.constraint_kind * V.t) list ->
     ?universe_l:V.t list ->
@@ -251,7 +252,6 @@ module Plt : sig
     ('a Interpretation.interpretation -> int -> Q.t) ->
     ('a formula, 'a Interpretation.interpretation, 'b t, int -> Q.t)
       LocalAbstraction.t
-   *)
 
   val abstract_to_standard_plt:
     [`ExpandModFloor | `NoExpandModFloor] ->
@@ -382,7 +382,8 @@ end = struct
         srk
         ~free_dim term_of_dim v1 v2 t1 t2 =
     let modulus =
-      try real_of v2 with | Invalid_argument _ -> raise Linear.Nonlinear
+      try real_of v2 with
+      | Invalid_argument _ -> raise Linear.Nonlinear
     in
     let () =
       if QQ.equal modulus QQ.zero then invalid_arg "Division by zero"
@@ -675,10 +676,8 @@ end = struct
           }
        end
 
-  (*
-  let mk_standard_expansion srk dim_of_symbol ~free_dim =
+  let mk_standard_expansion srk ~dim_of_symbol ~free_dim =
     mk_expansion srk (`Expand free_dim) `Standard dim_of_symbol
-   *)
 
   (* Linear.linterm_of can only handle div and mod on constants, but
      [t div constant] and [t mod constant] can come from the input.
@@ -855,6 +854,7 @@ end = struct
 
   let abstract_to_plt
         expansion
+        ?(curr_term_of_dim = ref IntMap.empty)
         srk
         ?(universe_p=[])
         ?(universe_l=[])
@@ -898,6 +898,14 @@ end = struct
              (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
                 Format.pp_print_int)
              (BatList.of_enum (IntMap.keys new_dimensions));
+           curr_term_of_dim :=
+             IntMap.union
+               (fun dim _ _ ->
+                 failwith
+                   (Format.asprintf
+                      "expansion overlaps with existing dimensions in dimension %d"
+                      dim)
+               ) !curr_term_of_dim new_dimensions;
            expand_univ_translation univ_translation interp new_dimensions
       in
       test_point_in_polyhedron "abstract_to_plt"
@@ -2313,24 +2321,58 @@ let cooper_project srk phi terms =
   in
   Abstraction.apply abstract phi
 
-(*
 let conjunctive_normal_form srk phi =
-  let term_of_dim =
-    ref (fun dim -> Syntax.mk_const srk (Syntax.symbol_of_int dim))
+  let symbols = Syntax.symbols phi in
+  let initial_term_of_dim =
+    Symbol.Set.fold
+      (fun sym map ->
+        IntMap.add (Syntax.int_of_symbol sym) (Syntax.mk_const srk sym) map)
+      symbols IntMap.empty
   in
+  let curr_term_of_dim = ref initial_term_of_dim in
+  let curr_free_dim =
+    ref (Syntax.int_of_symbol (Symbol.Set.max_elt symbols) + 1) in
   let local_abs =
-    let alpha m psi =
-      LocalAbstract.apply2
-        (Plt.abstract_to_standard_plt `ExpandModFloor srk (Array.of_list [])
-             (Syntax.symbols phi))
+    let abstract m psi =
+      let expansion =
+        Plt.mk_standard_expansion srk
+          ~free_dim:!curr_free_dim ~dim_of_symbol:Syntax.int_of_symbol
+      in
+      let result =
+        LocalAbstraction.apply2
+          (Plt.abstract_to_plt
+             expansion
+             ~curr_term_of_dim
+             srk
+             (fun interp dim ->
+               try
+                 let term = IntMap.find dim !curr_term_of_dim in
+                 Interpretation.evaluate_term interp term
+               with
+               | Not_found ->
+                  failwith
+                    (Format.asprintf "conjunctive normal form: cannot evaluate dimension %d" dim)
+             )
+          )
           m psi
+      in
+      curr_free_dim :=
+        (let (dim, _) = IntMap.max_binding !curr_term_of_dim in dim + 1);
+      result
+    in
+    LocalAbstraction.{abstract}
   in
-  let term_of_dim dim = 
+  let term_of_dim dim =
+    try IntMap.find dim !curr_term_of_dim
+    with
+    | Not_found ->
+       failwith
+         (Format.asprintf "conjunctive normal form: cannot find a term at dimension %d" dim)
+  in
   let abstract =
-    LocalGlobal.lift_plt_abstraction srk ~term_of_dim:
-      local_abs
+    LocalGlobal.lift_plt_abstraction srk ~term_of_dim local_abs
+  in
   Abstraction.apply abstract phi
- *)
 
 let local_abstraction_of_lira_model how solver man terms =
   let phi = Abstract.Solver.get_formula solver in

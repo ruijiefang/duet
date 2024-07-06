@@ -58,6 +58,9 @@ val formula_of_plt:
 val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> standard plt list
 
+val conjunctive_normal_form: 'a Syntax.context -> 'a Syntax.formula ->
+                             standard plt list
+
 val convex_hull_of_lira_model:
   [ `SubspaceCone
   | `SubspaceConeAccelerated

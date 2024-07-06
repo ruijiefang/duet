@@ -6,7 +6,7 @@ module V = Linear.QQVector
 
 include Log.Make (struct let name = "polyhedronLatticeTiling" end)
 
-let () = my_verbosity_level := `info
+let () = my_verbosity_level := `debug
 
 module LocalAbstraction : sig
 
@@ -244,7 +244,7 @@ module Plt : sig
 
   val abstract_to_plt:
     'a expansion ->
-    ?curr_term_of_dim:(('a Syntax.arith_term) IntMap.t) ref ->
+    ?curr_term_of_dim:(('a Syntax.arith_term) IntMap.t) ref option ->
     'a context ->
     ?universe_p:(P.constraint_kind * V.t) list ->
     ?universe_l:V.t list ->
@@ -279,7 +279,7 @@ module Plt : sig
 end = struct
 
   type standard = unit
-                
+
   type intfrac =
     {
       start_of_term_int_frac: int
@@ -854,7 +854,7 @@ end = struct
 
   let abstract_to_plt
         expansion
-        ?(curr_term_of_dim = ref IntMap.empty)
+        ?(curr_term_of_dim = None)
         srk
         ?(universe_p=[])
         ?(universe_l=[])
@@ -898,14 +898,19 @@ end = struct
              (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
                 Format.pp_print_int)
              (BatList.of_enum (IntMap.keys new_dimensions));
-           curr_term_of_dim :=
-             IntMap.union
-               (fun dim _ _ ->
-                 failwith
-                   (Format.asprintf
-                      "expansion overlaps with existing dimensions in dimension %d"
-                      dim)
-               ) !curr_term_of_dim new_dimensions;
+           let () =
+             match curr_term_of_dim with
+             | None -> ()
+             | Some term_of_dim ->
+                term_of_dim :=
+                  IntMap.union
+                    (fun dim _ _ ->
+                      failwith
+                        (Format.asprintf
+                           "expansion overlaps with existing dimensions in dimension %d"
+                           dim)
+                    ) !term_of_dim new_dimensions
+           in
            expand_univ_translation univ_translation interp new_dimensions
       in
       test_point_in_polyhedron "abstract_to_plt"
@@ -2342,7 +2347,7 @@ let conjunctive_normal_form srk phi =
         LocalAbstraction.apply2
           (Plt.abstract_to_plt
              expansion
-             ~curr_term_of_dim
+             ~curr_term_of_dim:(Some curr_term_of_dim)
              srk
              (fun interp dim ->
                try
@@ -2437,10 +2442,12 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
   | `Lw -> abstract `Lw solver ~man terms
 
-let gomory_chvatal_hull_then_project
-      ?(man=(Polka.manager_alloc_loose ())) ~to_keep srk phi =
+let full_hull_then_project
+      ?(man=(Polka.manager_alloc_loose ()))
+      how
+      ~to_keep srk phi =
   let (plts, term_of_dim) = conjunctive_normal_form srk phi in
-  let polyhedra = List.map Plt.poly_part plts in  
+  let polyhedra = List.map Plt.poly_part plts in
   let max_dim =
     List.fold_left
       (fun max_dim p -> Int.max max_dim (P.max_constrained_dim p))
@@ -2453,7 +2460,7 @@ let gomory_chvatal_hull_then_project
     let open BatEnum in
     (0 -- max_dim) //
       (fun dim ->
-        try 
+        try
           let term = IntMap.find dim term_of_dim in
           not (List.mem term terms_to_keep)
         with
@@ -2465,7 +2472,12 @@ let gomory_chvatal_hull_then_project
   let dds = List.map (P.dd_of ~man (max_dim + 1)) polyhedra in
   let realconvhull = List.fold_left DD.join (P.dd_of (max_dim + 1) P.bottom) dds
   in
-  let integerhull = DD.integer_hull realconvhull in
+  let integerhull =
+    match how with
+    | `GomoryChvatal -> DD.integer_hull realconvhull
+    | `Normaliz -> P.integer_hull `Normaliz (P.of_dd realconvhull)
+                   |> P.dd_of (max_dim + 1)
+  in
   DD.project dimensions_to_project integerhull
 
 let convex_hull_lia srk phi terms =

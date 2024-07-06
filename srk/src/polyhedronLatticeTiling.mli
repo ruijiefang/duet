@@ -110,8 +110,9 @@ val convex_hull:
   'a Syntax.context -> 'a Syntax.formula ->
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
 
-val gomory_chvatal_hull_then_project:
+val full_hull_then_project:
   ?man:(DD.closed Apron.Manager.t) ->
+  [`GomoryChvatal | `Normaliz] ->
   to_keep:Syntax.Symbol.Set.t ->
   'a Syntax.context -> 'a Syntax.formula ->
   DD.closed DD.t

@@ -33,7 +33,6 @@ let load_smtlib2 filename =
 
 let load_chc fp filename = Chc.ChcSrkZ3.parse_file srk fp filename
 
-
 let load_formula filename =
   let formula =
     if Filename.check_suffix filename "m" then load_math_formula filename
@@ -92,6 +91,7 @@ module ConvHull : sig
     | `Lw
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `NormalizThenProject
     ] ->
     Ctx.t formula -> DD.closed DD.t * Ctx.t ArithTerm.t Array.t option
 
@@ -109,6 +109,7 @@ module ConvHull : sig
     | `Lw
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `NormalizThenProject
     ] ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
@@ -122,6 +123,7 @@ module ConvHull : sig
     | `Lw
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `NormalizThenProject
     ] ->
     Ctx.t formula -> unit
 
@@ -177,6 +179,8 @@ end = struct
          "LW only (ignore integrality constraints on all symbols)"
     | `GcThenProject ->
        Format.fprintf fmt "Compute integer hull using Gomory-Chvatal closure and DD projection"
+    | `NormalizThenProject ->
+       Format.fprintf fmt "Compute integer hull using Normaliz and DD projection"
     | `RunOnlyForPureInt ->
        Format.fprintf fmt "SubspaceConeAccelerated (running on pure integer tasks only)"
 
@@ -195,6 +199,12 @@ end = struct
        `LwCooper `NoIntHullAfterProjection
     | `Lw -> `Lw
     | `GcThenProject -> invalid_arg "Non-standard"
+    | `NormalizThenProject -> invalid_arg "Non-standard"
+
+  let hull_then_project_option = function
+    | `GcThenProject -> `GomoryChvatal
+    | `NormalizThenProject -> `Normaliz
+    | _ -> invalid_arg "Local abstraction"
 
   let convex_hull_ how
         ?(filter=elim_quantifiers)
@@ -240,14 +250,16 @@ end = struct
       (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
          (Syntax.Formula.pp srk))
       integer_constraints;
-    let use_gc =
+    let use_hull_then_project =
       match how with
       | `GcThenProject -> true
+      | `NormalizThenProject -> true
       | _ -> false
     in
     let result =
-      if use_gc then
-        PLT.gomory_chvatal_hull_then_project ~to_keep:symbols_to_keep srk phi
+      if use_hull_then_project then
+        PLT.full_hull_then_project (hull_then_project_option how)
+          ~to_keep:symbols_to_keep srk phi
       else
         PLT.convex_hull (standard_option how) srk
           (Syntax.mk_and srk (phi :: integer_constraints)) terms
@@ -263,7 +275,7 @@ end = struct
       if !ignore_quantifiers then (fun _ s -> s)
       else if how = `RunOnlyForPureInt then
         (fun quantifiers symbols ->
-          if Symbol.Set.for_all (fun s -> Syntax.typ_symbol Ctx.context s = `TyInt) symbols
+          if Symbol.Set.for_all (fun s -> Syntax.typ_symbol srk s = `TyInt) symbols
           then filter quantifiers symbols
           else
             begin
@@ -288,6 +300,7 @@ end = struct
           `LwCooper `NoIntHullAfterProjection
        | `Lw -> `Lw
        | `GcThenProject -> `GcThenProject
+       | `NormalizThenProject -> `NormalizThenProject
       )
       ~int_constraints_of ~filter phi
 
@@ -609,9 +622,19 @@ let spec_list = [
         ignore (ConvHull.convex_hull `GcThenProject (load_formula file));
         Format.printf "Result: success"
       )
+  , "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-convex-hull-by-normaliz"
+  , Arg.String
+      (fun file ->
+        ignore (ConvHull.convex_hull `NormalizThenProject (load_formula file));
+        Format.printf "Result: success"
+      )
   ,
     "Compute the convex hull of an existential formula in linear integer-real arithmetic
-     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+     by computing the integer hull using Normaliz and then projecting it."
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-gc"
@@ -622,6 +645,62 @@ let spec_list = [
   ,
     "Compute the convex hull of an existential formula in linear integer-real arithmetic
      by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-normaliz"
+  , Arg.String
+      (fun file ->
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `NormalizThenProject (load_formula file)
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-integralize-smt-file"
+  , Arg.String (fun file ->
+        let () =
+          if not (Filename.check_suffix file ".smt2") then failwith "not an SMT file"
+          else ()
+        in
+        let phi = load_smtlib2 file in
+        let (qf, phi) = Quantifier.normalize srk phi in
+        if List.exists (fun (q, _) -> q = `Forall) qf then
+          failwith "universal quantification not supported"
+        else
+          let symbols = symbols phi in
+          let changed = ref false in
+          let to_int_symbols =
+            Symbol.Set.fold (fun sym map ->
+                match typ_symbol srk sym with
+                | `TyReal ->
+                   changed := true;
+                   let sym' = mk_symbol srk ~name:(Format.asprintf "%s_integralized"
+                                                     (show_symbol srk sym)) `TyInt
+                   in
+                   Symbol.Map.add sym sym' map
+                | _ -> Symbol.Map.add sym sym map
+              )
+              symbols
+              Symbol.Map.empty
+          in
+          let substituted =
+            Syntax.substitute_const srk
+              (fun s -> Syntax.mk_const srk (Symbol.Map.find s to_int_symbols)) phi in
+          let quantified =
+            List.fold_left
+              (fun phi (_quantifier, sym) ->
+                mk_exists_const srk (Symbol.Map.find sym to_int_symbols) phi)
+              substituted
+              (List.rev qf)
+          in
+          let suffix = if !changed then "_integralized.smt2" else "_unchanged.smt2" in
+          let outfilename = (Filename.remove_extension file) ^ suffix in
+          Format.printf "Writing to file %s@;" outfilename;
+          let fmt = Format.formatter_of_out_channel (open_out outfilename) in
+          pp_smtlib2 srk fmt quantified
+      )
+  , "Make a copy of an SMT file with all real variables re-declared as integer"
   );
 
   ("-convex-hull",

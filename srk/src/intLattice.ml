@@ -1,13 +1,16 @@
 open Normalizffi
 open BatPervasives
 
-module L = Log.Make(struct let name = "srk.intLattice" end)
-
 module QQEndo = Linear.MakeLinearMap(QQ)(Int)(Linear.QQVector)(Linear.QQVector)
 
 module D = Linear.MakeDenseConversion(SrkUtil.Int)(Linear.QQVector)
 
 module VectorSet = BatSet.Make(Linear.ZZVector)
+
+include Log.Make(struct let name = "srk.intLattice" end)
+
+let () = my_verbosity_level := `debug
+
 
 (** A lattice is represented as a matrix 1/[denominator] B,
     where B is in row Hermite normal form and the rows of B are the basis of the
@@ -103,8 +106,9 @@ let sparsify ctxt arr =
  *)
 let dense_hermite_normal_form matrix =
   let level = `trace in
-  let verbose = Log.level_leq (!L.my_verbosity_level) level in
+  let verbose = Log.level_leq (!my_verbosity_level) level in
   if verbose then Flint.set_debug true else ();
+  (* Possible stack overflow when the matrix is too big. *)
   let mat = Flint.new_matrix matrix in
   Flint.hermitize mat;
   let rank = Flint.rank mat in

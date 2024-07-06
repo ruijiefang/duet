@@ -105,7 +105,7 @@ val convex_hull:
   ] ->
   ?man:(DD.closed Apron.Manager.t) ->
   'a Syntax.context -> 'a Syntax.formula ->
-  ('a Syntax.arith_term ) Array.t -> DD.closed DD.t
+  ('a Syntax.arith_term) Array.t -> DD.closed DD.t
 
 val convex_hull_lia:
   'a Syntax.context -> 'a Syntax.formula ->

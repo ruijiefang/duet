@@ -233,6 +233,26 @@ module Plt : sig
   val ceiling_int_frac:
     (int -> QQ.t) -> V.t -> (V.t * (P.constraint_kind * V.t) list * V.t list)
 
+  (* An expansion defines how terms are expanded into vectors;
+     floor and modulo terms correspond to fresh dimensions starting at free_dim.
+     type 'a expansion
+   *)
+
+  (*
+  val mk_standard_expansion: (Syntax.symbol -> int) -> free_dim:int -> expansion
+
+  val abstract_to_plt:
+    expansion ->
+    (('a Syntax.arith_term) IntMap.t) ref ->
+    'a context ->
+    ?universe_p:(P.constraint_kind * V.t) list ->
+    ?universe_l:V.t list ->
+    ?universe_t:V.t list ->
+    ('a Interpretation.interpretation -> int -> Q.t) ->
+    ('a formula, 'a Interpretation.interpretation, 'b t, int -> Q.t)
+      LocalAbstraction.t
+   *)
+
   val abstract_to_standard_plt:
     [`ExpandModFloor | `NoExpandModFloor] ->
     'a context -> 'a arith_term array -> Symbol.Set.t ->
@@ -259,6 +279,7 @@ module Plt : sig
 end = struct
 
   type standard = unit
+                
   type intfrac =
     {
       start_of_term_int_frac: int
@@ -343,16 +364,23 @@ end = struct
     ; t_cond = List.rev_append lin1.t_cond lin2.t_cond
     }
 
-  let lift_binop op (v1, ln1) (v2, ln2) =
-    (op v1 v2, conjoin ln1 ln2)
+  let lift_binop op (v1, lin1) (v2, lin2) =
+    (op v1 v2, conjoin lin1 lin2)
 
+  (*
   type term_vector =
     | TV_real of QQ.t
     | TV_mod of V.t * QQ.t
     | TV_floor of V.t
+   *)
 
-  let lin_mod ~vec_of_free_dim ~int_cond ~next_free_dim ~add_term_of_dim
-        ~free_dim term_of_dim v1 v2 =
+  let lin_mod
+        ~vec_of_free_dim
+        ~int_cond
+        ~next_free_dim
+        ~add_term_of_dim
+        srk
+        ~free_dim term_of_dim v1 v2 t1 t2 =
     let modulus =
       try real_of v2 with | Invalid_argument _ -> raise Linear.Nonlinear
     in
@@ -362,8 +390,9 @@ end = struct
     in
     let quotient = vec_of_free_dim free_dim in
     logf ~level:`debug
-      "lin_mod: introducing dimension %d for quotient in @[%a@] modulo %a"
-      free_dim pp_vector v1 QQ.pp modulus;
+      "lin_mod: introducing dimension %d for quotient in @[%a@] modulo %a (@[%a@] modulo %a)"
+      free_dim pp_vector v1 QQ.pp modulus
+      (ArithTerm.pp srk) t1 (ArithTerm.pp srk) t2;
     let remainder = V.sub v1 (V.scalar_mul modulus quotient) in
     let (intcond_p, intcond_l) = int_cond free_dim in
     let lincond =
@@ -374,15 +403,17 @@ end = struct
       ; t_cond = []
       }
     in
+    let quotient_term =
+      mk_div srk (mk_sub srk t1 (mk_mod srk t1 t2)) t2 in
     ( remainder
     , lincond
     , next_free_dim free_dim
-    , add_term_of_dim free_dim (TV_mod (v1, modulus)) term_of_dim
+    , add_term_of_dim free_dim quotient_term term_of_dim
     )
 
   let lin_floor
         ~vec_of_free_dim ~int_cond ~next_free_dim ~add_term_of_dim
-        ~free_dim term_of_dim v =
+        srk ~free_dim term_of_dim v t =
     let floored = vec_of_free_dim free_dim in
     logf ~level:`debug "introducing dimension %d for floor(%a)"
       free_dim pp_vector v;
@@ -402,44 +433,38 @@ end = struct
     ( floored
     , lincond
     , next_free_dim free_dim
-    , add_term_of_dim free_dim (TV_floor v) term_of_dim
+    , add_term_of_dim free_dim (Syntax.mk_floor srk t) term_of_dim
     )
 
-  type expand_mod_floor =
+  type 'a expand_mod_floor =
     | NoExpansion
     | Expand_mod_floor_with of
         { free_dim: int
-        ; new_dimensions: term_vector IntMap.t
-        ; linearize_mod: free_dim:int -> term_vector IntMap.t ->
-                         V.t -> V.t ->
-                         (V.t * lin_cond * int * term_vector IntMap.t)
-        ; linearize_floor: free_dim:int -> term_vector IntMap.t ->
-                           V.t ->
-                           (V.t * lin_cond * int * term_vector IntMap.t)
+        ; new_dimensions: ('a Syntax.arith_term) IntMap.t
+        ; linearize_mod: 'a Syntax.context -> free_dim:int -> ('a Syntax.arith_term) IntMap.t ->
+                         V.t -> V.t -> ('a Syntax.arith_term) -> ('a Syntax.arith_term) ->
+                         (V.t * lin_cond * int * ('a Syntax.arith_term) IntMap.t)
+        ; linearize_floor: 'a Syntax.context -> free_dim:int -> ('a Syntax.arith_term) IntMap.t ->
+                           V.t -> 'a Syntax.arith_term ->
+                           (V.t * lin_cond * int * ('a Syntax.arith_term) IntMap.t)
         }
 
-  type expansion =
+  type 'a expansion =
     {
       vec_of_symbol: Syntax.symbol -> V.t
     ; translate_int_atom: [`IsInt | `NotInt] -> (int -> QQ.t) -> V.t -> lin_cond
-    ; expand_mod_floor: expand_mod_floor
+    ; expand_mod_floor: 'a expand_mod_floor
     }
 
-  let expand_univ_translation univ_translation new_dimensions initial =
-    let extend m new_dimensions =
-      let rec evaluate_dim dim =
-        try
-          begin match IntMap.find dim new_dimensions with
-          | TV_real r -> r
-          | TV_mod (v, r) ->
-             QQ.idiv (Linear.evaluate_affine evaluate_dim v) r |> QQ.of_zz
-          | TV_floor v ->
-             QQ.floor (Linear.evaluate_affine evaluate_dim v) |> QQ.of_zz
-          end
-        with
-        | Not_found -> m dim
-      in
-      evaluate_dim
+  let expand_univ_translation univ_translation interp new_dimensions initial =
+    let extend m new_dimensions dim =
+      try
+        begin
+          let term = IntMap.find dim new_dimensions in
+          Interpretation.evaluate_term interp term
+        end
+      with
+      | Not_found -> m dim
     in
     let next = univ_translation initial in
     extend next new_dimensions
@@ -574,7 +599,7 @@ end = struct
     V.of_term QQ.one (dim_of_symbol s)
     |> V.add_term QQ.one (dim_of_symbol s + 1)
 
-  let mk_expansion expand layout dim_of_symbol =
+  let mk_expansion srk expand layout dim_of_symbol =
     let mk_standard lin =
       lin
         ~vec_of_free_dim:(V.of_term QQ.one)
@@ -588,7 +613,7 @@ end = struct
         ~int_cond:(fun dim -> ([(`Zero, V.of_term QQ.one (dim + 1))], []))
         ~next_free_dim:(fun n -> n + 2)
         ~add_term_of_dim:(fun free_dim term map ->
-          IntMap.add free_dim term map |> IntMap.add (free_dim + 1) (TV_real QQ.zero)
+          IntMap.add free_dim term map |> IntMap.add (free_dim + 1) (Syntax.mk_real srk QQ.zero)
         )
     in
     let int_frac_translate integral m v =
@@ -650,6 +675,11 @@ end = struct
           }
        end
 
+  (*
+  let mk_standard_expansion srk dim_of_symbol ~free_dim =
+    mk_expansion srk (`Expand free_dim) `Standard dim_of_symbol
+   *)
+
   (* Linear.linterm_of can only handle div and mod on constants, but
      [t div constant] and [t mod constant] can come from the input.
      Also, Interpretation.destruct_atom translates [IsInt t] into
@@ -669,28 +699,38 @@ end = struct
       | NoExpansion ->
          ( ref (-1)
          , ref IntMap.empty
-         , (fun ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "mod term in formula")
-         , (fun ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "floor term in formula")
+         , (fun _srk ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "mod term in formula")
+         , (fun _srk ~free_dim _term_of_dim -> ignore free_dim; invalid_arg "floor term in formula")
          )
     in
-    let (linearized, cond) =
+    let (linearized, cond, _term) =
       ArithTerm.eval srk (function
-          | `Real r -> (Linear.const_linterm r, tru)
-          | `App (x, []) -> (vec_of_symbol x, tru)
+          | `Real r -> (Linear.const_linterm r, tru, mk_real srk r)
+          | `App (x, []) -> (vec_of_symbol x, tru, mk_const srk x)
           | `App (_f, _xs) -> raise Linear.Nonlinear
           | `Var (_i, _typ) -> raise Linear.Nonlinear
-          | `Add linconds ->
-             List.fold_left
-               (lift_binop V.add)
-               (V.zero, tru)
-               linconds
-          | `Mul linconds ->
-             List.fold_left
-               (lift_binop mul_vec)
-               (Linear.const_linterm QQ.one, tru)
-               linconds
-          | `Binop (`Div, lincond1, lincond2) ->
+          | `Add lincondterms ->
+             let linconds =
+               List.map (fun (lin, cond, _term) -> (lin, cond)) lincondterms
+             in
+             let (lin, cond) = List.fold_left (lift_binop V.add) (V.zero, tru)
+                                 linconds
+             in
+             (lin, cond, Syntax.mk_add srk (List.map (fun (_, _, term) -> term) lincondterms))
+          | `Mul lincondterms ->
+             let linconds =
+               List.map (fun (lin, cond, _term) -> (lin, cond)) lincondterms
+             in
+             let (lin, cond) =
+               List.fold_left (lift_binop mul_vec) (Linear.const_linterm QQ.one, tru)
+                 linconds
+             in
+             (lin, cond, Syntax.mk_mul srk (List.map (fun (_, _, term) -> term) lincondterms))
+          | `Binop (`Div, lincondterm1, lincondterm2) ->
              begin
+               let (lin1, cond1, term1) = lincondterm1 in
+               let (lin2, cond2, term2) = lincondterm2 in
+               let lincond1, lincond2 = (lin1, cond1), (lin2, cond2) in
                let divide v1 v2 =
                  let divisor = try real_of v2 with | Invalid_argument _ -> raise Linear.Nonlinear
                  in
@@ -698,27 +738,29 @@ end = struct
                  else
                    V.scalar_mul (QQ.inverse divisor) v1
                in
-               (lift_binop divide) lincond1 lincond2
+               let (div_v, lincond) = (lift_binop divide) lincond1 lincond2 in
+               (div_v, lincond, Syntax.mk_div srk term1 term2)
              end
-          | `Binop (`Mod, (v1, lincond1), (v2, lincond2)) ->
-             let (term, cond, next_free_dim, next_term_of_dim) =
-               lin_mod ~free_dim:!curr_free_dim !curr_term_of_dim v1 v2
+          | `Binop (`Mod, (v1, cond1, t1), (v2, cond2, t2)) ->
+             let (mod_v, cond, next_free_dim, next_term_of_dim) =
+               lin_mod srk ~free_dim:!curr_free_dim !curr_term_of_dim v1 v2 t1 t2
              in
-             let lincond = (conjoin lincond2 lincond1)
+             let lincond = (conjoin cond2 cond1)
                            |> conjoin cond
              in
              curr_free_dim := next_free_dim;
              curr_term_of_dim := next_term_of_dim;
-             (term, lincond)
-          | `Unop (`Floor, (v, lincond)) ->
-             let (term, cond, next_free_dim, next_term_of_dim) =
-               lin_floor ~free_dim:!curr_free_dim !curr_term_of_dim v
+             (mod_v, lincond, Syntax.mk_mod srk t1 t2)
+          | `Unop (`Floor, (v, cond, term)) ->
+             let (floor_v, floor_cond, next_free_dim, next_term_of_dim) =
+               lin_floor srk ~free_dim:!curr_free_dim !curr_term_of_dim v term
              in
-             let lincond_floor = conjoin cond lincond in
+             let lincond_floor = conjoin floor_cond cond in
              curr_free_dim := next_free_dim;
              curr_term_of_dim := next_term_of_dim;
-             (term, lincond_floor)
-          | `Unop (`Neg, (v, lincond)) -> (V.negate v, lincond)
+             (floor_v, lincond_floor, Syntax.mk_floor srk term)
+          | `Unop (`Neg, (v, lincond, term)) ->
+             (V.negate v, lincond, Syntax.mk_neg srk term)
           | `Ite _ -> assert false
           | `Select _ -> raise Linear.Nonlinear
         ) term
@@ -758,7 +800,7 @@ end = struct
       match next_expansion.expand_mod_floor with
       | NoExpansion -> univ_translation interp
       | Expand_mod_floor_with {new_dimensions; _} ->
-         (expand_univ_translation univ_translation new_dimensions) interp
+         (expand_univ_translation univ_translation interp new_dimensions) interp
     in
     let lincond_int = next_expansion.translate_int_atom sign m v
     in
@@ -856,7 +898,7 @@ end = struct
              (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
                 Format.pp_print_int)
              (BatList.of_enum (IntMap.keys new_dimensions));
-           expand_univ_translation univ_translation new_dimensions
+           expand_univ_translation univ_translation interp new_dimensions
       in
       test_point_in_polyhedron "abstract_to_plt"
         (expanded_univ_translation interp)
@@ -943,9 +985,9 @@ end = struct
     let linearize_term =
       match layout with
       | `Standard ->
-         linearize_term srk (mk_expansion `NoExpand `Standard dim_of_symbol)
+         linearize_term srk (mk_expansion srk `NoExpand `Standard dim_of_symbol)
       | `IntFrac ->
-         linearize_term srk (mk_expansion `NoExpand `IntFrac dim_of_symbol)
+         linearize_term srk (mk_expansion srk `NoExpand `IntFrac dim_of_symbol)
     in
     let vector_of_term idx =
       match layout with
@@ -1002,7 +1044,7 @@ end = struct
         | `NoExpandModFloor -> `NoExpand
         | `ExpandModFloor -> `Expand (max_dim + 1)
       in
-      mk_expansion expand `Standard dim_of_symbol
+      mk_expansion srk expand `Standard dim_of_symbol
     in
     let (universe_p, universe_l, universe_t) =
       mk_term_definitions `Standard srk dim_of_symbol terms in
@@ -1038,7 +1080,7 @@ end = struct
         | `NoExpandModFloor -> `NoExpand
         | `ExpandModFloor -> `Expand (max_dim + 1)
       in
-      mk_expansion expand `IntFrac int_dim_of_symbol
+      mk_expansion srk expand `IntFrac int_dim_of_symbol
     in
     let (universe_p, universe_l, universe_t) =
       mk_term_definitions `IntFrac srk int_dim_of_symbol terms
@@ -2270,6 +2312,25 @@ let cooper_project srk phi terms =
       local_abs
   in
   Abstraction.apply abstract phi
+
+(*
+let conjunctive_normal_form srk phi =
+  let term_of_dim =
+    ref (fun dim -> Syntax.mk_const srk (Syntax.symbol_of_int dim))
+  in
+  let local_abs =
+    let alpha m psi =
+      LocalAbstract.apply2
+        (Plt.abstract_to_standard_plt `ExpandModFloor srk (Array.of_list [])
+             (Syntax.symbols phi))
+          m psi
+  in
+  let term_of_dim dim = 
+  let abstract =
+    LocalGlobal.lift_plt_abstraction srk ~term_of_dim:
+      local_abs
+  Abstraction.apply abstract phi
+ *)
 
 let local_abstraction_of_lira_model how solver man terms =
   let phi = Abstract.Solver.get_formula solver in

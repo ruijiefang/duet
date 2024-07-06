@@ -6,7 +6,7 @@ module V = Linear.QQVector
 
 include Log.Make (struct let name = "polyhedronLatticeTiling" end)
 
-let () = my_verbosity_level := `debug
+let () = my_verbosity_level := `info
 
 module LocalAbstraction : sig
 
@@ -2372,7 +2372,7 @@ let conjunctive_normal_form srk phi =
   let abstract =
     LocalGlobal.lift_plt_abstraction srk ~term_of_dim local_abs
   in
-  Abstraction.apply abstract phi
+  (Abstraction.apply abstract phi, !curr_term_of_dim)
 
 let local_abstraction_of_lira_model how solver man terms =
   let phi = Abstract.Solver.get_formula solver in
@@ -2436,6 +2436,37 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   | `IntFracAccelerated -> abstract `IntFracAccelerated solver ~man terms
   | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
   | `Lw -> abstract `Lw solver ~man terms
+
+let gomory_chvatal_hull_then_project
+      ?(man=(Polka.manager_alloc_loose ())) ~to_keep srk phi =
+  let (plts, term_of_dim) = conjunctive_normal_form srk phi in
+  let polyhedra = List.map Plt.poly_part plts in  
+  let max_dim =
+    List.fold_left
+      (fun max_dim p -> Int.max max_dim (P.max_constrained_dim p))
+      Linear.const_dim
+      polyhedra
+  in
+  let terms_to_keep = Symbol.Set.to_list to_keep
+                      |> List.map (Syntax.mk_const srk) in
+  let dimensions_to_project =
+    let open BatEnum in
+    (0 -- max_dim) //
+      (fun dim ->
+        try 
+          let term = IntMap.find dim term_of_dim in
+          not (List.mem term terms_to_keep)
+        with
+        | Not_found ->
+           true
+      )
+    |> BatList.of_enum
+  in
+  let dds = List.map (P.dd_of ~man (max_dim + 1)) polyhedra in
+  let realconvhull = List.fold_left DD.join (P.dd_of (max_dim + 1) P.bottom) dds
+  in
+  let integerhull = DD.integer_hull realconvhull in
+  DD.project dimensions_to_project integerhull
 
 let convex_hull_lia srk phi terms =
   convex_hull (`LwCooper `IntHullAfterProjection) srk phi terms

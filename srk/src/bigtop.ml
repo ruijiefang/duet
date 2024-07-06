@@ -91,9 +91,9 @@ module ConvHull : sig
         | `NoIntHullAfterProjection]
     | `Lw
     | `RunOnlyForPureInt
-    | `NormalizThenProject
+    | `GcThenProject
     ] ->
-    Ctx.t formula -> DD.closed DD.t
+    Ctx.t formula -> DD.closed DD.t * Ctx.t ArithTerm.t Array.t option
 
   val compare:
     (DD.closed DD.t -> DD.closed DD.t -> bool) ->
@@ -108,7 +108,7 @@ module ConvHull : sig
         | `NoIntHullAfterProjection]
     | `Lw
     | `RunOnlyForPureInt
-    | `NormalizThenProject
+    | `GcThenProject
     ] ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
@@ -121,7 +121,7 @@ module ConvHull : sig
         | `NoIntHullAfterProjection]
     | `Lw
     | `RunOnlyForPureInt
-    | `NormalizThenProject
+    | `GcThenProject
     ] ->
     Ctx.t formula -> unit
 
@@ -175,10 +175,26 @@ end = struct
     | `Lw ->
        Format.fprintf fmt
          "LW only (ignore integrality constraints on all symbols)"
-    | `NormalizThenProject ->
-       Format.fprintf fmt "Compute integer hull using Normaliz and DD projection"
+    | `GcThenProject ->
+       Format.fprintf fmt "Compute integer hull using Gomory-Chvatal closure and DD projection"
     | `RunOnlyForPureInt ->
        Format.fprintf fmt "SubspaceConeAccelerated (running on pure integer tasks only)"
+
+  let standard_option = function
+    | `RunOnlyForPureInt -> `SubspaceConeAccelerated
+    | `SubspaceCone -> `SubspaceCone
+    | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+    | `Subspace -> `Subspace
+    | `IntFrac -> `IntFrac
+    | `IntFracAccelerated -> `IntFracAccelerated
+    | `LwCooper `IntRealHullAfterProjection ->
+       `LwCooper `IntRealHullAfterProjection
+    | `LwCooper `IntHullAfterProjection ->
+       `LwCooper `IntHullAfterProjection
+    | `LwCooper `NoIntHullAfterProjection ->
+       `LwCooper `NoIntHullAfterProjection
+    | `Lw -> `Lw
+    | `GcThenProject -> invalid_arg "Non-standard"
 
   let convex_hull_ how
         ?(filter=elim_quantifiers)
@@ -224,12 +240,22 @@ end = struct
       (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
          (Syntax.Formula.pp srk))
       integer_constraints;
+    let use_gc =
+      match how with
+      | `GcThenProject -> true
+      | _ -> false
+    in
     let result =
-      PLT.convex_hull how srk (Syntax.mk_and srk (phi :: integer_constraints)) terms in
+      if use_gc then
+        PLT.gomory_chvatal_hull_then_project ~to_keep:symbols_to_keep srk phi
+      else
+        PLT.convex_hull (standard_option how) srk
+          (Syntax.mk_and srk (phi :: integer_constraints)) terms
+    in
     Format.printf "Convex hull:@\n @[<v 0>%a@]@\n"
       (Syntax.Formula.pp srk)
       (PLT.formula_of_dd srk (fun dim -> terms.(dim)) result);
-    result
+    (result, if how = `GcThenProject then None else Some terms)
 
   let convex_hull ?(filter=elim_quantifiers) how phi =
     let int_constraints_of int_syms _ = is_int_of_symbols int_syms in
@@ -261,26 +287,61 @@ end = struct
        | `LwCooper `NoIntHullAfterProjection ->
           `LwCooper `NoIntHullAfterProjection
        | `Lw -> `Lw
-       | `NormalizThenProject -> `SubspaceConeAccelerated
+       | `GcThenProject -> `GcThenProject
       )
       ~int_constraints_of ~filter phi
+
+  let remap terms ambient_dim term_dd =
+    let remapped_constraints = BatEnum.empty () in
+    BatEnum.iter
+      (fun (kind, v) ->
+        let v' =
+          Linear.QQVector.fold
+            (fun dim coeff v' ->
+              try
+                match Syntax.ArithTerm.destruct srk terms.(dim) with
+                | `App (sym, []) ->
+                   Linear.QQVector.add_term coeff (Syntax.int_of_symbol sym) v'
+                | _ -> failwith (Format.asprintf "term %a is not symbol"
+                                   (Syntax.ArithTerm.pp srk) terms.(dim))
+              with
+              | Invalid_argument _ ->
+                 failwith (Format.asprintf "index %d is out of bounds" dim)
+            )
+            Linear.QQVector.zero
+            v
+        in
+        BatEnum.push remapped_constraints (kind, v')
+      )
+      (DD.enum_constraints term_dd);
+    let remapped_dd = DD.of_constraints_closed ambient_dim remapped_constraints in
+    remapped_dd
 
   let compare test alg1 alg2 phi =
     Format.printf "Comparing convex hulls computed by %a and by %a@\n"
       pp_alg alg1 pp_alg alg2;
-    let hull1 = convex_hull alg1 phi in
+    let (hull1, terms1) = convex_hull alg1 phi in
     let () =
       Format.printf "%a hull: @[%a@]@\n@\n" pp_alg alg1 (DD.pp pp_dim) hull1 in
-    let hull2 = convex_hull alg2 phi in
+    let (hull2, terms2) = convex_hull alg2 phi in
     let () =
       Format.printf "%a hull: @[%a@]@\n@\n" pp_alg alg2 (DD.pp pp_dim) hull2 in
-    if test hull1 hull2 then
+    let hull1', hull2' =
+      match terms1, terms2 with
+      | None, None
+        | Some _, Some _ -> hull1, hull2
+      | Some terms1, None ->
+         remap terms1 (DD.ambient_dimension hull2) hull1, hull2
+      | None, Some terms2 ->
+         hull1, remap terms2 (DD.ambient_dimension hull1) hull2
+    in
+    if test hull1' hull2' then
       Format.printf "Result: success"
     else
-      if dd_subset hull1 hull2 then
+      if dd_subset hull1' hull2' then
         Format.printf "Result: failure (%a hull is more precise)"
           pp_alg alg1
-      else if dd_subset hull2 hull2 then
+      else if dd_subset hull2' hull2' then
         Format.printf "Result: failure (%a hull is more precise)"
           pp_alg alg2
       else
@@ -534,12 +595,33 @@ let spec_list = [
   ("-lira-convex-hull-run-only-for-pure-int"
   , Arg.String
       (fun file ->
-          ignore (ConvHull.convex_hull `RunOnlyForPureInt (load_formula file));
-          Format.printf "Result: success"
+        ignore (ConvHull.convex_hull `RunOnlyForPureInt (load_formula file));
+        Format.printf "Result: success"
       )
   ,
     "Compute the convex hull of an existential formula in linear integer-real arithmetic
-     using the subspace-and-cone abstraction"
+     using the subspace-and-cone abstraction only on inputs where all symbols are integer."
+  );
+
+  ("-convex-hull-by-gc"
+  , Arg.String
+      (fun file ->
+        ignore (ConvHull.convex_hull `GcThenProject (load_formula file));
+        Format.printf "Result: success"
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-compare-convex-hull-sc-accelerated-vs-gc"
+  , Arg.String
+      (fun file ->
+        ConvHull.compare DD.equal `SubspaceConeAccelerated `GcThenProject (load_formula file)
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
   );
 
   ("-convex-hull",

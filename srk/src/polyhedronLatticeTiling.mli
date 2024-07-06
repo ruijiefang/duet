@@ -59,7 +59,7 @@ val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> standard plt list
 
 val conjunctive_normal_form: 'a Syntax.context -> 'a Syntax.formula ->
-                             standard plt list
+                             (standard plt list * 'a Syntax.arith_term SrkUtil.Int.Map.t)
 
 val convex_hull_of_lira_model:
   [ `SubspaceCone
@@ -109,6 +109,12 @@ val convex_hull:
   ?man:(DD.closed Apron.Manager.t) ->
   'a Syntax.context -> 'a Syntax.formula ->
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
+
+val gomory_chvatal_hull_then_project:
+  ?man:(DD.closed Apron.Manager.t) ->
+  to_keep:Syntax.Symbol.Set.t ->
+  'a Syntax.context -> 'a Syntax.formula ->
+  DD.closed DD.t
 
 val convex_hull_lia:
   'a Syntax.context -> 'a Syntax.formula ->

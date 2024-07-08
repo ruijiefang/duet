@@ -110,7 +110,12 @@ val convex_hull:
   'a Syntax.context -> 'a Syntax.formula ->
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
 
-val full_hull_then_project:
+(** Sound only when all variables in the formula are of integer type,
+    and there are no integrality constraints. 
+    Integrality constraints apart from integrality of variables are
+    completely ignored.
+*)
+val full_integer_hull_then_project:
   ?man:(DD.closed Apron.Manager.t) ->
   [`GomoryChvatal | `Normaliz] ->
   to_keep:Syntax.Symbol.Set.t ->
@@ -124,3 +129,34 @@ val convex_hull_lia:
 val convex_hull_lra:
   'a Syntax.context -> 'a Syntax.formula ->
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
+
+module PolyhedralFormula: sig
+
+  (** Let Sigma = (=, <, <=, Int, +, -, *, /, floor, mod, QQ). *)
+
+  (** For [phi] a quantifier-free formula in [Sigma],
+      [polyhedral_formula_of_qf srk phi = (psi, new_symbols)] is such that
+      [psi] is equivalent to [phi] modulo the standard theory of reals, whose symbols
+      is among the symbols of [phi] and [new_symbols], and [psi] is a polyhedral
+      formula, i.e., one with no Int constraints.
+   *)
+  val polyhedral_formula_of_qf: 'a Syntax.context -> 'a Syntax.Formula.t ->
+                                'a Syntax.Formula.t * Syntax.Symbol.Set.t
+
+  (** For [phi] a quantifier-free formula in [Sigma],
+      [retype_as srk forced_typ phi = (psi, remap)] is such that
+      [psi] is a polyhedral formula,
+      all symbols in [psi] are of type [forced_typ], and [remap] maps
+      symbols in [phi] that have a different type from [forced_typ] to 
+      new symbols of type [forced_typ] that replaces them to get [psi].
+
+      If [remap] is empty, projecting [psi] onto the symbols of [phi]
+      is equivalent to [phi].
+      Otherwise, [remap phi |= psi], where [remap phi] is obtained by 
+      substituting [remap s] for symbols [s] in the domain of [remap].
+   *)
+  val retype_as:
+    'a Syntax.context -> [`TyInt | `TyReal] -> 'a Syntax.Formula.t ->
+    'a Syntax.Formula.t * (Syntax.symbol Syntax.Symbol.Map.t)
+
+end

@@ -6,7 +6,7 @@ module V = Linear.QQVector
 
 include Log.Make (struct let name = "polyhedronLatticeTiling" end)
 
-let () = my_verbosity_level := `debug
+let () = my_verbosity_level := `info
 
 module LocalAbstraction : sig
 
@@ -137,6 +137,21 @@ let collect_dimensions vector_of add_dim constraints =
     )
     constraints;
   !dims
+
+let sharpen_strict_inequalities_assuming_integrality p =
+  let cnstrnts = BatEnum.empty () in
+  BatEnum.iter (fun (kind, v) ->
+      match kind with
+      | `Pos ->
+         let sharpened =
+           V.scalar_mul (QQ.of_zz (V.common_denominator v)) v
+           |> V.add_term (QQ.of_int (-1)) Linear.const_dim
+         in
+         BatEnum.push cnstrnts (`Nonneg, sharpened)
+      | _ -> BatEnum.push cnstrnts (kind, v)
+    )
+    (P.enum_constraints p);
+  cnstrnts
 
 let pp_dim fmt dim = Format.fprintf fmt "(dim %d)" dim
 
@@ -454,6 +469,14 @@ end = struct
     {
       vec_of_symbol: Syntax.symbol -> V.t
     ; translate_int_atom: [`IsInt | `NotInt] -> (int -> QQ.t) -> V.t -> lin_cond
+    (* TODO: one more way of translating an int_atom is to replace the term 
+       inside with a fresh dimension, i.e.,
+       for `IsInt, add a new equation defining a new dimension and add the 
+       dimension to the lattice,
+       and for `NotInt, add a new inequality b < t < b + 1 and dimension b to
+       the lattice.
+       So [translate_int_atom] should have a signature like [linearize_floor].
+     *)
     ; expand_mod_floor: 'a expand_mod_floor
     }
 
@@ -2170,18 +2193,7 @@ end = struct
       | `IntHullAfterProjection ->
          (fun _m plt ->
            let p = Plt.poly_part plt in
-           let cnstrnts = BatEnum.empty () in
-           BatEnum.iter (fun (kind, v) ->
-               match kind with
-               | `Pos ->
-                  let sharpened =
-                    V.scalar_mul (QQ.of_zz (V.common_denominator v)) v
-                    |> V.add_term (QQ.of_int (-1)) Linear.const_dim
-                  in
-                  BatEnum.push cnstrnts (`Nonneg, sharpened)
-               | _ -> BatEnum.push cnstrnts (kind, v)
-             )
-             (P.enum_constraints p);
+           let cnstrnts = sharpen_strict_inequalities_assuming_integrality p in
            let dd = DD.of_constraints_closed ~man num_terms cnstrnts in
            logf ~level:`debug
              "convex_hull_lw_cooper: taking integer hull assuming all remaining
@@ -2336,7 +2348,12 @@ let conjunctive_normal_form srk phi =
   in
   let curr_term_of_dim = ref initial_term_of_dim in
   let curr_free_dim =
-    ref (Syntax.int_of_symbol (Symbol.Set.max_elt symbols) + 1) in
+    ref
+      (match Symbol.Set.max_elt_opt symbols with
+       | Some symbol -> Syntax.int_of_symbol symbol + 1
+       | None -> 0
+      )
+  in
   let local_abs =
     let abstract m psi =
       let expansion =
@@ -2362,7 +2379,9 @@ let conjunctive_normal_form srk phi =
           m psi
       in
       curr_free_dim :=
-        (let (dim, _) = IntMap.max_binding !curr_term_of_dim in dim + 1);
+        (match IntMap.max_binding_opt !curr_term_of_dim with
+         | Some (dim, _) -> dim + 1
+         | None -> 0);
       result
     in
     LocalAbstraction.{abstract}
@@ -2442,12 +2461,18 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
   | `Lw -> abstract `Lw solver ~man terms
 
-let full_hull_then_project
+let full_integer_hull_then_project
       ?(man=(Polka.manager_alloc_loose ()))
       how
       ~to_keep srk phi =
   let (plts, term_of_dim) = conjunctive_normal_form srk phi in
-  let polyhedra = List.map Plt.poly_part plts in
+  let polyhedra =
+    List.map (fun plt ->
+        let cnstrnts = sharpen_strict_inequalities_assuming_integrality (Plt.poly_part plt)
+        in
+        P.of_constraints cnstrnts
+      ) plts
+  in
   let max_dim =
     List.fold_left
       (fun max_dim p -> Int.max max_dim (P.max_constrained_dim p))
@@ -2485,3 +2510,143 @@ let convex_hull_lia srk phi terms =
 
 let convex_hull_lra srk phi terms =
   convex_hull (`LwCooper `NoIntHullAfterProjection) srk phi terms
+
+module PolyhedralFormula : sig
+
+  val polyhedral_formula_of_qf: 'a Syntax.context -> 'a Syntax.Formula.t ->
+                                'a Syntax.Formula.t * Symbol.Set.t
+
+  val retype_as:
+    'a Syntax.context -> [`TyInt | `TyReal] -> 'a Syntax.Formula.t ->
+    'a Syntax.Formula.t * (Syntax.symbol Syntax.Symbol.Map.t)
+
+end = struct
+
+  (** For [phi] that is quantifier-free,
+      [remove_integrality_constraints srk phi] returns [psi] that is
+      free of [is_int] and whose projection onto the symbols of [phi] is
+      equivalent to [phi], provided that projection respects 
+      integrality constraints of symbols that are eliminated.
+   *)
+  let remove_integrality_constraints srk phi =
+    let open Syntax in    
+    let nnfphi= rewrite srk ~down:(Syntax.nnf_rewriter srk) phi in
+    rewrite srk
+      ~down:(fun expr ->
+        match destruct srk expr with
+        | `Not phi ->
+           begin match destruct srk phi with
+           | (`Atom (`IsInt t)) ->
+              let s = mk_symbol srk ~name:"standardize_not_int" `TyInt in
+              let bound = mk_const srk s in
+              mk_and srk [ mk_lt srk bound t
+                         ; mk_leq srk t (mk_add srk [bound; mk_real srk QQ.one])
+                ]
+           | _ -> expr
+           end
+        | `Atom (`IsInt t) ->
+           let s = Syntax.mk_symbol srk ~name:"standardize_int" `TyInt
+           in
+           mk_eq srk (mk_const srk s) t
+        | _ -> expr
+      )
+      nnfphi
+
+  let polyhedral_formula_of_qf srk phi =
+    let polyhedral_phi = remove_integrality_constraints srk phi
+                         |> eliminate_floor_mod_div srk in
+    let new_symbols =
+      Symbol.Set.diff (symbols polyhedral_phi) (Syntax.symbols phi)
+    in
+    (polyhedral_phi, new_symbols)
+
+  let cast_formula srk typ phi =
+    let map =
+      Symbol.Set.fold
+        (fun sym map ->
+          match typ_symbol srk sym with
+          | `TyInt ->
+             begin match typ with
+             | `TyReal ->
+                let new_sym =
+                  mk_symbol srk ~name:(Format.asprintf "%s_realified"
+                                         (show_symbol srk sym))
+                    `TyReal
+                in
+                Symbol.Map.add sym new_sym map
+             | `TyInt ->
+                map
+             end
+          | `TyReal ->
+             begin match typ with
+             | `TyInt ->
+                let new_sym =
+                  mk_symbol srk ~name:(Format.asprintf "%s_integralized"
+                                         (show_symbol srk sym))
+                    `TyInt
+                in
+                Symbol.Map.add sym new_sym map
+             | `TyReal -> map
+             end
+          | _ -> map
+        )
+        (symbols phi)
+        Symbol.Map.empty
+    in
+    let lookup s = try Symbol.Map.find s map with | Not_found -> s in
+    ( Syntax.substitute_const srk
+        (fun s -> Syntax.mk_const srk (lookup s)) phi
+    , map )
+
+  (* 
+
+  Why doesn't this typecheck?
+
+  let make_all_symbols srk typ phi =
+    let new_symbols =
+      Symbol.Set.fold
+        (fun sym map1 ->
+          match typ with
+          | `TyInt ->
+             fun s ->
+             begin match typ_symbol srk s with
+             | `TyReal ->
+             let new_sym =
+                  mk_symbol srk ~name:(Format.asprintf "%s_integralized"
+                                         (show_symbol srk s))
+                    `TyInt
+                in
+                Symbol.Map.add sym new_sym (map1 sym)
+             | _ -> (map1 sym)
+             end
+          | `TyReal ->
+             fun s ->
+             begin match typ_symbol srk s with
+             | `TyInt -> 
+                let new_sym =
+                  mk_symbol srk ~name:(Format.asprintf "%s_realified"
+                                         (show_symbol srk s))
+                    `TyReal
+                in
+                Symbol.Map.add sym new_sym (map1 sym)
+             | _ -> (map1 sym)
+             end
+        )
+        (symbols phi)
+        Symbol.Map.empty
+    in
+    let lookup s =
+      try Symbol.Map.find s new_symbols
+      with
+      | Not_found -> s
+    in
+    ( Syntax.substitute_const srk
+        (fun s -> Syntax.mk_const srk (lookup s)) phi
+    , new_symbols )
+   *)
+    
+  let retype_as srk typ phi =
+    let (p_phi, _new_symbols) = polyhedral_formula_of_qf srk phi in
+    cast_formula srk typ p_phi
+    
+end

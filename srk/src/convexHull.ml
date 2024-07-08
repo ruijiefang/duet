@@ -8,6 +8,7 @@ module V = Linear.QQVector
 module LM = Linear.MakeLinearMap(QQ)(SrkUtil.Int)(V)(V)
 module QQXs = Polynomial.QQXs
 module I = Polynomial.Rewrite
+module Plt = PolyhedronLatticeTiling
 
 type t = DD.closed DD.t
 
@@ -20,10 +21,10 @@ let dump_hull_prefix = ref ""
 let of_model_lira solver man terms =
   match !enable_lira with
   | true ->
-     PolyhedronLatticeTiling.convex_hull_of_lira_model `SubspaceCone
+     Plt.convex_hull_of_lira_model `SubspaceCone
        solver man terms
   | false ->
-     PolyhedronLatticeTiling.convex_hull_of_lira_model `Lw solver man terms
+     Plt.convex_hull_of_lira_model `Lw solver man terms
      (*
      let srk = Solver.get_context solver in
      let phi = Solver.get_formula solver in
@@ -146,7 +147,7 @@ let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
     end;
 
   match !enable_lira with
-  | true -> PolyhedronLatticeTiling.abstract `SubspaceConeAccelerated solver
+  | true -> Plt.abstract `SubspaceConeAccelerated solver
               ~man ~bottom terms
   | false ->
      let join = DD.join in
@@ -184,5 +185,18 @@ let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
      Solver.abstract solver domain
 
 let conv_hull ?(man=Polka.manager_alloc_loose ()) srk phi terms =
+  let (phi, to_casted_symbols) =
+    match !enable_lira with
+    | true -> (phi, Symbol.Map.empty)
+    | false -> Plt.PolyhedralFormula.retype_as srk `TyReal phi
+  in
+  let subst s =
+    match Symbol.Map.find_opt s to_casted_symbols with
+    | Some s' -> Syntax.mk_const srk s'
+    | None -> Syntax.mk_const srk s
+  in
   let solver = Solver.make srk phi in
-  abstract solver ~man terms
+  let retyped_terms =
+    Array.map (fun term -> Syntax.substitute_const srk subst term) terms
+  in
+  abstract solver ~man retyped_terms

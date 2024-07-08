@@ -93,6 +93,7 @@ module ConvHull : sig
     | `RelaxToReal
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `GcThenProjectTerms
     | `NormalizThenProject
     ] ->
     'a formula -> DD.closed DD.t * [`RealSymbolDimensions of symbol -> symbol
@@ -115,6 +116,7 @@ module ConvHull : sig
     | `RelaxToReal
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `GcThenProjectTerms
     | `NormalizThenProject
     ] ->
     [ `SubspaceCone
@@ -130,6 +132,7 @@ module ConvHull : sig
     | `RelaxToReal
     | `RunOnlyForPureInt
     | `GcThenProject
+    | `GcThenProjectTerms
     | `NormalizThenProject
     ] ->
     'a formula -> unit
@@ -191,7 +194,13 @@ end = struct
     | `RelaxToReal ->
        Format.fprintf fmt "LW (all symbols in formula are turned to real)"
     | `GcThenProject ->
-       Format.fprintf fmt "Compute integer hull using Gomory-Chvatal closure and DD projection"
+       Format.fprintf fmt
+         "Compute integer hull using Gomory-Chvatal closure and DD projection
+          directly onto free symbols"
+    | `GcThenProjectTerms ->
+       Format.fprintf fmt
+         "Compute integer hull using Gomory-Chvatal closure and DD projection 
+          onto term dimensions (with each term being a free symbol)"
     | `NormalizThenProject ->
        Format.fprintf fmt "Compute integer hull using Normaliz and DD projection"
     | `RunOnlyForPureInt ->
@@ -213,10 +222,12 @@ end = struct
     | `Lw -> `Lw
     | `RelaxToReal -> invalid_arg "Non-standard"
     | `GcThenProject -> invalid_arg "Non-standard"
+    | `GcThenProjectTerms -> invalid_arg "Non-standard"
     | `NormalizThenProject -> invalid_arg "Non-standard"
 
   let hull_then_project_option = function
     | `GcThenProject -> `GomoryChvatal
+    | `GcThenProjectTerms -> `GomoryChvatal
     | `NormalizThenProject -> `Normaliz
     | _ -> invalid_arg "Not hull-then-project"
 
@@ -266,52 +277,6 @@ end = struct
       , equivalent
       , remap_symbols )
 
-  (*
-  let integralize srk how phi =
-    let (quantifiers, psi, _symbol_map, changed) =
-      try
-        replace_symbols srk
-          (fun sym ->
-            match typ_symbol srk sym with
-            | `TyReal ->
-               mk_symbol srk ~name:(Format.asprintf "%s_integralized"
-                                      (show_symbol srk sym)) `TyInt
-            | _ -> sym
-          )
-          phi
-      with
-      | _ ->
-         Format.printf "Fail expansion";
-         failwith "Fail expansion"
-    in
-    let pp_symbols fmt symbols =
-      Symbol.Set.iter
-        (fun sym -> Format.fprintf fmt "%a:%a, "
-                      (pp_symbol srk) sym pp_typ (typ_symbol srk sym))
-        symbols
-    in
-    match how with
-    | `ExpandModFloor -> (requantify srk quantifiers psi, changed)
-    | `FreshSymbols ->
-       let symbols1 = symbols psi in
-       Format.printf "symbols after making all integer: @[%a@]@\n"
-         pp_symbols symbols1;
-       let purified = eliminate_floor_mod_div srk psi in
-       let symbols2 = symbols purified in
-       Format.printf "symbols after eliminating floor-mod-div: @[%a@]@\n"
-         pp_symbols symbols2;
-       let new_symbols = Symbol.Set.diff symbols2 symbols1 in
-       let changed = changed || not (Symbol.Set.is_empty new_symbols) in
-       let quantified =
-         requantify srk quantifiers purified
-         |> Symbol.Set.fold
-              (fun sym phi ->
-                mk_exists_const srk sym phi)
-              new_symbols
-       in
-       (quantified, changed)
-   *)
-
   let convex_hull_ srk how
         ?(filter=elim_quantifiers)
         phi =
@@ -321,15 +286,22 @@ end = struct
       | `NormalizThenProject -> true
       | _ -> false
     in
+    let use_hull_then_project_terms =
+      match how with
+      | `GcThenProjectTerms -> true
+      | _ -> false
+    in
     let relax_to_real =
       match how with
       | `RelaxToReal -> true
       | _ -> false
     in
-    let (phi, _type_changed, remap_symbols) = match how with
+    (*
+    let (phi, _type_changed, remap_to_relaxed_symbols) = match how with
       | `RelaxToReal -> retype_formula srk `TyReal phi
       | _ -> (phi, false, (fun s -> s))
     in
+     *)
     let (qf, phi) = Quantifier.normalize srk phi in
     if List.exists (fun (q, _) -> q = `Forall) qf then
       failwith "universal quantification not supported";
@@ -341,6 +313,33 @@ end = struct
       |> (fun set -> S.fold (fun sym terms -> mk_const srk sym :: terms) set [])
       |> List.rev
       |> Array.of_list
+    in
+    let (phi, retyped_symbols) =
+      if relax_to_real then
+        PLT.PolyhedralFormula.retype_as srk `TyReal phi
+      else
+        (phi, Symbol.Map.empty)
+    in
+    let symbols_to_eliminate =
+      S.filter (fun sym -> not (S.mem sym symbols_to_keep)) symbols
+    in
+    let (terms, symbols_to_keep, symbols_to_eliminate) =
+      if relax_to_real then
+        let lookup s = match Symbol.Map.find_opt s retyped_symbols with
+          | Some s' ->  s'
+          | None -> s
+        in
+        ( Array.map
+            (fun term ->
+              Syntax.substitute_const srk
+                (fun sym -> Syntax.mk_const srk (lookup sym))
+                term)
+            terms
+        , S.map lookup symbols_to_keep
+        , S.map lookup symbols_to_eliminate
+        )
+      else
+        (terms, symbols_to_keep, symbols_to_eliminate)
     in
     let (int_symbols, _real_symbols) =
       let is_int sym =
@@ -356,13 +355,7 @@ end = struct
       let symbols = Syntax.symbols phi in
       (S.filter is_int symbols, S.filter is_real symbols)
     in
-    let integer_constraints =
-      if relax_to_real then []
-      else
-        is_int_of_symbols srk int_symbols
-    in
-    let symbols_to_eliminate =
-      S.filter (fun sym -> not (S.mem sym symbols_to_keep)) symbols
+    let integer_constraints = is_int_of_symbols srk int_symbols
     in
     Format.printf "Taking convex hull of formula: @[%a@]@;"
       (Syntax.Formula.pp srk) phi;
@@ -377,6 +370,9 @@ end = struct
         (* All variables in input formula should be integer-typed for this to be sound *)
         PLT.full_integer_hull_then_project (hull_then_project_option how)
           ~to_keep:symbols_to_keep srk phi
+      else if use_hull_then_project_terms then
+        PLT.full_integer_hull_then_project_onto_terms (hull_then_project_option how)
+          srk phi terms
       else if relax_to_real then
         PLT.convex_hull `Lw srk phi terms
       else
@@ -389,7 +385,7 @@ end = struct
     let dimension_data =
       match how with
       | `GcThenProject -> `SyntaxDimensions
-      | `RelaxToReal -> `RealSymbolDimensions remap_symbols
+      | `RelaxToReal -> `TermDimensions terms
       | _ -> `TermDimensions terms
     in
     (result, dimension_data)
@@ -425,6 +421,7 @@ end = struct
        | `Lw -> `Lw
        | `RelaxToReal -> `RelaxToReal
        | `GcThenProject -> `GcThenProject
+       | `GcThenProjectTerms -> `GcThenProjectTerms
        | `NormalizThenProject -> `NormalizThenProject
       )
       ~filter phi
@@ -469,6 +466,15 @@ end = struct
       match dimension_data1, dimension_data2 with
       | `TermDimensions _, `TermDimensions _ -> (hull1, hull2)
       | `SyntaxDimensions, `SyntaxDimensions -> (hull1, hull2)
+      | `SyntaxDimensions, `TermDimensions terms2 ->
+         ( hull1
+         , remap_term_dimensions_to_symbol_dimensions srk
+             terms2 Syntax.int_of_symbol (DD.ambient_dimension hull1) hull2)
+      | `TermDimensions terms1, `SyntaxDimensions ->
+         ( remap_term_dimensions_to_symbol_dimensions srk
+             terms1 Syntax.int_of_symbol (DD.ambient_dimension hull2) hull1
+         , hull2)
+      (*
       | `RealSymbolDimensions _, `RealSymbolDimensions _ ->
          failwith "Only one relaxation for now"
       | `TermDimensions terms1, `SyntaxDimensions ->
@@ -493,6 +499,7 @@ end = struct
       | `SyntaxDimensions, `RealSymbolDimensions _
         | `RealSymbolDimensions _, `SyntaxDimensions ->
          failwith "not supported yet"
+       *)
     in
     if test hull1' hull2' then
       Format.printf "Result: success"
@@ -500,7 +507,7 @@ end = struct
       if dd_subset hull1' hull2' then
         Format.printf "Result: failure (%a hull is more precise)"
           pp_alg alg1
-      else if dd_subset hull2' hull2' then
+      else if dd_subset hull2' hull1' then
         Format.printf "Result: failure (%a hull is more precise)"
           pp_alg alg2
       else
@@ -771,6 +778,16 @@ let spec_list = [
   , Arg.String
       (fun file ->
         ignore (ConvHull.convex_hull srk `GcThenProject (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-convex-hull-by-gc-terms"
+  , Arg.String
+      (fun file ->
+        ignore (ConvHull.convex_hull srk `GcThenProjectTerms (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic

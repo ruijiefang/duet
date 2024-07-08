@@ -280,6 +280,10 @@ module Plt : sig
     ('a formula, 'a Interpretation.interpretation, intfrac t, int -> Q.t)
       LocalAbstraction.t
 
+  val mk_standard_term_definitions:
+    'a context -> (symbol -> int) -> 'a ArithTerm.t array ->
+    (P.constraint_kind * V.t) list * V.t list * V.t list
+
   val poly_part: 'layout t -> P.t
   val lattice_part: 'layout t -> L.t
   val tiling_part: 'layout t -> L.t
@@ -1052,6 +1056,9 @@ end = struct
     , BatList.of_enum !l_conds
     , BatList.of_enum !t_conds
     )
+
+  let mk_standard_term_definitions srk dim_of_symbol terms =
+    mk_term_definitions `Standard srk dim_of_symbol terms
 
   let get_max_dim layout num_terms symbols =
     match layout with
@@ -2338,27 +2345,28 @@ let cooper_project srk phi terms =
   in
   Abstraction.apply abstract phi
 
-let conjunctive_normal_form srk phi =
+let conjunctive_normal_form srk ~base_dim phi =
   let symbols = Syntax.symbols phi in
+  let dim_of_symbol sym = Syntax.int_of_symbol sym + base_dim in
   let initial_term_of_dim =
     Symbol.Set.fold
       (fun sym map ->
-        IntMap.add (Syntax.int_of_symbol sym) (Syntax.mk_const srk sym) map)
+        IntMap.add (dim_of_symbol sym) (Syntax.mk_const srk sym) map)
       symbols IntMap.empty
   in
   let curr_term_of_dim = ref initial_term_of_dim in
   let curr_free_dim =
     ref
       (match Symbol.Set.max_elt_opt symbols with
-       | Some symbol -> Syntax.int_of_symbol symbol + 1
-       | None -> 0
+       | Some symbol -> dim_of_symbol symbol + 1
+       | None -> base_dim
       )
   in
   let local_abs =
     let abstract m psi =
       let expansion =
         Plt.mk_standard_expansion srk
-          ~free_dim:!curr_free_dim ~dim_of_symbol:Syntax.int_of_symbol
+          ~free_dim:!curr_free_dim ~dim_of_symbol
       in
       let result =
         LocalAbstraction.apply2
@@ -2465,7 +2473,7 @@ let full_integer_hull_then_project
       ?(man=(Polka.manager_alloc_loose ()))
       how
       ~to_keep srk phi =
-  let (plts, term_of_dim) = conjunctive_normal_form srk phi in
+  let (plts, term_of_dim) = conjunctive_normal_form srk ~base_dim:0 phi in
   let polyhedra =
     List.map (fun plt ->
         let cnstrnts = sharpen_strict_inequalities_assuming_integrality (Plt.poly_part plt)
@@ -2493,6 +2501,48 @@ let full_integer_hull_then_project
            true
       )
     |> BatList.of_enum
+  in
+  let dds = List.map (P.dd_of ~man (max_dim + 1)) polyhedra in
+  let realconvhull = List.fold_left DD.join (P.dd_of (max_dim + 1) P.bottom) dds
+  in
+  let integerhull =
+    match how with
+    | `GomoryChvatal -> DD.integer_hull realconvhull
+    | `Normaliz -> P.integer_hull `Normaliz (P.of_dd realconvhull)
+                   |> P.dd_of (max_dim + 1)
+  in
+  DD.project dimensions_to_project integerhull
+
+let full_integer_hull_then_project_onto_terms
+      ?(man=(Polka.manager_alloc_loose ()))
+      how
+      srk phi terms =
+  let num_terms = Array.length terms in
+  let (plts, _term_of_dim) = conjunctive_normal_form srk ~base_dim:num_terms phi
+  in
+  let (term_definitions, lcond, tcond) =
+    Plt.mk_standard_term_definitions srk
+      (fun sym -> Syntax.int_of_symbol sym + num_terms) terms in
+  assert (lcond = []);
+  assert (tcond = []);
+  let polyhedra =
+    List.map (fun plt ->
+        let cnstrnts =
+          sharpen_strict_inequalities_assuming_integrality (Plt.poly_part plt)
+        in
+        let cnstrnts = BatEnum.append (BatList.enum term_definitions) cnstrnts in
+        P.of_constraints cnstrnts
+      ) plts
+  in
+  let max_dim =
+    List.fold_left
+      (fun max_dim p -> Int.max max_dim (P.max_constrained_dim p))
+      Linear.const_dim
+      polyhedra
+  in
+  let dimensions_to_project =
+    let open BatEnum in
+    (0 -- max_dim) // (fun dim -> dim >= num_terms) |> BatList.of_enum
   in
   let dds = List.map (P.dd_of ~man (max_dim + 1)) polyhedra in
   let realconvhull = List.fold_left DD.join (P.dd_of (max_dim + 1) P.bottom) dds

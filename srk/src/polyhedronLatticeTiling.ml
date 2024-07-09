@@ -1841,6 +1841,61 @@ end = struct
 
 end
 
+module LwCooper: sig
+
+  (** This abstraction does real projection for real-valued dimensions and
+      Cooper projection for integer-valued dimensions.
+   *)
+  val abstract_lw_cooper:
+    elim: (int -> bool) ->
+    ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
+
+end = struct
+
+  let abstract_lw_cooper_ ~elim m plt =
+    let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
+    let l = L.basis (Plt.lattice_part plt) in
+    let t = L.basis (Plt.tiling_part plt) in
+    log_plt_constraints ~level:`debug "abstract_lw_cooper: abstracting" (p, l, t);
+    let elim_dimensions =
+      Plt.constrained_dimensions plt |> IntSet.filter elim in
+    let integer_dimensions = collect_dimensions (fun v -> v) (fun _ -> true) l in
+    let (int_dims_to_elim, real_dims_to_elim) =
+      IntSet.partition (fun dim -> IntSet.mem dim integer_dimensions)
+        elim_dimensions
+    in
+    let abstract_lw =
+      LoosWeispfenning.abstract_lw
+        ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim)
+    in
+    let abstract_cooper =
+      MixedCooper.abstract_cooper
+        ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
+        ~round_up:(fun _ v -> v)
+    in
+    let local_abstraction =
+      Plt.abstract_poly_part abstract_lw
+      |> LocalAbstraction.compose abstract_cooper
+    in
+    let (plt, univ_translation) =
+      LocalAbstraction.apply2 local_abstraction m plt in
+    let projected_p = Plt.poly_part plt in
+    let projected_l = Plt.lattice_part plt in
+    let projected_t = Plt.tiling_part plt in
+    log_plt_constraints ~level:`debug "abstract_lw_cooper: abstracted"
+      ( BatList.of_enum (P.enum_constraints projected_p)
+      , L.basis projected_l
+      , L.basis projected_t);
+    (plt, univ_translation)
+
+  let abstract_lw_cooper ~elim =
+    LocalAbstraction.
+    {
+      abstract = abstract_lw_cooper_ ~elim
+    }
+
+end
+
 module SubspaceCone : sig
 
   val abstract_sc:
@@ -1885,6 +1940,15 @@ end = struct
         (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
            pp_vector)
         l_constraints;
+      let polyhedron_abstraction = abstract_lw closed_p in
+
+      let _plt_underapprox =
+        LocalAbstraction.apply
+          (LwCooper.abstract_lw_cooper
+             ~elim:(fun dim -> dim > max_dim_in_projected))
+          m
+          plt
+      in
       let subspace_constraints =
         List.map
           (fun v ->
@@ -1897,7 +1961,13 @@ end = struct
           )
           l_constraints
       in
-      let polyhedron_abstraction = abstract_lw closed_p in
+      let m_vec =
+        let open BatPervasives in
+        BatEnum.fold
+          (fun v i -> V.add_term (m i) i v)
+          V.zero
+          (0--max_dim_in_projected)
+      in
       let subspace_abstraction =
         match subspace_constraints with
         | [] -> polyhedron_abstraction
@@ -1907,6 +1977,40 @@ end = struct
            |> P.of_constraints
            |> abstract_lw
       in
+      let subspace_abstraction =
+        let fns =
+          let covectors =
+            (L.basis (Plt.lattice_part _plt_underapprox))
+            @(L.basis (Plt.tiling_part _plt_underapprox))
+          in
+          (* Taking the dot-product with the lattice / tiling constraints
+             effectively homogenizes them, since the coefficient
+             Linear.const_dim is zero for every point in the primal space. *)
+          List.map (fun vec -> V.dot vec) covectors
+        in
+        let vertices =
+          BatEnum.filter_map (fun (k, v) ->
+              match k with
+              | `Vertex ->
+                let int_v =
+                  P.close_lattice_point
+                    fns
+                    (Plt.poly_part _plt_underapprox)
+                    ~rational:v
+                    ~integer:m_vec
+                    (max_dim_in_projected + 1)
+                in
+                Some (`Vertex, int_v)
+              | _ -> None)
+            (DD.enum_generators (P.dd_of
+                                   (max_dim_in_projected + 1)
+                                   (Plt.poly_part _plt_underapprox)))
+        in
+        DD.join
+          subspace_abstraction
+          (DD.of_generators ~man (max_dim_in_projected + 1) vertices)
+      in
+
       logf ~level:`debug "abstract_sc: combining...";
       let recession_cone =
         DD.enum_generators polyhedron_abstraction
@@ -2012,60 +2116,6 @@ end = struct
     LocalAbstraction.{abstract}
 end
 
-module LwCooper: sig
-
-  (** This abstraction does real projection for real-valued dimensions and
-      Cooper projection for integer-valued dimensions.
-   *)
-  val abstract_lw_cooper:
-    elim: (int -> bool) ->
-    ('layout Plt.t, int -> QQ.t, 'layout Plt.t, int -> QQ.t) LocalAbstraction.t
-
-end = struct
-
-  let abstract_lw_cooper_ ~elim m plt =
-    let p = P.enum_constraints (Plt.poly_part plt) |> BatList.of_enum in
-    let l = L.basis (Plt.lattice_part plt) in
-    let t = L.basis (Plt.tiling_part plt) in
-    log_plt_constraints ~level:`debug "abstract_lw_cooper: abstracting" (p, l, t);
-    let elim_dimensions =
-      Plt.constrained_dimensions plt |> IntSet.filter elim in
-    let integer_dimensions = collect_dimensions (fun v -> v) (fun _ -> true) l in
-    let (int_dims_to_elim, real_dims_to_elim) =
-      IntSet.partition (fun dim -> IntSet.mem dim integer_dimensions)
-        elim_dimensions
-    in
-    let abstract_lw =
-      LoosWeispfenning.abstract_lw
-        ~elim:(fun dim -> IntSet.mem dim real_dims_to_elim)
-    in
-    let abstract_cooper =
-      MixedCooper.abstract_cooper
-        ~elim:(fun dim -> IntSet.mem dim int_dims_to_elim)
-        ~round_up:(fun _ v -> v)
-    in
-    let local_abstraction =
-      Plt.abstract_poly_part abstract_lw
-      |> LocalAbstraction.compose abstract_cooper
-    in
-    let (plt, univ_translation) =
-      LocalAbstraction.apply2 local_abstraction m plt in
-    let projected_p = Plt.poly_part plt in
-    let projected_l = Plt.lattice_part plt in
-    let projected_t = Plt.tiling_part plt in
-    log_plt_constraints ~level:`debug "abstract_lw_cooper: abstracted"
-      ( BatList.of_enum (P.enum_constraints projected_p)
-      , L.basis projected_l
-      , L.basis projected_t);
-    (plt, univ_translation)
-
-  let abstract_lw_cooper ~elim =
-    LocalAbstraction.
-    {
-      abstract = abstract_lw_cooper_ ~elim
-    }
-
-end
 
 module AbstractTerm: sig
 

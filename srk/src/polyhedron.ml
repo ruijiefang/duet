@@ -694,7 +694,8 @@ let _dual_relative_subcone dim halfspaces v =
     (Cone.make ~rays:cardinal_rays ~lines:[] dim)
     halfspaces
 
-let close_integral_point polyhedron ~rational ~integer n =
+
+let _close_point scale polyhedron ~rational ~integer n =
   (* Call the rational point r and the inger point z.
      Write P as { x : A_1 x >= b_1 /\ A_2 x >= b_2 }, where
      A_1 z >= A_1 r and A_2 z < A_2 r.  Define C to be the cone
@@ -722,7 +723,7 @@ let close_integral_point polyhedron ~rational ~integer n =
      lambda_0 v_0 + ... + lambda_n v_n where v_0,...,v_n is a set of integer
      vectors generating C, and each lambda_i >= 0. *)
   let rays = Array.of_list (Cone.generators c) in
-  BatArray.modify (fun v -> V.scalar_mul (QQ.of_zz (V.common_denominator v)) v) rays;
+  BatArray.modify scale rays;
   match Cone.simplex rays (V.sub integer rational) with
   | None -> assert false (* Impossible *)
   | Some soln ->
@@ -734,3 +735,11 @@ let close_integral_point polyhedron ~rational ~integer n =
         V.add z' (V.scalar_mul (QQ.sub lambda (QQ.of_zz (QQ.floor lambda))) rays.(i)))
       soln
       rational
+
+let close_integral_point =
+  _close_point (fun v -> V.scalar_mul (QQ.of_zz (V.common_denominator v)) v)
+
+let close_lattice_point fns =
+  _close_point (fun v ->
+    let gcd = List.fold_left (fun z f -> QQ.gcd (f v) z) QQ.zero fns in
+    V.scalar_mul (QQ.inverse gcd) v)

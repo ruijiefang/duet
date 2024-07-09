@@ -123,3 +123,5 @@ val of_dd : 'a DD.t -> t
    Haase, Krishna, Madnani, Mishra, Zetzsche: "An efficient quantifier
    elimination procedure for Presburger arithmetic", ICALP 2024.  *)
 val close_integral_point : t -> rational:V.t -> integer:V.t -> int -> V.t
+
+val close_lattice_point : (V.t -> QQ.t) list -> t -> rational:V.t -> integer:V.t -> int -> V.t

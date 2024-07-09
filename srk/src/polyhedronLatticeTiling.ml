@@ -236,6 +236,8 @@ module Plt : sig
 
   type 'layout t
 
+  (* val subset: 'layout t -> 'layout t -> bool *)
+
   val int_frac_layout: num_terms:int -> intfrac
 
   val top: 'layout t
@@ -257,10 +259,11 @@ module Plt : sig
   val mk_standard_expansion:
     'a Syntax.context -> dim_of_symbol:(Syntax.symbol -> int) -> free_dim:int -> 'a expansion
 
+  (* TODO: Remove this and use the interfaces below. *)
   val abstract_to_plt:
     'a expansion ->
-    ?curr_term_of_dim:(('a Syntax.arith_term) IntMap.t) ref option ->
     'a context ->
+    ?term_of_new_dims_to_set:(('a Syntax.arith_term) IntMap.t) ref option ->
     ?universe_p:(P.constraint_kind * V.t) list ->
     ?universe_l:V.t list ->
     ?universe_t:V.t list ->
@@ -268,9 +271,26 @@ module Plt : sig
     ('a formula, 'a Interpretation.interpretation, 'b t, int -> Q.t)
       LocalAbstraction.t
 
+  (** A standard PLT lives in a space where dimensions are partitioned into
+      three parts:
+      - Dimensions i between 0 to (Array.length terms) exclusive correspond to
+        term i in the term array.
+      - Dimensions i from Array.length terms to 
+        Array.length terms + max int_of_symbol over symbols correspond to symbol
+        (i - Array.length terms)
+      - "New dimensions" that start from the maximum of
+        (Array.length terms + max int_of_symbol over symbols + 1) and 
+        the largest dimension in the support of [term_of_new_dims_to_set].
+
+      Each time the local abstraction is applied, [term_of_new_dims_to_set] is
+      extended with term definitions for new dimensions that are introduced
+      in the space that the output PLT lives in.
+   *)
   val abstract_to_standard_plt:
     [`ExpandModFloor | `NoExpandModFloor] ->
-    'a context -> 'a arith_term array -> Symbol.Set.t ->
+    'a context ->
+    ?term_of_new_dims_to_set:(('a Syntax.arith_term) IntMap.t) ref option ->
+    'a arith_term array -> Symbol.Set.t ->
     ('a formula, 'a Interpretation.interpretation, standard t, int -> Q.t)
       LocalAbstraction.t
 
@@ -323,6 +343,20 @@ end = struct
     ; tiling_part
     ; metadata = None
     }
+
+  (*
+  let subset plt1 plt2 =
+    let (p1, p2) = (poly_part plt1, poly_part plt2) in
+    let (lattice1, lattice2) = (lattice_part plt1, lattice_part plt2) in
+    let (tiling1, tiling2) = (tiling_part plt1, tiling_part plt2) in
+    let poly_subset p1 p2 =
+      BatEnum.for_all (fun cnstrnt -> P.implies p1 cnstrnt)
+        (P.enum_constraints p2)
+    in
+    poly_subset p1 p2 &&
+      IntLattice.subset lattice2 lattice1 &&
+        IntLattice.subset tiling2 tiling1
+   *)
 
   let constrained_dimensions plt =
     let p = BatList.of_enum (P.enum_constraints plt.poly_part) in
@@ -498,46 +532,6 @@ end = struct
     extend next new_dimensions
 
   let floor_int_frac m v =
-    (*
-       For integer dimensions:
-
-       (Finite image)
-       Let r(m) \in \Z be such that
-       m |= p x_int = kq + r(m) for some integer k and 0 <= r(m) < q.
-
-       1. (Abstraction)
-          If m |= F[floor((p/q) x_int + t)], then
-          m |= F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q ).
-
-       2. (Universality)
-          F[ (p/q) x_int - r(m)/q + floor(r(m)/q + t) ] /\ Int( (p/q) x_int - r(m)/q )
-          |= F[floor((p/q) x_int + t)].
-
-          Int((p/q) x_int - r(m)/q) implies
-          Int( (p/q) x_int - r(m)/q + floor(r(m)/q + t) ) implies
-          (p/q) x_int - r(m)/q + floor(r(m)/q + t) = k for some k \in \Z.
-
-          Want to show k = floor((p/q) x_int + t).
-          (p/q) x_int + t = k + (r(m)/q + t) - floor(r(m)/q + t).
-          So floor( (p/q) x_int + t ) = k + floor( (r(m)/q + t) - floor(r(m)/q + t) ).
-          For all y \in \R, 0 <= y - floor(y) < 1, so the second summand is always 0,
-          and the claim follows.
-
-       For fractional dimensions:
-
-       (Finite image)
-       0 <= x_frac < 1 -->
-       - t <= a x_frac + t < a + t. floor(t) <= floor(a x_frac + t) <= floor(a + t).
-       - a + t < a x_frac + t <= t. floor(a + t) <= floor(a x_frac + t) <= floor(t).
-
-       Let n \in \Z be such that m |= floor(a x_frac + t) = n.
-
-       1. (Abstraction)
-       If m |= F[floor(a x_frac + t)], then m |= F[n] /\ n <= a x_frac + t < n + 1.
-
-       2. (Universality)
-       F[n] /\ n <= a x_frac + t < n + 1 |= F[floor(a x_frac + t)].
-     *)
     let (integer_part, fraction_from_integer_part, lconds) =
       V.fold
         (fun dim coeff (integer_part, fractional_part, lconds) ->
@@ -881,8 +875,8 @@ end = struct
 
   let abstract_to_plt
         expansion
-        ?(curr_term_of_dim = None)
         srk
+        ?(term_of_new_dims_to_set = None)
         ?(universe_p=[])
         ?(universe_l=[])
         ?(universe_t=[])
@@ -926,7 +920,7 @@ end = struct
                 Format.pp_print_int)
              (BatList.of_enum (IntMap.keys new_dimensions));
            let () =
-             match curr_term_of_dim with
+             match term_of_new_dims_to_set with
              | None -> ()
              | Some term_of_dim ->
                 term_of_dim :=
@@ -1076,16 +1070,26 @@ end = struct
           start_of_symbol_int_frac + (2 * num_symbols) - 1
        end
 
-  let abstract_to_standard_plt has_mod_floor srk terms symbols =
+  let abstract_to_standard_plt
+        has_mod_floor srk ?(term_of_new_dims_to_set = None) terms symbols =
     let num_terms = Array.length terms in
     let max_dim = get_max_dim `Standard num_terms symbols in
     logf ~level:`debug "initial plt abstraction: max_dim: %d, num_terms = %d@;"
       max_dim num_terms;
     let dim_of_symbol sym = Syntax.int_of_symbol sym + num_terms in
+    let free_dim =
+      match term_of_new_dims_to_set with
+      | None -> max_dim + 1
+      | Some term_of_new_dims ->
+         begin match IntMap.max_binding_opt !term_of_new_dims with
+         | None -> max_dim + 1
+         | Some (dim, _) -> (Int.max max_dim dim) + 1
+         end
+    in
     let expansion =
       let expand = match has_mod_floor with
         | `NoExpandModFloor -> `NoExpand
-        | `ExpandModFloor -> `Expand (max_dim + 1)
+        | `ExpandModFloor -> `Expand free_dim
       in
       mk_expansion srk expand `Standard dim_of_symbol
     in
@@ -1094,7 +1098,8 @@ end = struct
     logf ~level:`debug "abstract_to_standard_plt...";
     log_plt_constraints ~level:`debug "term definitions" (universe_p, universe_l, universe_t);
     let interp_dim = mk_interp_dim `Standard terms in
-    abstract_to_plt expansion srk ~universe_p ~universe_l ~universe_t interp_dim
+    abstract_to_plt expansion srk ~term_of_new_dims_to_set
+      ~universe_p ~universe_l ~universe_t interp_dim
 
   (* LIRA PLT layout:
      0 ... len(terms) - 1 represent terms.
@@ -1152,6 +1157,12 @@ module LocalGlobal: sig
   val localize:
     ('concept1, 'point1, 'concept2, 'point2) Abstraction.t ->
     ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t
+
+  (* TODO: [solver] should hold the formula (concept) that the 
+     output abstraction abstracts,
+     but a local abstraction and an abstraction should abstract arbitrary 
+     concepts. This signature doesn't make sense.
+   *)
 
   val lift_abstraction:
     ?show:('a interpretation -> unit) ->
@@ -1409,6 +1420,117 @@ end = struct
 
 end
 
+(*
+module UnionPlt : sig
+
+  type 'layout t
+
+  val plt_and_points: 'layout t -> ('layout Plt.t * ) list
+
+  val abstract_to_union_plt:
+    'a context -> 'a Syntax.ArithTerm.t array -> 
+    (('a Syntax.Formula.t, 'a Interpretation.interpretation,
+      'layout t, (int -> QQ.t)) Abstraction.t) *
+      (int -> 'a Syntax.ArithTerm.t)
+    
+end = struct
+
+  val lift_abstraction:
+    ?show:('a interpretation -> unit) ->
+    ?solver: 'a Abstract.Solver.t option ->
+    'a context ->
+    join:('concept2 -> 'concept2 -> 'concept2) ->
+    formula_of_source:('concept1 -> 'a formula) ->
+    univ_translation:('a Interpretation.interpretation -> 'point1) ->
+    formula_of_target:('concept2 -> 'a formula) ->
+    top:'concept2 ->
+    bottom:'concept2 ->
+    ('concept1, 'point1, 'concept2, 'point2) LocalAbstraction.t ->
+    ('concept1, 'point1, 'concept2, 'point2) Abstraction.t
+
+  type 'layout t = ('layout Plt.t * (int -> QQ.t) list) list
+
+  let adjoin plt_points plts =
+    let (plt1, points1) = plt_points in
+    List.fold_left 
+      (fun (plt2, pts2) -> )
+      []
+      plts
+      
+
+  (* Best-effort join *)
+  let join union1 union2 =
+    List.fold_left
+      (fun plt1 )
+      []
+      union1
+                 
+
+  let abstract_to_union_plt srk terms symbols =
+    let curr_term_of_dim = ref IntMap.empty in
+    let num_terms = Array.length terms in
+    let () =
+      Array.iteri
+        (fun dim term -> curr_term_of_dim := IntMap.add dim term !curr_term_of_dim)
+        terms;
+      Syntax.Symbol.Set.iter
+        (fun sym ->
+          curr_term_of_dim :=
+            IntMap.add
+              (Syntax.int_of_symbol sym + num_terms)
+              (Syntax.mk_const srk sym)
+              !curr_term_of_dim
+        )
+        symbols
+    in
+    let abstract_plt =
+      Plt.abstract_to_standard_plt `ExpandModFloor srk
+        ~term_of_new_dims_to_set:(Some curr_term_of_dim)
+        terms
+        symbols
+    in
+    let mk_univ_translation term_of_dim =
+      fun interp dim ->
+      try
+        let term = IntMap.find dim term_of_dim in
+        Interpretation.evaluate_term interp term
+      with
+      | Not_found ->
+         failwith
+           (Format.asprintf "abstract_to_union_plt: cannot evaluate dimension %d" dim)
+    in
+    let alpha interp phi =
+      let plt = LocalAbstraction.apply abstract_plt interp phi in
+      let univ_translation = mk_univ_translation !curr_term_of_dim in
+      ((plt, univ_translation interp), univ_translation)
+    in
+    let term_of_dim dim =
+      try IntMap.find dim !curr_term_of_dim
+      with
+      | Not_found ->
+         failwith
+           (Format.asprintf "abstract_to_union_plt: cannot find a term at dimension %d" dim)
+    in
+    let join plts1 plts2 = plts1 @ plts2 in
+    let formula_of_target plts =
+      let to_block =
+        mk_or srk (List.map (Plt.formula_of_plt srk term_of_dim) plts) in
+      logf ~level:`debug "blocking: @[%a@]" (Syntax.Formula.pp srk) to_block;
+      to_block
+    in
+    let top = [Plt.top] in
+    let bottom = [] in
+    let abstract = LocalGlobal.lift_abstraction srk ~join
+                     ~formula_of_source:(fun phi -> phi)
+                     ~formula_of_target
+                     ~top ~bottom
+                     LocalAbstraction.{abstract=alpha}
+    in
+    (abstract, term_of_dim)
+
+end
+ *)
+
 module Ddify: sig
 
   val abstract:
@@ -1615,31 +1737,6 @@ end = struct
       )
       p;
     (!glb, !has_upper_bound)
-
-  (*
-  let generalized_ceiling elim_dim m (p, l, t) =
-    let plt =
-      Plt.mk_plt
-        ~poly_part:(P.of_constraints (BatList.enum p))
-        ~lattice_part:(L.hermitize l)
-        ~tiling_part:(L.hermitize t)
-    in
-    let dimensions = Plt.constrained_dimensions plt in
-    let integer_point = ModelSearch.model_to_vector dimensions m in
-    let direction = V.of_term QQ.one elim_dim in
-    let points = ModelSearch.extrapolate ~integer_point ~direction plt in
-    let least_point =
-      List.fold_left
-        (fun least point ->
-          if QQ.leq (V.coeff elim_dim least) (V.coeff elim_dim point) then
-            least
-          else
-            point
-        )
-        integer_point points
-    in
-    least_point
-   *)
 
   let select_term elim_dim modulus round_up (kind, lower) m =
     let rounded = round_up m lower in
@@ -2346,65 +2443,65 @@ let cooper_project srk phi terms =
   Abstraction.apply abstract phi
 
 let conjunctive_normal_form srk ~base_dim phi =
-  let symbols = Syntax.symbols phi in
-  let dim_of_symbol sym = Syntax.int_of_symbol sym + base_dim in
-  let initial_term_of_dim =
-    Symbol.Set.fold
-      (fun sym map ->
-        IntMap.add (dim_of_symbol sym) (Syntax.mk_const srk sym) map)
-      symbols IntMap.empty
-  in
-  let curr_term_of_dim = ref initial_term_of_dim in
-  let curr_free_dim =
-    ref
-      (match Symbol.Set.max_elt_opt symbols with
-       | Some symbol -> dim_of_symbol symbol + 1
-       | None -> base_dim
-      )
-  in
-  let local_abs =
-    let abstract m psi =
-      let expansion =
-        Plt.mk_standard_expansion srk
-          ~free_dim:!curr_free_dim ~dim_of_symbol
-      in
-      let result =
-        LocalAbstraction.apply2
-          (Plt.abstract_to_plt
-             expansion
-             ~curr_term_of_dim:(Some curr_term_of_dim)
-             srk
-             (fun interp dim ->
-               try
-                 let term = IntMap.find dim !curr_term_of_dim in
-                 Interpretation.evaluate_term interp term
-               with
-               | Not_found ->
-                  failwith
-                    (Format.asprintf "conjunctive normal form: cannot evaluate dimension %d" dim)
-             )
-          )
-          m psi
-      in
-      curr_free_dim :=
-        (match IntMap.max_binding_opt !curr_term_of_dim with
-         | Some (dim, _) -> dim + 1
-         | None -> 0);
-      result
+    let symbols = Syntax.symbols phi in
+    let dim_of_symbol sym = Syntax.int_of_symbol sym + base_dim in
+    let initial_term_of_dim =
+      Symbol.Set.fold
+        (fun sym map ->
+          IntMap.add (dim_of_symbol sym) (Syntax.mk_const srk sym) map)
+        symbols IntMap.empty
     in
-    LocalAbstraction.{abstract}
-  in
-  let term_of_dim dim =
-    try IntMap.find dim !curr_term_of_dim
-    with
-    | Not_found ->
-       failwith
-         (Format.asprintf "conjunctive normal form: cannot find a term at dimension %d" dim)
-  in
-  let abstract =
-    LocalGlobal.lift_plt_abstraction srk ~term_of_dim local_abs
-  in
-  (Abstraction.apply abstract phi, !curr_term_of_dim)
+    let curr_term_of_dim = ref initial_term_of_dim in
+    let curr_free_dim =
+      ref
+        (match Symbol.Set.max_elt_opt symbols with
+         | Some symbol -> dim_of_symbol symbol + 1
+         | None -> base_dim
+        )
+    in
+    let local_abs =
+      let abstract m psi =
+        let expansion =
+          Plt.mk_standard_expansion srk
+            ~free_dim:!curr_free_dim ~dim_of_symbol
+        in
+        let result =
+          LocalAbstraction.apply2
+            (Plt.abstract_to_plt
+               expansion
+               ~term_of_new_dims_to_set:(Some curr_term_of_dim)
+               srk
+               (fun interp dim ->
+                 try
+                   let term = IntMap.find dim !curr_term_of_dim in
+                   Interpretation.evaluate_term interp term
+                 with
+                 | Not_found ->
+                    failwith
+                      (Format.asprintf "conjunctive normal form: cannot evaluate dimension %d" dim)
+               )
+            )
+            m psi
+        in
+        curr_free_dim :=
+          (match IntMap.max_binding_opt !curr_term_of_dim with
+           | Some (dim, _) -> dim + 1
+           | None -> 0);
+        result
+      in
+      LocalAbstraction.{abstract}
+    in
+    let term_of_dim dim =
+      try IntMap.find dim !curr_term_of_dim
+      with
+      | Not_found ->
+         failwith
+           (Format.asprintf "conjunctive normal form: cannot find a term at dimension %d" dim)
+    in
+    let abstract =
+      LocalGlobal.lift_plt_abstraction srk ~term_of_dim local_abs
+    in
+    (Abstraction.apply abstract phi, !curr_term_of_dim)
 
 let local_abstraction_of_lira_model how solver man terms =
   let phi = Abstract.Solver.get_formula solver in
@@ -2579,8 +2676,7 @@ end = struct
       integrality constraints of symbols that are eliminated.
    *)
   let remove_integrality_constraints srk phi =
-    let open Syntax in    
-    let nnfphi= rewrite srk ~down:(Syntax.nnf_rewriter srk) phi in
+    let open Syntax in
     rewrite srk
       ~down:(fun expr ->
         match destruct srk expr with
@@ -2600,11 +2696,14 @@ end = struct
            mk_eq srk (mk_const srk s) t
         | _ -> expr
       )
-      nnfphi
+      phi
 
   let polyhedral_formula_of_qf srk phi =
-    let polyhedral_phi = remove_integrality_constraints srk phi
-                         |> eliminate_floor_mod_div srk in
+    let polyhedral_phi =
+      rewrite srk ~down:(Syntax.nnf_rewriter srk) phi
+      |> rewrite srk ~down:(Syntax.pos_rewriter srk)
+      |> remove_integrality_constraints srk
+      |> eliminate_floor_mod_div srk in
     let new_symbols =
       Symbol.Set.diff (symbols polyhedral_phi) (Syntax.symbols phi)
     in

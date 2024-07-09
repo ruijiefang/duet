@@ -816,7 +816,7 @@ let spec_list = [
      iterated Gomory-Chvatal + projection."
   );
 
-  ("-compare-convex-hull-sc-accelerated-vs-real"
+  ("-compare-convex-hull-sc-accelerated-vs-real-relaxation"
   , Arg.String
       (fun file ->
         ConvHull.compare srk DD.equal `SubspaceConeAccelerated `RelaxToReal

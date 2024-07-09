@@ -1384,7 +1384,7 @@ let _ =
   CmdLine.register_config
     ("-disable-lira"
     , Arg.Clear ConvexHull.enable_lira
-    , "Use real relaxation when computing convex hulls"
+    , " Use real relaxation when computing convex hulls"
     )
 
 let _ =

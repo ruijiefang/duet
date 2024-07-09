@@ -58,7 +58,7 @@ val formula_of_plt:
 val cooper_project: 'a Syntax.context -> 'a Syntax.formula ->
                     ('a Syntax.arith_term ) Array.t -> standard plt list
 
-val conjunctive_normal_form:
+val disjunctive_normal_form:
   'a Syntax.context -> base_dim:int -> 'a Syntax.formula ->
   (standard plt list * 'a Syntax.arith_term SrkUtil.Int.Map.t)
 

@@ -2442,7 +2442,7 @@ let cooper_project srk phi terms =
   in
   Abstraction.apply abstract phi
 
-let conjunctive_normal_form srk ~base_dim phi =
+let disjunctive_normal_form srk ~base_dim phi =
     let symbols = Syntax.symbols phi in
     let dim_of_symbol sym = Syntax.int_of_symbol sym + base_dim in
     let initial_term_of_dim =
@@ -2478,7 +2478,7 @@ let conjunctive_normal_form srk ~base_dim phi =
                  with
                  | Not_found ->
                     failwith
-                      (Format.asprintf "conjunctive normal form: cannot evaluate dimension %d" dim)
+                      (Format.asprintf "disjunctive normal form: cannot evaluate dimension %d" dim)
                )
             )
             m psi
@@ -2496,7 +2496,7 @@ let conjunctive_normal_form srk ~base_dim phi =
       with
       | Not_found ->
          failwith
-           (Format.asprintf "conjunctive normal form: cannot find a term at dimension %d" dim)
+           (Format.asprintf "disjunctive normal form: cannot find a term at dimension %d" dim)
     in
     let abstract =
       LocalGlobal.lift_plt_abstraction srk ~term_of_dim local_abs
@@ -2590,7 +2590,7 @@ let full_integer_hull_then_project
       ?(man=(Polka.manager_alloc_loose ()))
       how
       ~to_keep srk phi =
-  let (plts, term_of_dim) = conjunctive_normal_form srk ~base_dim:0 phi in
+  let (plts, term_of_dim) = disjunctive_normal_form srk ~base_dim:0 phi in
   let polyhedra =
     List.map (fun plt ->
         let cnstrnts = sharpen_strict_inequalities_assuming_integrality (Plt.poly_part plt)
@@ -2635,7 +2635,7 @@ let full_integer_hull_then_project_onto_terms
       how
       srk phi terms =
   let num_terms = Array.length terms in
-  let (plts, _term_of_dim) = conjunctive_normal_form srk ~base_dim:num_terms phi
+  let (plts, _term_of_dim) = disjunctive_normal_form srk ~base_dim:num_terms phi
   in
   let (term_definitions, lcond, tcond) =
     Plt.mk_standard_term_definitions srk

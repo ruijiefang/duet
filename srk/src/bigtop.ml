@@ -91,7 +91,8 @@ module ConvHull : sig
         | `IntHullAfterProjection
         | `NoIntHullAfterProjection]
     | `Lw
-    | `RelaxToReal
+    | `RelaxToRealLw
+    | `RelaxToRealProjectThenHull
     | `RunOnlyForPureInt
     | `GcThenElim
     | `GcThenProjectTerms
@@ -115,7 +116,8 @@ module ConvHull : sig
         | `IntHullAfterProjection
         | `NoIntHullAfterProjection]
     | `Lw
-    | `RelaxToReal
+    | `RelaxToRealLw
+    | `RelaxToRealProjectThenHull
     | `RunOnlyForPureInt
     | `GcThenElim
     | `GcThenProjectTerms
@@ -132,7 +134,8 @@ module ConvHull : sig
         | `IntHullAfterProjection
         | `NoIntHullAfterProjection]
     | `Lw
-    | `RelaxToReal
+    | `RelaxToRealLw
+    | `RelaxToRealProjectThenHull
     | `RunOnlyForPureInt
     | `GcThenElim
     | `GcThenProjectTerms
@@ -195,8 +198,10 @@ end = struct
     | `Lw ->
        Format.fprintf fmt
          "LW only (ignore integrality constraints on all symbols when projecting)"
-    | `RelaxToReal ->
-       Format.fprintf fmt "LW (all symbols in formula are turned to real)"
+    | `RelaxToRealLw ->
+       Format.fprintf fmt "LW (all symbols in formula are first turned to real)"
+    | `RelaxToRealProjectThenHull ->
+       Format.fprintf fmt "Full-projection-of-implicant-then-hull (all symbols in formula are first turned to real)"
     | `GcThenElim ->
        Format.fprintf fmt
          "Compute integer hull using Gomory-Chvatal closure and DD projection
@@ -225,7 +230,8 @@ end = struct
     | `LwCooper `NoIntHullAfterProjection ->
        `LwCooper `NoIntHullAfterProjection
     | `Lw -> `Lw
-    | `RelaxToReal -> invalid_arg "Non-standard"
+    | `RelaxToRealLw -> invalid_arg "Non-standard"
+    | `RelaxToRealProjectThenHull -> invalid_arg "Non-standard"
     | `GcThenElim -> invalid_arg "Non-standard"
     | `GcThenProjectTerms -> invalid_arg "Non-standard"
     | `NormalizThenElim -> invalid_arg "Non-standard"
@@ -298,7 +304,8 @@ end = struct
     in
     let relax_to_real =
       match how with
-      | `RelaxToReal -> true
+      | `RelaxToRealLw
+        | `RelaxToRealProjectThenHull -> true
       | _ -> false
     in
     (*
@@ -379,6 +386,7 @@ end = struct
         PLT.full_integer_hull_then_project_onto_terms (hull_then_project_option how)
           srk phi terms
       else if relax_to_real then
+        (* TODO: Add ProjectThenHull *)
         PLT.convex_hull `Lw srk phi terms
       else
         PLT.convex_hull (standard_option how) srk
@@ -390,7 +398,8 @@ end = struct
     let dimension_data =
       match how with
       | `GcThenElim -> `SyntaxDimensions
-      | `RelaxToReal -> `TermDimensions terms
+      | `RelaxToRealProjectThenHull -> `SyntaxDimensions
+      | `RelaxToRealLw -> `TermDimensions terms
       | _ -> `TermDimensions terms
     in
     (result, dimension_data)
@@ -425,7 +434,8 @@ end = struct
        | `LwCooper `NoIntHullAfterProjection ->
           `LwCooper `NoIntHullAfterProjection
        | `Lw -> `Lw
-       | `RelaxToReal -> `RelaxToReal
+       | `RelaxToRealLw -> `RelaxToRealLw
+       | `RelaxToRealProjectThenHull -> `RelaxToRealProjectThenHull
        | `GcThenElim -> `GcThenElim
        | `GcThenProjectTerms -> `GcThenProjectTerms
        | `NormalizThenElim -> `NormalizThenElim
@@ -835,14 +845,25 @@ let spec_list = [
      only when the formula is pure LIA."
   );
 
-  ("-convex-hull-by-real-relaxation"
+  ("-convex-hull-by-relax-real-lw"
   , Arg.String
       (fun file ->
-        ignore (ConvHull.convex_hull srk `RelaxToReal (load_formula file));
+        ignore (ConvHull.convex_hull srk `RelaxToRealLw (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of the real relaxation of an existential formula in
-     linear integer-real arithmetic."
+     linear integer-real arithmetic using Loos-Weispfenning."
+  );
+
+  ("-convex-hull-by-relax-real-project-then-hull"
+  , Arg.String
+      (fun file ->
+        ignore (ConvHull.convex_hull srk `RelaxToRealProjectThenHull (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of the real relaxation of an existential formula in
+     linear integer-real arithmetic by doing full projection of each implicant
+     and then taking the convex hull."
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-gc"
@@ -867,10 +888,10 @@ let spec_list = [
      iterated Gomory-Chvatal + projection."
   );
 
-  ("-compare-convex-hull-sc-accelerated-vs-real-relaxation"
+  ("-compare-convex-hull-sc-accelerated-vs-relax-real-lw"
   , Arg.String
       (fun file ->
-        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `RelaxToReal
+        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `RelaxToRealLw
           (load_formula file)
       )
   , "Compute the convex hull computed by subspace-cone abstraction vs the real relaxation
@@ -878,10 +899,10 @@ let spec_list = [
      For the latter, the SMT solver sees all variables as real, as does elimination."
   );
 
-  ("-compare-convex-hull-sc-precond-accelerate-vs-real-relaxation"
+  ("-compare-convex-hull-sc-precond-accelerate-vs-relax-real-lw"
   , Arg.String
       (fun file ->
-        ConvHull.compare srk DD.equal `SubspaceConePrecondAccelerate `RelaxToReal
+        ConvHull.compare srk DD.equal `SubspaceConePrecondAccelerate `RelaxToRealLw
           (load_formula file)
       )
   , "Compute the convex hull computed by subspace-cone abstraction vs the real relaxation
@@ -898,6 +919,15 @@ let spec_list = [
   ,
     "Compute the convex hull of an existential formula in linear integer-real arithmetic
      by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+  );
+
+  ("-compare-convex-hull-cooper-vs-gc"
+  , Arg.String
+      (fun file ->
+        ConvHull.compare srk DD.equal (`LwCooper `IntHullAfterProjection) `GcThenElim
+          (load_formula file)
+      )
+  , "Compare the integer hulls of LIA formulas computed by Cooper and GC to see if they are equal."
   );
 
   ("-integralize-smt-file"

@@ -117,6 +117,8 @@ val convex_hull:
     and there are no integrality constraints.
     Integrality constraints apart from integrality of variables are
     completely ignored.
+    The correspondence between symbols and dimensions are
+    via [Syntax.symbol_of_int] and [Syntax.int_of_symbol].
 *)
 val full_integer_hull_then_project:
   ?man:(DD.closed Apron.Manager.t) ->
@@ -135,6 +137,7 @@ val full_integer_hull_then_project_onto_terms:
   [`GomoryChvatal | `Normaliz] ->
   'a Syntax.context -> 'a Syntax.formula ->
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
+
 
 val convex_hull_lia:
   'a Syntax.context -> 'a Syntax.formula ->

@@ -2583,6 +2583,9 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   | `LwCooper finalize -> abstract (`LwCooper finalize) solver ~man terms
   | `Lw -> abstract `Lw solver ~man terms
 
+
+module PureGlobalHull = struct
+
 let full_integer_hull_then_project
       ?(man=(Polka.manager_alloc_loose ()))
       how
@@ -2668,6 +2671,11 @@ let full_integer_hull_then_project_onto_terms
                    |> P.dd_of (max_dim + 1)
   in
   DD.project dimensions_to_project integerhull
+
+end
+let full_integer_hull_then_project = PureGlobalHull.full_integer_hull_then_project
+let full_integer_hull_then_project_onto_terms =
+  PureGlobalHull.full_integer_hull_then_project_onto_terms
 
 let convex_hull_lia srk phi terms =
   convex_hull (`LwCooper `IntHullAfterProjection) srk phi terms

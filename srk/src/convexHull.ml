@@ -137,7 +137,7 @@ let abstract solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None) terms =
       let query =
         Symbol.Set.fold (fun s psi -> Syntax.mk_exists_const srk s psi)
           (symbols phi)
-        query
+          query
       in
       let filename =
         Format.sprintf "%shull%d.smt2" (!dump_hull_prefix) (!nb_hulls)

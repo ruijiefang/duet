@@ -80,6 +80,7 @@ val convex_hull_of_lira_model:
 
 val abstract: [ `SubspaceCone
               | `SubspaceConeAccelerated
+              | `SubspaceConePrecondAccelerate
               | `Subspace
               | `IntFrac
               | `IntFracAccelerated
@@ -98,6 +99,7 @@ val abstract: [ `SubspaceCone
 val convex_hull:
   [ `SubspaceCone
   | `SubspaceConeAccelerated
+  | `SubspaceConePrecondAccelerate
   | `Subspace
   | `IntFrac
   | `IntFracAccelerated
@@ -112,7 +114,7 @@ val convex_hull:
   ('a Syntax.arith_term) Array.t -> DD.closed DD.t
 
 (** Sound only when all variables in the formula are of integer type,
-    and there are no integrality constraints. 
+    and there are no integrality constraints.
     Integrality constraints apart from integrality of variables are
     completely ignored.
 *)
@@ -124,7 +126,7 @@ val full_integer_hull_then_project:
   DD.closed DD.t
 
 (** Sound only when all variables in the formula are of integer type,
-    and there are no integrality constraints. 
+    and there are no integrality constraints.
     Integrality constraints apart from integrality of variables are
     completely ignored.
 *)
@@ -159,12 +161,12 @@ module PolyhedralFormula: sig
       [retype_as srk forced_typ phi = (psi, remap)] is such that
       [psi] is a polyhedral formula,
       all symbols in [psi] are of type [forced_typ], and [remap] maps
-      symbols in [phi] that have a different type from [forced_typ] to 
+      symbols in [phi] that have a different type from [forced_typ] to
       new symbols of type [forced_typ] that replaces them to get [psi].
 
       If [remap] is empty, projecting [psi] onto the symbols of [phi]
       is equivalent to [phi].
-      Otherwise, [remap phi |= psi], where [remap phi] is obtained by 
+      Otherwise, [remap phi |= psi], where [remap phi] is obtained by
       substituting [remap s] for symbols [s] in the domain of [remap].
    *)
   val retype_as:

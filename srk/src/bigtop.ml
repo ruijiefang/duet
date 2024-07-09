@@ -81,6 +81,7 @@ module ConvHull : sig
     ?filter:(Quantifier.quantifier_prefix -> Syntax.Symbol.Set.t -> Syntax.Symbol.Set.t) ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
+    | `SubspaceConePrecondAccelerate
     | `Subspace
     | `Subspace
     | `IntFrac
@@ -92,9 +93,9 @@ module ConvHull : sig
     | `Lw
     | `RelaxToReal
     | `RunOnlyForPureInt
-    | `GcThenProject
+    | `GcThenElim
     | `GcThenProjectTerms
-    | `NormalizThenProject
+    | `NormalizThenElim
     ] ->
     'a formula -> DD.closed DD.t * [`RealSymbolDimensions of symbol -> symbol
                                    | `SyntaxDimensions
@@ -105,6 +106,7 @@ module ConvHull : sig
     (DD.closed DD.t -> DD.closed DD.t -> bool) ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
+    | `SubspaceConePrecondAccelerate
     | `Subspace
     | `IntFrac
     | `IntFracAccelerated
@@ -115,12 +117,13 @@ module ConvHull : sig
     | `Lw
     | `RelaxToReal
     | `RunOnlyForPureInt
-    | `GcThenProject
+    | `GcThenElim
     | `GcThenProjectTerms
-    | `NormalizThenProject
+    | `NormalizThenElim
     ] ->
     [ `SubspaceCone
     | `SubspaceConeAccelerated
+    | `SubspaceConePrecondAccelerate
     | `Subspace
     | `IntFrac
     | `IntFracAccelerated
@@ -131,9 +134,9 @@ module ConvHull : sig
     | `Lw
     | `RelaxToReal
     | `RunOnlyForPureInt
-    | `GcThenProject
+    | `GcThenElim
     | `GcThenProjectTerms
-    | `NormalizThenProject
+    | `NormalizThenElim
     ] ->
     'a formula -> unit
 
@@ -179,6 +182,7 @@ end = struct
   let pp_alg fmt = function
     | `SubspaceCone -> Format.fprintf fmt "SubspaceCone"
     | `SubspaceConeAccelerated -> Format.fprintf fmt "SubspaceConeAccelerated"
+    | `SubspaceConePrecondAccelerate -> Format.fprintf fmt "SubspaceConePrecondAccelerated"
     | `Subspace -> Format.fprintf fmt "Subspace"
     | `IntFrac -> Format.fprintf fmt "IntFrac"
     | `IntFracAccelerated -> Format.fprintf fmt "IntFracAccelerated"
@@ -193,15 +197,15 @@ end = struct
          "LW only (ignore integrality constraints on all symbols when projecting)"
     | `RelaxToReal ->
        Format.fprintf fmt "LW (all symbols in formula are turned to real)"
-    | `GcThenProject ->
+    | `GcThenElim ->
        Format.fprintf fmt
          "Compute integer hull using Gomory-Chvatal closure and DD projection
-          directly onto free symbols"
+          directly onto free symbols (i.e., eliminate existentially quantified symbols)"
     | `GcThenProjectTerms ->
        Format.fprintf fmt
-         "Compute integer hull using Gomory-Chvatal closure and DD projection 
+         "Compute integer hull using Gomory-Chvatal closure and DD projection
           onto term dimensions (with each term being a free symbol)"
-    | `NormalizThenProject ->
+    | `NormalizThenElim ->
        Format.fprintf fmt "Compute integer hull using Normaliz and DD projection"
     | `RunOnlyForPureInt ->
        Format.fprintf fmt "SubspaceConeAccelerated (running on pure integer tasks only)"
@@ -210,6 +214,7 @@ end = struct
     | `RunOnlyForPureInt -> `SubspaceConeAccelerated
     | `SubspaceCone -> `SubspaceCone
     | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+    | `SubspaceConePrecondAccelerate -> `SubspaceConePrecondAccelerate
     | `Subspace -> `Subspace
     | `IntFrac -> `IntFrac
     | `IntFracAccelerated -> `IntFracAccelerated
@@ -221,14 +226,14 @@ end = struct
        `LwCooper `NoIntHullAfterProjection
     | `Lw -> `Lw
     | `RelaxToReal -> invalid_arg "Non-standard"
-    | `GcThenProject -> invalid_arg "Non-standard"
+    | `GcThenElim -> invalid_arg "Non-standard"
     | `GcThenProjectTerms -> invalid_arg "Non-standard"
-    | `NormalizThenProject -> invalid_arg "Non-standard"
+    | `NormalizThenElim -> invalid_arg "Non-standard"
 
   let hull_then_project_option = function
-    | `GcThenProject -> `GomoryChvatal
+    | `GcThenElim -> `GomoryChvatal
     | `GcThenProjectTerms -> `GomoryChvatal
-    | `NormalizThenProject -> `Normaliz
+    | `NormalizThenElim -> `Normaliz
     | _ -> invalid_arg "Not hull-then-project"
 
   let requantify srk quantifiers phi =
@@ -280,10 +285,10 @@ end = struct
   let convex_hull_ srk how
         ?(filter=elim_quantifiers)
         phi =
-    let use_hull_then_project =
+    let use_hull_then_elim =
       match how with
-      | `GcThenProject -> true
-      | `NormalizThenProject -> true
+      | `GcThenElim -> true
+      | `NormalizThenElim -> true
       | _ -> false
     in
     let use_hull_then_project_terms =
@@ -366,7 +371,7 @@ end = struct
          (Syntax.Formula.pp srk))
       integer_constraints;
     let result =
-      if use_hull_then_project then
+      if use_hull_then_elim then
         (* All variables in input formula should be integer-typed for this to be sound *)
         PLT.full_integer_hull_then_project (hull_then_project_option how)
           ~to_keep:symbols_to_keep srk phi
@@ -384,7 +389,7 @@ end = struct
       (PLT.formula_of_dd srk (fun dim -> terms.(dim)) result);
     let dimension_data =
       match how with
-      | `GcThenProject -> `SyntaxDimensions
+      | `GcThenElim -> `SyntaxDimensions
       | `RelaxToReal -> `TermDimensions terms
       | _ -> `TermDimensions terms
     in
@@ -409,6 +414,7 @@ end = struct
        | `RunOnlyForPureInt -> `SubspaceConeAccelerated
        | `SubspaceCone -> `SubspaceCone
        | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+       | `SubspaceConePrecondAccelerate -> `SubspaceConePrecondAccelerate
        | `Subspace -> `Subspace
        | `IntFrac -> `IntFrac
        | `IntFracAccelerated -> `IntFracAccelerated
@@ -420,9 +426,9 @@ end = struct
           `LwCooper `NoIntHullAfterProjection
        | `Lw -> `Lw
        | `RelaxToReal -> `RelaxToReal
-       | `GcThenProject -> `GcThenProject
+       | `GcThenElim -> `GcThenElim
        | `GcThenProjectTerms -> `GcThenProjectTerms
-       | `NormalizThenProject -> `NormalizThenProject
+       | `NormalizThenElim -> `NormalizThenElim
       )
       ~filter phi
 
@@ -571,6 +577,17 @@ let spec_list = [
      using the subspace-and-cone abstraction"
   );
 
+  ("-lira-convex-hull-sc-precond-accelerate"
+  , Arg.String
+      (fun file ->
+          ignore (ConvHull.convex_hull srk `SubspaceConePrecondAccelerate (load_formula file));
+          Format.printf "Result: success"
+      )
+  ,
+    "Compute the convex hull of an existential formula in linear integer-real arithmetic
+     using the subspace-and-cone abstraction"
+  );
+
   ("-lira-convex-hull-intfrac"
   , Arg.String
       (fun file ->
@@ -695,6 +712,14 @@ let spec_list = [
      the subspace-cone abstraction against the accelerated version."
   );
 
+  ("-compare-convex-hull-sc-vs-precond-accelerate"
+  , Arg.String (fun file ->
+        ConvHull.compare srk DD.equal `SubspaceCone `SubspaceConePrecondAccelerate
+          (load_formula file))
+  , "Test the convex hull of an existential formula in LIRA computed by
+     the subspace-cone abstraction against the precond + accelerated version."
+  );
+
   ("-compare-convex-hull-intfrac-accelerated"
   , Arg.String (fun file ->
         ConvHull.compare srk DD.equal `IntFrac `IntFracAccelerated (load_formula file))
@@ -777,11 +802,13 @@ let spec_list = [
   ("-convex-hull-by-gc"
   , Arg.String
       (fun file ->
-        ignore (ConvHull.convex_hull srk `GcThenProject (load_formula file));
+        ignore (ConvHull.convex_hull srk `GcThenElim (load_formula file));
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic
-     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it.
+     Only existentially quantified symbols are eliminated. This is sound only when the formula
+     is pure LIA."
   );
 
   ("-convex-hull-by-gc-terms"
@@ -791,24 +818,48 @@ let spec_list = [
         Format.printf "Result: success"
       )
   , "Compute the convex hull of an existential formula in linear integer-real arithmetic
-     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it."
+     by computing the integer hull using iterated Gomory-Chvatal closure and then projecting it.
+     A new symbol for each symbol that is not existentially quantified is introduced, and all
+     original symbols are eliminated. This is sound only when the formula is pure LIA."
   );
 
   ("-convex-hull-by-normaliz"
   , Arg.String
       (fun file ->
-        ignore (ConvHull.convex_hull srk `NormalizThenProject (load_formula file));
+        ignore (ConvHull.convex_hull srk `NormalizThenElim (load_formula file));
         Format.printf "Result: success"
       )
   ,
     "Compute the convex hull of an existential formula in linear integer-real arithmetic
-     by computing the integer hull using Normaliz and then projecting it."
+     by computing the integer hull using Normaliz and then projecting it. This is sound
+     only when the formula is pure LIA."
+  );
+
+  ("-convex-hull-by-real-relaxation"
+  , Arg.String
+      (fun file ->
+        ignore (ConvHull.convex_hull srk `RelaxToReal (load_formula file));
+        Format.printf "Result: success"
+      )
+  , "Compute the convex hull of the real relaxation of an existential formula in
+     linear integer-real arithmetic."
   );
 
   ("-compare-convex-hull-sc-accelerated-vs-gc"
   , Arg.String
       (fun file ->
-        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `GcThenProject
+        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `GcThenElim
+          (load_formula file)
+      )
+  ,
+    "Compare the convex hull computed by subspace-cone abstraction vs
+     iterated Gomory-Chvatal + projection (eliminating only unwanted symbols)."
+  );
+
+  ("-compare-convex-hull-sc-precond-accelerate-vs-gc"
+  , Arg.String
+      (fun file ->
+        ConvHull.compare srk DD.equal `SubspaceConePrecondAccelerate `GcThenElim
           (load_formula file)
       )
   ,
@@ -827,10 +878,21 @@ let spec_list = [
      For the latter, the SMT solver sees all variables as real, as does elimination."
   );
 
+  ("-compare-convex-hull-sc-precond-accelerate-vs-real-relaxation"
+  , Arg.String
+      (fun file ->
+        ConvHull.compare srk DD.equal `SubspaceConePrecondAccelerate `RelaxToReal
+          (load_formula file)
+      )
+  , "Compute the convex hull computed by subspace-cone abstraction vs the real relaxation
+     of the formula.
+     For the latter, the SMT solver sees all variables as real, as does elimination."
+  );
+
   ("-compare-convex-hull-sc-accelerated-vs-normaliz"
   , Arg.String
       (fun file ->
-        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `NormalizThenProject
+        ConvHull.compare srk DD.equal `SubspaceConeAccelerated `NormalizThenElim
           (load_formula file)
       )
   ,
@@ -858,6 +920,28 @@ let spec_list = [
         pp_smtlib2 srk fmt phi'
       )
   , "Make a copy of an SMT file with all real variables re-declared as integer"
+  );
+
+  ("-realify-smt-file"
+  , Arg.String (fun file ->
+        let () =
+          if not (Filename.check_suffix file ".smt2") then failwith "not an SMT file"
+          else ()
+        in
+        let phi = load_smtlib2 file in
+        let (phi', equivalent, _) =
+          try ConvHull.retype_formula srk `TyReal phi
+          with
+          | _ -> Format.printf "Fail at file: %s" file;
+                 failwith "Failed"
+        in
+        let suffix = if equivalent then "_equivalent.smt2" else "_realified.smt2" in
+        let outfilename = (Filename.remove_extension file) ^ suffix in
+        Format.printf "Writing to file %s@;" outfilename;
+        let fmt = Format.formatter_of_out_channel (open_out outfilename) in
+        pp_smtlib2 srk fmt phi'
+      )
+  , "Make a copy of an SMT file with all integer variables re-declared as real"
   );
 
   ("-convex-hull",

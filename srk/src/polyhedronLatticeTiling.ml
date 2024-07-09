@@ -2546,6 +2546,21 @@ let abstract how solver ?(man=Polka.manager_alloc_loose ()) ?(bottom=None)
   let phi = Abstract.Solver.get_formula solver in
   let srk = Abstract.Solver.get_context solver in
   let num_terms = Array.length terms in
+  let how =
+    match how with
+    | `SubspaceConePrecondAccelerate ->
+       ignore (* Collect a set of models whose span is the affine hull *)
+         (Abstract.LinearSpan.affine_hull solver
+            (Symbol.Set.to_list (Syntax.symbols phi)));
+       `SubspaceConeAccelerated
+    | `SubspaceCone -> `SubspaceCone
+    | `SubspaceConeAccelerated -> `SubspaceConeAccelerated
+    | `Subspace -> `Subspace
+    | `IntFrac -> `IntFrac
+    | `IntFracAccelerated -> `IntFracAccelerated
+    | `LwCooper finalize -> `LwCooper finalize
+    | `Lw -> `Lw
+  in
   let local_abs = local_abstraction_of_lira_model how solver man terms in
   let abstract =
     LocalGlobal.lift_dd_abstraction ~solver:(Some solver) ~bottom
@@ -2560,6 +2575,8 @@ let convex_hull how ?(man=(Polka.manager_alloc_loose ())) srk phi terms =
   match how with
   | `SubspaceCone -> abstract `SubspaceCone solver ~man terms
   | `SubspaceConeAccelerated -> abstract `SubspaceConeAccelerated solver ~man terms
+  | `SubspaceConePrecondAccelerate ->
+     abstract `SubspaceConePrecondAccelerate solver ~man terms
   | `Subspace -> abstract `Subspace solver ~man terms
   | `IntFrac -> abstract `IntFrac solver ~man terms
   | `IntFracAccelerated -> abstract `IntFracAccelerated solver ~man terms

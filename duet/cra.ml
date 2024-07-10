@@ -7,6 +7,7 @@ module RG = Interproc.RG
 module WG = WeightedGraph
 module TLLRF = TerminationLLRF
 module TDTA = TerminationDTA
+module TPRF = TerminationPRF
 module G = RG.G
 module Ctx = Syntax.MakeSimplifyingContext ()
 module Int = SrkUtil.Int
@@ -27,6 +28,8 @@ let termination_exp = ref true
 let termination_llrf = ref true
 let termination_dta = ref true
 let termination_phase_analysis = ref true
+let termination_prf = ref true
+let termination_plrf = ref true
 let precondition = ref false
 let termination_attractor = ref true
 let termination_prenex = ref true
@@ -227,14 +230,11 @@ let mk_mod_c99 left right =
     Ctx.mk_and [Ctx.mk_leq zero t
                ; Ctx.mk_not (Ctx.mk_lt t zero)]
   in
-  let m = Ctx.mk_mod left right in
   Ctx.mk_ite
     (pos left)
-    m
-    (Ctx.mk_ite
-       (pos right)
-       (Ctx.mk_sub m right)
-       (Ctx.mk_add [m; right]))
+    (Ctx.mk_mod left right)
+    (Ctx.mk_neg (Ctx.mk_mod (Ctx.mk_neg left) right))
+
 
 let int_binop op left right =
   match op with
@@ -346,44 +346,42 @@ and tr_bexpr bexpr =
         | Le -> Ctx.mk_leq x y
         | Eq ->
           begin
-            match rx, ry with
-            | (BinaryOp (a, Mod, b, _), Constant (CInt (k, _))) ->
-              (* a mod b = k <==> (a - k)/b is an integer (+ sign constraints) *)
-              let ta = tr_expr_val a in
-              let tb = tr_expr_val b in
-              let sign_constraint =
-                if k >= 0 then
-                  Syntax.mk_iff Ctx.context
-                    (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                    (Ctx.mk_leq (Ctx.mk_int 0) tb)
-                else
-                  Syntax.mk_iff Ctx.context
-                    (Ctx.mk_leq ta (Ctx.mk_int 0))
-                    (Ctx.mk_leq (Ctx.mk_int 0) tb)
-              in
-              (Ctx.mk_and
-                 [(Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
-                  |> Ctx.mk_is_int
-                 ; sign_constraint])
+            if Syntax.get_theory Ctx.context = `LIRR then
+              match rx, ry with
+              | (BinaryOp (a, Mod, b, _), Constant (CInt (k, _))) ->
+                (* a mod b = k <==> (a - k)/b is an integer (+ sign constraints) *)
+                let ta = tr_expr_val a in
+                let tb = tr_expr_val b in
+                let sign_constraint =
+                  (* C99: remainder has same sign as dividend *)
+                  if k = 0 then []
+                  else if k > 0 then [Ctx.mk_leq (Ctx.mk_int 0) ta]
+                  else [Ctx.mk_leq ta (Ctx.mk_int 0)]
+                in
+                (Ctx.mk_and
+                  (((Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
+                   |> Ctx.mk_is_int)
+                   :: sign_constraint))
             | _ ->
+              Ctx.mk_eq x y
+            else 
               Ctx.mk_eq x y
           end
         | Ne ->
           begin
+            if Syntax.get_theory Ctx.context = `LIRR then
             match rx, ry with
             | (BinaryOp (a, Mod, b, _), Constant (CInt (k, _))) ->
               (* a mod b != k <==> (a + r - k)/b is an integer for some 1 <= r
-                 <= |b|-1 or k has the wrong sign (positive when signs of a/b
-                 are the different, or negative when they are the same *)
+                 <= |b|-1 or k has the wrong sign (should be same as the sign
+                 of a) *)
               let ta = tr_expr_val a in
               let tb = tr_expr_val b in
               let r = nondet_const "rem" `TyInt in
               begin
                 if k >= 0 then
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq ta (Ctx.mk_int 0))
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq ta (Ctx.mk_int 0))
                     ; Ctx.mk_and
                         [ Ctx.mk_leq (Ctx.mk_int 0) r
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -393,9 +391,7 @@ and tr_bexpr bexpr =
                         ; Ctx.mk_is_int (Ctx.mk_div (Ctx.mk_sub ta r) tb)]]
                 else
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq (Ctx.mk_int 0) ta)
                     ; Ctx.mk_and
                         [ Ctx.mk_leq r (Ctx.mk_int 0)
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -416,6 +412,7 @@ and tr_bexpr bexpr =
 
                   Ctx.mk_or [Ctx.mk_lt x y; Ctx.mk_lt y x]
               end
+            else Ctx.mk_not (Ctx.mk_eq x y)
           end
       end
   in
@@ -876,7 +873,9 @@ let analyze file =
             Ctx.mk_and [K.guard path; Ctx.mk_not phi]
             |> SrkSimplify.simplify_terms srk
           in
-          logf "Path condition:@\n%a"
+          logf "Path condition to %s:%d:@\n%a"
+            loc.Cil.file
+            loc.Cil.line
             (Syntax.pp_smtlib2 Ctx.context) path_condition;
           dump_goal loc path_condition;
           if !monotone then
@@ -905,7 +904,11 @@ let analyze file =
 
 let preimage transition formula =
   let open Syntax in
-  let transition = K.linearize transition in
+  let transition = 
+    if get_theory srk = `LIRR then 
+      transition 
+    else K.linearize transition 
+  in
   let fresh_skolem =
     Memo.memo (fun sym ->
         let name = show_symbol srk sym in
@@ -961,100 +964,159 @@ let omega_algebra = function
      (** over-approximate possibly non-terminating conditions for a transition *)
      begin
        let open Syntax in
-       let tf =
-         TF.map_formula
-           (fun phi -> SrkSimplify.eliminate_floor srk (Nonlinear.linearize srk phi))
-           (K.to_transition_formula transition)
-       in
-       let nonterm tf =
-         let pre =
-           let fresh_skolem =
-             Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
-           in
-           let subst sym =
-             match V.of_symbol sym with
-             | Some _ -> mk_const srk sym
-             | None -> fresh_skolem sym
-           in
-           substitute_const srk subst (TF.formula tf)
-         in
-         let llrf, has_llrf =
-           if !termination_llrf then
-             if TLLRF.has_llrf srk tf then
-               [Syntax.mk_false srk], true
-             else if !termination_attractor
-                     && TLLRF.has_llrf srk (attractor_regions tf) then
-               [Syntax.mk_false srk], true
-             else
-               [pre], false
-           else
-             (* If LLRF is disabled, default to pre *)
-             [pre], false
-         in
-         let dta =
-           (* If LLRF succeeds, then we do not try dta *)
-           if (not has_llrf) && !termination_dta then
-             [mk_not srk (TDTA.mp srk tf)]
-           else []
-         in
-         let exp =
-           if (not has_llrf) && !termination_exp then
-             let mp =
-               Syntax.mk_not srk
-                 (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
-             in
-             let dta_entails_mp =
-               (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
-               Syntax.mk_forall_consts
-                 srk
-                 (fun _ -> false)
-                 (Syntax.mk_if srk (mk_and srk dta) mp)
-             in
-             match Quantifier.simsat srk dta_entails_mp with
-             | `Sat -> []
-             | _ -> [mp]
-           else []
-         in
-         let result =
-           Syntax.mk_and srk (llrf@dta@exp)
-         in
-         let file = get_gfile () in
-         if !dump_goals
-            && result <> (Syntax.mk_true srk)
-            && result <> (Syntax.mk_false srk) then begin
-             let filename =
-               Format.sprintf "%s-%d-term.smt2"
-                 (Filename.chop_extension (Filename.basename file.filename))
-                 (!nb_goals)
+       if get_theory srk = `LIRR then begin
+          let tf = TF.map_formula 
+            (Syntax.eliminate_floor_mod_div srk) 
+            (K.to_transition_formula transition) 
           in
-          let chan = Stdlib.open_out filename in
-          let formatter = Format.formatter_of_out_channel chan in
-          logf ~level:`always "Writing goal formula to %s" filename;
-          Syntax.pp_smtlib2 srk formatter result;
-          Format.pp_print_newline formatter ();
-          Stdlib.close_out chan;
-          incr nb_goals
-           end;
-         match Quantifier.simsat srk result with
-         | `Unsat -> mk_false srk
-         | _ -> result
-       in
-       if !termination_phase_analysis then begin
-           let predicates =
-             (* Use variable directions & signs as candidate invariants *)
-             List.map (fun (x,x') ->
-                 let x = mk_const srk x in
-                 let x' = mk_const srk x' in
-                 [mk_lt srk x x';
-                  mk_lt srk x' x;
+          let nonterm tf =
+            let pre =
+              let fresh_skolem =
+                Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+              in
+              let subst sym =
+                match V.of_symbol sym with
+                | Some _ -> mk_const srk sym
+                | None -> fresh_skolem sym
+              in
+              substitute_const srk subst (TF.formula tf)
+            in
+            let prf, has_prf =
+              if !termination_prf then
+                if TPRF.has_prf srk tf then 
+                  (logf ~level:`always "has prf";
+                  [Syntax.mk_false srk], true)
+                else
+                  [pre], false
+              else
+                  [pre], false   
+            in 
+            let plrf, _ =
+              if (not has_prf) && !termination_plrf then
+                if TPRF.has_plrf srk tf then
+                  (logf ~level:`always "has plrf";
+                  [Syntax.mk_false srk], true)
+                else
+                  [pre], false
+              else
+                  [pre], false
+            in 
+            let result =
+              Syntax.mk_and srk (prf@plrf)
+            in
+            result
+          in
+          if !termination_phase_analysis then begin
+            let predicates =
+              (* Use variable directions & signs as candidate invariants *)
+              List.map (fun (x,x') ->
+                  let x = mk_const srk x in
+                  let x' = mk_const srk x' in
+                  [mk_leq srk (mk_add srk [x; (mk_one srk)]) x';
+                  mk_leq srk (mk_add srk [x'; (mk_one srk)]) x;
                   mk_eq srk x x'])
-               (TF.symbols tf)
-             |> List.concat
-           in
-           Iteration.phase_mp srk predicates tf nonterm
-         end else
-         nonterm tf
-     end
+                (TF.symbols tf)
+              |> List.concat
+            in
+            Iteration.phase_mp srk predicates tf nonterm
+          end else
+          nonterm tf
+       end
+       else
+        let tf =
+          TF.map_formula
+            (fun phi -> SrkSimplify.eliminate_floor srk (Nonlinear.linearize srk phi))
+            (K.to_transition_formula transition)
+        in
+        let nonterm tf =
+          let pre =
+            let fresh_skolem =
+              Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+            in
+            let subst sym =
+              match V.of_symbol sym with
+              | Some _ -> mk_const srk sym
+              | None -> fresh_skolem sym
+            in
+            substitute_const srk subst (TF.formula tf)
+          in
+          let llrf, has_llrf =
+            if !termination_llrf then
+              if TLLRF.has_llrf srk tf then
+                [Syntax.mk_false srk], true
+              else if !termination_attractor
+                      && TLLRF.has_llrf srk (attractor_regions tf) then
+                [Syntax.mk_false srk], true
+              else
+                [pre], false
+            else
+              (* If LLRF is disabled, default to pre *)
+              [pre], false
+          in
+          let dta =
+            (* If LLRF succeeds, then we do not try dta *)
+            if (not has_llrf) && !termination_dta then
+              [mk_not srk (TDTA.mp srk tf)]
+            else []
+          in
+          let exp =
+            if (not has_llrf) && !termination_exp then
+              let mp =
+                Syntax.mk_not srk
+                  (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
+              in
+              let dta_entails_mp =
+                (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
+                Syntax.mk_forall_consts
+                  srk
+                  (fun _ -> false)
+                  (Syntax.mk_if srk (mk_and srk dta) mp)
+              in
+              match Quantifier.simsat srk dta_entails_mp with
+              | `Sat -> []
+              | _ -> [mp]
+            else []
+          in
+          let result =
+            Syntax.mk_and srk (llrf@dta@exp)
+          in
+          let file = get_gfile () in
+          if !dump_goals
+              && result <> (Syntax.mk_true srk)
+              && result <> (Syntax.mk_false srk) then begin
+              let filename =
+                Format.sprintf "%s-%d-term.smt2"
+                  (Filename.chop_extension (Filename.basename file.filename))
+                  (!nb_goals)
+            in
+            let chan = Stdlib.open_out filename in
+            let formatter = Format.formatter_of_out_channel chan in
+            logf ~level:`always "Writing goal formula to %s" filename;
+            Syntax.pp_smtlib2 srk formatter result;
+            Format.pp_print_newline formatter ();
+            Stdlib.close_out chan;
+            incr nb_goals
+            end;
+          match Quantifier.simsat srk result with
+          | `Unsat -> mk_false srk
+          | _ -> result
+        in
+        if !termination_phase_analysis then begin
+            let predicates =
+              (* Use variable directions & signs as candidate invariants *)
+              List.map (fun (x,x') ->
+                  let x = mk_const srk x in
+                  let x' = mk_const srk x' in
+                  [mk_lt srk x x';
+                    mk_lt srk x' x;
+                    mk_eq srk x x'])
+                (TF.symbols tf)
+              |> List.concat
+            in
+            Iteration.phase_mp srk predicates tf nonterm
+          end else
+          nonterm tf
+      end
   | `Add (cond1, cond2) ->
      (** combining possibly non-terminating conditions for multiple paths *)
      Syntax.mk_or srk [cond1; cond2]
@@ -1156,25 +1218,31 @@ let prove_termination_main file =
           Format.pp_print_newline formatter ();
           Stdlib.close_out chan
         end;
-      match Quantifier.simsat srk omega_paths_sum with
-      | `Sat ->
-         Format.printf "Cannot prove that program always terminates\n";
-         if !precondition then
-           (* TODO: need to eliminate universal quantifiers first quantifiers first! *)
-           let simplified =
-             omega_paths_sum
-             |> Nonlinear.linearize srk
-             |> Quantifier.mbp srk (fun sym ->
-                    match V.of_symbol sym with
-                    | Some x -> V.is_global x
-                    | _ -> false)
-             |> Syntax.mk_not srk
-           in
-           Format.printf "Sufficient terminating conditions:\n%a\n"
-             (Syntax.Formula.pp srk)
-             simplified
-      | `Unsat -> Format.printf "Program always terminates\n"
-      | `Unknown -> Format.printf "Unknown analysis result\n"
+      if Syntax.get_theory srk = `LIRR then
+        match Lirr.is_sat srk omega_paths_sum with
+        | `Sat -> Format.printf "Cannot prove that program always terminates\n"
+        | `Unsat -> Format.printf "Program always terminates\n"
+        | `Unknown -> Format.printf "Unknown analysis result\n"
+      else  
+        match Quantifier.simsat srk omega_paths_sum with
+        | `Sat ->
+          Format.printf "Cannot prove that program always terminates\n";
+          if !precondition then
+            (* TODO: need to eliminate universal quantifiers first quantifiers first! *)
+            let simplified =
+              omega_paths_sum
+              |> Nonlinear.linearize srk
+              |> Quantifier.mbp srk (fun sym ->
+                      match V.of_symbol sym with
+                      | Some x -> V.is_global x
+                      | _ -> false)
+              |> Syntax.mk_not srk
+            in
+            Format.printf "Sufficient terminating conditions:\n%a\n"
+              (Syntax.Formula.pp srk)
+              simplified
+        | `Unsat -> Format.printf "Program always terminates\n"
+        | `Unknown -> Format.printf "Unknown analysis result\n"
     end
   | _ -> failwith "Cannot find main function within the C source file"
 
@@ -1367,9 +1435,22 @@ let _ =
       Arg.Clear termination_prenex,
       " Disable prenex conversion");
   CmdLine.register_config
+     ("-termination-no-prf",
+      Arg.Clear termination_prf,
+      " Disable LIRR polynomial ranking function based termination analysis");
+  CmdLine.register_config
+     ("-termination-no-plrf",
+      Arg.Clear termination_plrf,
+      " Disable LIRR polynomial lexicographic ranking function based termination analysis");
+  CmdLine.register_config
     ("-precondition",
      Arg.Clear precondition,
      " Synthesize mortal preconditions");
+  CmdLine.register_config
+    ("-no-fgb",
+     Arg.Clear Polynomial.FGb.use_fgb,
+     " Do not use fgb in any Grobner basis computation"
+    );
   CmdLine.register_config
     ("-theory",
      Arg.String (function

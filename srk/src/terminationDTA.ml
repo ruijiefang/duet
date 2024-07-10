@@ -286,10 +286,12 @@ let mp srk tf =
      (* exists x,x'. F(x,x') /\ GZz = Sx *)
      let guard =
        mk_and srk (TF.formula tf::sim_constraints)
+       |> Syntax.eliminate_floor_mod_div srk
        |> Quantifier.mbp srk (fun s -> Symbol.Set.mem s gz_symbols_set)
        |> SrkSimplify.simplify_dda srk
        |> SrkSimplify.eliminate_floor srk
      in
+     logf "DTA guard: %a" (Formula.pp srk) guard;
      let tr_z_exp = BatOption.get (ExpPolynomial.exponentiate_rational tr_z) in
      let term_of_dim i =
        if i == Linear.const_dim then mk_one srk
@@ -325,6 +327,8 @@ let mp srk tf =
        | `Ite _ -> failwith "should not see ite in the TF"
      in
      let xseq = Formula.eval srk algebra guard in
-     mk_and srk (sim_constraints@(Periodic.period xseq))
+     let f = mk_and srk (sim_constraints@(Periodic.period xseq)) in
+     logf "DTA mp: %a" (Formula.pp srk) f;
+     f
      |> Quantifier.mbp srk (fun s -> not (Symbol.Set.mem s gz_symbols_set))
      |> mk_not srk

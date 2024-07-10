@@ -72,6 +72,14 @@ module Make
       only by that transition. *)
   val remove_temporaries : t -> t
 
+
+  (** Set procedure summary; delegates call to WG.RecGraph.set_summary *)
+  val set_summary : query -> (vertex * vertex) -> transition -> unit 
+
+  (** Get procedure summary; delegates call to WG.RecGraph.get_summary *)
+  val get_summary : query -> (vertex * vertex) -> transition
+
+
   (** Compute interval invariants for each loop header of a transition system.
       The invariant computed for a loop is defined only over the variables
       read or written to by the loop. *)

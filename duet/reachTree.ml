@@ -1,8 +1,6 @@
-open Core
 (** reachability tree module *)
 
 open Srk
-open CfgIr
 open BatPervasives
 open Syntax
 module RG = Interproc.RG

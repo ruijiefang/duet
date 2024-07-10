@@ -149,6 +149,18 @@ module Make
       (add_symbols (symbols (T.guard tr)) VarSet.empty)
       (T.transform tr)
 
+
+    let set_summary q (u, v) summary = 
+      WG.RecGraph.set_summary q (u, v) summary
+  
+    let get_summary q (u, v) = 
+      WG.RecGraph.get_summary q (u, v)
+    
+    let inter_path_summary = WG.RecGraph.inter_path_summary
+  
+    let intra_path_summary = WG.RecGraph.intra_path_summary 
+    
+
   (* Variables whose abstract values may change as the result of a
      transition *)
   let abstract_defs tr =

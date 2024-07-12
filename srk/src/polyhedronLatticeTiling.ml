@@ -6,7 +6,8 @@ module V = Linear.QQVector
 
 include Log.Make (struct let name = "polyhedronLatticeTiling" end)
 
-let () = my_verbosity_level := `info
+(* Some small constant *)
+let _epsilon = QQ.of_frac 1 10
 
 module LocalAbstraction : sig
 
@@ -873,6 +874,19 @@ end = struct
          (tru, expansion)
          atoms
 
+  let formula_of_plt srk term_of_dim plt =
+    let phis_p =
+      BatEnum.map (formula_p srk term_of_dim) (P.enum_constraints plt.poly_part)
+      |> BatList.of_enum
+    in
+    let phis_l =
+      List.map (formula_l srk term_of_dim) (L.basis plt.lattice_part)
+    in
+    let phis_t =
+      List.map (formula_t srk term_of_dim) (L.basis plt.tiling_part)
+    in
+    mk_and srk (phis_p @ phis_l @ phis_t)
+
   let abstract_to_plt
         expansion
         srk
@@ -946,19 +960,6 @@ end = struct
       (plt, expanded_univ_translation)
     in
     LocalAbstraction.{ abstract }
-
-  let formula_of_plt srk term_of_dim plt =
-    let phis_p =
-      BatEnum.map (formula_p srk term_of_dim) (P.enum_constraints plt.poly_part)
-      |> BatList.of_enum
-    in
-    let phis_l =
-      List.map (formula_l srk term_of_dim) (L.basis plt.lattice_part)
-    in
-    let phis_t =
-      List.map (formula_t srk term_of_dim) (L.basis plt.tiling_part)
-    in
-    mk_and srk (phis_p @ phis_l @ phis_t)
 
   let int_frac_layout ~num_terms =
     let start_of_term_int_frac =
@@ -1942,12 +1943,33 @@ end = struct
         l_constraints;
       let polyhedron_abstraction = abstract_lw closed_p in
 
-      let _plt_underapprox =
+      let _underapprox_plt =
         LocalAbstraction.apply
           (LwCooper.abstract_lw_cooper
              ~elim:(fun dim -> dim > max_dim_in_projected))
           m
           plt
+      in
+      (* Strengthen strict inequalities to strict ones *)
+      let _underapprox_closed_polyhedron =
+        P.enum_constraints (Plt.poly_part _underapprox_plt)
+        |> BatEnum.map (fun (kind, v) ->
+            match kind with
+            | `Zero | `Nonneg  -> (kind, v)
+            | `Pos ->
+              let m_val = Linear.evaluate_affine m v in
+              let epsilon =
+                if QQ.lt m_val _epsilon then
+                  (* test point m does not satisfy t - epsilon >= 0 -- need to
+                     choose a smaller value for epsilon than the default. *)
+                  QQ.nudge_down ~accuracy:2 m_val
+                else
+                  _epsilon
+              in
+              assert (QQ.lt QQ.zero epsilon);
+              (* t > 0 --> t - epsilon >= 0 *)
+              (`Nonneg, V.add_term (QQ.negate epsilon) Linear.const_dim v))
+        |> P.of_constraints
       in
       let subspace_constraints =
         List.map
@@ -1972,16 +1994,17 @@ end = struct
         match subspace_constraints with
         | [] -> polyhedron_abstraction
         | _ ->
-           BatEnum.append (BatList.enum subspace_constraints)
-             (P.enum_constraints closed_p)
-           |> P.of_constraints
-           |> abstract_lw
+          BatEnum.append (BatList.enum subspace_constraints)
+            (P.enum_constraints closed_p)
+          |> P.of_constraints
+          |> abstract_lw
       in
+
       let subspace_abstraction =
         let fns =
           let covectors =
-            (L.basis (Plt.lattice_part _plt_underapprox))
-            @(L.basis (Plt.tiling_part _plt_underapprox))
+            (L.basis (Plt.lattice_part _underapprox_plt))
+            @(L.basis (Plt.tiling_part _underapprox_plt))
           in
           (* Taking the dot-product with the lattice / tiling constraints
              effectively homogenizes them, since the coefficient
@@ -1995,7 +2018,7 @@ end = struct
                 let int_v =
                   P.close_lattice_point
                     fns
-                    (Plt.poly_part _plt_underapprox)
+                    _underapprox_closed_polyhedron
                     ~rational:v
                     ~integer:m_vec
                     (max_dim_in_projected + 1)
@@ -2004,7 +2027,7 @@ end = struct
               | _ -> None)
             (DD.enum_generators (P.dd_of
                                    (max_dim_in_projected + 1)
-                                   (Plt.poly_part _plt_underapprox)))
+                                   _underapprox_closed_polyhedron))
         in
         DD.join
           subspace_abstraction

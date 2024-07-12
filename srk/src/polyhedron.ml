@@ -739,7 +739,14 @@ let _close_point scale polyhedron ~rational ~integer n =
 let close_integral_point =
   _close_point (fun v -> V.scalar_mul (QQ.of_zz (V.common_denominator v)) v)
 
-let close_lattice_point fns =
-  _close_point (fun v ->
-    let gcd = List.fold_left (fun z f -> QQ.gcd (f v) z) QQ.zero fns in
-    V.scalar_mul (QQ.inverse gcd) v)
+let close_lattice_point = function
+  | [] -> (fun _ ~rational ~integer:_ _ -> rational)
+  | fns ->
+    _close_point (fun v ->
+        let gcd = List.fold_left (fun z f -> QQ.gcd (f v) z) QQ.zero fns in
+        if QQ.equal gcd QQ.zero then
+          (* v is orthogonal to all functions constrained to be integral -- no
+             need to scale. *)
+          v
+        else V.scalar_mul (QQ.inverse gcd) v)
+

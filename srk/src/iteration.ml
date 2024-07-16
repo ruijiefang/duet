@@ -53,8 +53,10 @@ end
 
 module LIRRGuard = struct
   type 'a t =
-    { precondition : PolynomialCone.t;
-      postcondition : PolynomialCone.t }
+    { precondition : PolynomialCone.t
+    ; postcondition : PolynomialCone.t
+    ; pre_simulation : ('a arith_term) array
+    ; post_simulation : ('a arith_term) array }
 
   let pp _ _ _ _ =
     ()
@@ -63,45 +65,56 @@ module LIRRGuard = struct
     (*   PolynomialCone.pp iter.postcondition *)
 
   let abstract srk tf =
-    let post_symbols = TF.post_symbols (TF.symbols tf) in
-    let pre_symbols = TF.pre_symbols (TF.symbols tf) in
-    let precondition =
-      let exists x =
-        TF.exists tf x && not (Symbol.Set.mem x post_symbols)
-      in
-      Lirr.find_consequences srk (mk_exists_consts srk exists (TF.formula tf))
+    let consts = TF.symbolic_constants tf in
+    let solver = Abstract.Solver.make srk (TF.formula tf) in
+    let pre_simulation =
+      Symbol.Set.union consts (TF.pre_symbols (TF.symbols tf))
+      |> Symbol.Set.elements
+      |> List.map (mk_const srk)
+      |> Array.of_list
     in
-    let postcondition =
-      let exists x =
-        TF.exists tf x && not (Symbol.Set.mem x pre_symbols)
-      in
-      Lirr.find_consequences srk (mk_exists_consts srk exists (TF.formula tf))
+    let post_simulation =
+      Symbol.Set.union consts (TF.post_symbols (TF.symbols tf))
+      |> Symbol.Set.elements
+      |> List.map (mk_const srk)
+      |> Array.of_list
     in
+    let precondition = ConsequenceCone.abstract solver pre_simulation in
+    let postcondition = ConsequenceCone.abstract solver post_simulation in
     let pp_dim = (fun formatter i ->
       try Format.fprintf formatter "%a" (pp_symbol srk) (symbol_of_int i)
       with _ -> Format.fprintf formatter "1")
   in
   logf "precondition: %a" (PolynomialCone.pp pp_dim) precondition;
   logf "postcondition: %a" (PolynomialCone.pp pp_dim) postcondition;
-  { precondition; postcondition }
+  { precondition; postcondition; pre_simulation; post_simulation }
 
   let exp srk tr_symbols loop_counter guard =
-    let term_of_dim dim =
-      mk_const srk (symbol_of_int dim)
+    let pre =
+      PolynomialCone.to_formula srk (Array.get guard.pre_simulation) guard.precondition
     in
-    mk_or srk [mk_and srk [mk_eq srk loop_counter (mk_real srk QQ.zero);
-                           TF.formula (TF.identity srk tr_symbols)];
-               mk_and srk [mk_leq srk (mk_real srk QQ.one) loop_counter;
-                           PolynomialCone.to_formula srk term_of_dim guard.precondition;
-                           PolynomialCone.to_formula srk term_of_dim guard.postcondition]]
+    let post =
+      PolynomialCone.to_formula srk (Array.get guard.post_simulation) guard.postcondition
+    in
+    mk_or srk [ mk_and srk [ mk_eq srk loop_counter (mk_real srk QQ.zero)
+                           ; TF.formula (TF.identity srk tr_symbols) ]
+              ; mk_and srk [ mk_leq srk (mk_real srk QQ.one) loop_counter
+                           ; pre
+                           ; post ] ]
 
   let equal _ _ iter iter' =
+    assert (iter.pre_simulation = iter'.pre_simulation);
+    assert (iter.post_simulation = iter'.post_simulation);
     PolynomialCone.equal iter.precondition iter'.precondition
     && PolynomialCone.equal iter.postcondition iter'.postcondition
 
   let join _ _ iter iter' =
-    { precondition = PolynomialCone.intersection iter.precondition iter'.precondition;
-      postcondition = PolynomialCone.intersection iter.postcondition iter'.postcondition }
+    assert (iter.pre_simulation = iter'.pre_simulation);
+    assert (iter.post_simulation = iter'.post_simulation);
+    { precondition = PolynomialCone.intersection iter.precondition iter'.precondition
+    ; postcondition = PolynomialCone.intersection iter.postcondition iter'.postcondition
+    ; pre_simulation = iter.pre_simulation
+    ; post_simulation = iter.post_simulation }
 
   let widen _ _ _ _ =
     failwith "Polynomial cone does not support widening."
@@ -263,17 +276,16 @@ module LinearGuard = struct
     let pre_symbols = TF.pre_symbols tr_symbols in
     let post_symbols = TF.post_symbols tr_symbols in
     let lin_phi = Nonlinear.linearize srk phi in
+    let solver = Abstract.Solver.make srk lin_phi in
     let precondition =
-      Quantifier.mbp
-        srk
+      Quantifier.exists_elim
+        solver
         (fun x -> exists x && not (Symbol.Set.mem x post_symbols))
-        lin_phi
     in
     let postcondition =
-      Quantifier.mbp
-        srk
+      Quantifier.exists_elim
+        solver
         (fun x -> exists x && not (Symbol.Set.mem x pre_symbols))
-        lin_phi
     in
     { precondition; postcondition }
 
@@ -341,6 +353,7 @@ module GuardedTranslation = struct
           zz_symbols)
       |> Array.of_list
     in
+    let solver = Abstract.Solver.make srk (TF.formula tf) in
     let (simulation, translation) =
       let pre_symbols =
         List.map (fun (s,_) -> mk_const srk s) zz_symbols
@@ -359,7 +372,7 @@ module GuardedTranslation = struct
           (Linear.term_of_vec srk (fun i -> pre_symbols.(i-1)) functional::sim,
            const::tr))
         ([], [])
-        (Abstract.vanishing_space srk (TF.formula tf) delta)
+        (Abstract.LinearSpan.abstract solver delta)
     in
     (* exists x,x'. F(x,x') /\ Sx = y *)
     let guard =
@@ -375,11 +388,16 @@ module GuardedTranslation = struct
       let sx_eq_y =
         List.map2 (fun s t -> mk_eq srk (mk_const srk s) t) fresh_symbols simulation
       in
-      Quantifier.mbp
-        srk
-        (fun x -> Symbol.Map.mem x sym_to_var)
-        (mk_and srk ((TF.formula tf)::sx_eq_y))
-      |> substitute_map srk sym_to_var
+      Abstract.Solver.push solver;
+      Abstract.Solver.add solver sx_eq_y;
+      let result =
+        Quantifier.exists_elim
+          solver
+          (fun x -> Symbol.Map.mem x sym_to_var)
+        |> substitute_map srk sym_to_var
+      in
+      Abstract.Solver.pop solver;
+      result
     in
     { simulation = Array.of_list simulation;
       translation = Array.of_list translation;

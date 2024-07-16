@@ -94,6 +94,10 @@ val try_fourier_motzkin : 'a CoordinateSystem.t -> (symbol -> bool) -> t -> t
     involved in a constraint in [p].*)
 val dual_cone : int -> t -> t
 
+(** [substitute f p] computes the polyhedron that results from applying the
+   substitution [f] to the constraints defining [p]. *)
+val substitute : (int -> V.t) -> t -> t
+
 (** [conical_hull n p] takes a natural [n] and a polyhedron [p] in
     QQ^n and computes the smallest cone that contains [p], represented
     as a polyhedron.  All half-spaces making up the conical hull are

@@ -153,59 +153,80 @@ module WedgeGuard = struct
 end
 
 module PolyhedronGuard = struct
-  type 'a polyhedron = ('a, Polka.strict Polka.t) SrkApron.property
+  type 'a polyhedron = DD.closed DD.t
   type 'a t =
-    { precondition : 'a polyhedron;
-      postcondition : 'a polyhedron }
+    { precondition : 'a polyhedron
+    ; postcondition : 'a polyhedron
+    ; pre_simulation : ('a arith_term) array
+    ; post_simulation : ('a arith_term) array }
 
-  let pp _ _ formatter iter =
+  let pp srk _ formatter iter =
     Format.fprintf formatter "pre:@;  @[<v 0>%a@]@;post:@;  @[<v 0>%a@]"
-      SrkApron.pp iter.precondition
-      SrkApron.pp iter.postcondition
+    (DD.pp (fun fmt i -> ArithTerm.pp srk fmt iter.pre_simulation.(i))) iter.precondition
+    (DD.pp (fun fmt i -> ArithTerm.pp srk fmt iter.post_simulation.(i))) iter.postcondition
 
   let abstract srk tf =
     let phi = Nonlinear.linearize srk (TF.formula tf) in
-    let phi =
-      rewrite srk ~down:(pos_rewriter srk) phi
+    let phi = rewrite srk ~down:(pos_rewriter srk) phi in
+    let consts = TF.symbolic_constants tf in
+    let pre_simulation =
+      Symbol.Set.union consts (TF.pre_symbols (TF.symbols tf))
+      |> Symbol.Set.elements
+      |> List.map (mk_const srk)
+      |> Array.of_list
     in
-    let post_symbols = TF.post_symbols (TF.symbols tf) in
-    let pre_symbols = TF.pre_symbols (TF.symbols tf) in
-    let man = Polka.manager_alloc_strict () in
-    let precondition =
-      let exists x =
-        TF.exists tf x && not (Symbol.Set.mem x post_symbols)
-      in
-      Abstract.abstract ~exists srk man phi
+    let post_simulation =
+      Symbol.Set.union consts (TF.post_symbols (TF.symbols tf))
+      |> Symbol.Set.elements
+      |> List.map (mk_const srk)
+      |> Array.of_list
     in
-    let postcondition =
-      let exists x =
-        TF.exists tf x && not (Symbol.Set.mem x pre_symbols)
-      in
-      Abstract.abstract ~exists srk man phi
-    in
-    { precondition; postcondition }
+    let solver = Abstract.Solver.make srk phi in
+    let precondition = ConvexHull.abstract solver pre_simulation in
+    let postcondition =  ConvexHull.abstract solver post_simulation in
+    { precondition; postcondition; pre_simulation; post_simulation }
+
+
+  let precondition srk iter =
+    DD.enum_constraints iter.precondition
+    /@ Polyhedron.formula_of_constraint srk (Array.get iter.pre_simulation)
+    |> BatList.of_enum
+    |> mk_and srk
+
+  let postcondition srk iter =
+    DD.enum_constraints iter.postcondition
+    /@ Polyhedron.formula_of_constraint srk (Array.get iter.post_simulation)
+    |> BatList.of_enum
+    |> mk_and srk
 
   let exp srk tr_symbols loop_counter guard =
     mk_or srk [mk_and srk [mk_eq srk loop_counter (mk_real srk QQ.zero);
                            TF.formula (TF.identity srk tr_symbols)];
                mk_and srk [mk_leq srk (mk_real srk QQ.one) loop_counter;
-                           SrkApron.formula_of_property guard.precondition;
-                           SrkApron.formula_of_property guard.postcondition]]
+                           precondition srk guard;
+                           postcondition srk guard]]
 
   let equal _ _ iter iter' =
-    SrkApron.equal iter.precondition iter'.precondition
-    && SrkApron.equal iter.postcondition iter'.postcondition
+    assert (iter.pre_simulation = iter'.pre_simulation);
+    assert (iter.post_simulation = iter'.post_simulation);
+    DD.equal iter.precondition iter'.precondition
+    && DD.equal iter.postcondition iter'.postcondition
 
   let join _ _ iter iter' =
-    { precondition = SrkApron.join iter.precondition iter'.precondition;
-      postcondition = SrkApron.join iter.postcondition iter'.postcondition }
+    assert (iter.pre_simulation = iter'.pre_simulation);
+    assert (iter.post_simulation = iter'.post_simulation);
+    { precondition = DD.join iter.precondition iter'.precondition
+    ; postcondition = DD.join iter.postcondition iter'.postcondition
+    ; pre_simulation = iter.pre_simulation
+    ; post_simulation = iter.post_simulation }
 
   let widen _ _ iter iter' =
-    { precondition = SrkApron.widen iter.precondition iter'.precondition;
-      postcondition = SrkApron.widen iter.postcondition iter'.postcondition }
-
-  let precondition guard = guard.precondition
-  let postcondition guard = guard.postcondition
+    assert (iter.pre_simulation = iter'.pre_simulation);
+    assert (iter.post_simulation = iter'.post_simulation);
+    { precondition = DD.widen iter.precondition iter'.precondition
+    ; postcondition = DD.widen iter.postcondition iter'.postcondition
+    ; pre_simulation = iter.pre_simulation
+    ; post_simulation = iter.post_simulation }
 end
 
 module LinearGuard = struct

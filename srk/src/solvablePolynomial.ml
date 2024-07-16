@@ -1492,8 +1492,8 @@ module PresburgerGuard = struct
 
   let exp srk tr_symbols loop_counter (sp, guard) =
     let module G = Iteration.PolyhedronGuard in
-    let precondition = SrkApron.formula_of_property (G.precondition guard) in
-    let postcondition = SrkApron.formula_of_property (G.postcondition guard) in
+    let precondition = G.precondition srk guard in
+    let postcondition = G.postcondition srk guard in
     let pre_symbols = (* + symbolic constants *)
       Symbol.Set.union (symbols precondition) (TF.pre_symbols tr_symbols)
     in

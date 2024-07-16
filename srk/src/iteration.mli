@@ -41,8 +41,8 @@ module WedgeGuard : PreDomainWedgeIter
 
 module PolyhedronGuard : sig
   include PreDomainIter
-  val precondition : 'a t -> ('a, Polka.strict Polka.t) SrkApron.property
-  val postcondition : 'a t -> ('a, Polka.strict Polka.t) SrkApron.property
+  val precondition : 'a context -> 'a t -> 'a Formula.t
+  val postcondition : 'a context -> 'a t -> 'a Formula.t
 end
 module LinearGuard : PreDomainIter
 

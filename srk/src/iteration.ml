@@ -8,6 +8,63 @@ module CS = CoordinateSystem
 module TF = TransitionFormula
 module WG = WeightedGraph
 
+module Solver = struct
+
+  type 'a t =
+    { solver : 'a Abstract.Solver.t
+    ; symbols : (symbol * symbol) list
+    ; constants : Symbol.Set.t }
+
+  let preprocess srk = function
+    | `LIRR -> Syntax.eliminate_floor_mod_div srk
+    | `LIRA -> rewrite srk ~down:(pos_rewriter srk) % (Nonlinear.linearize srk)
+
+  let make srk ?(theory=get_theory srk) tf =
+    let phi = preprocess srk theory (TF.formula tf) in
+    { solver = Abstract.Solver.make srk ~theory phi
+    ; symbols = TF.symbols tf
+    ; constants = TF.symbolic_constants tf }
+
+  let get_formula s = Abstract.Solver.get_formula s.solver
+
+  let get_theory s = Abstract.Solver.get_theory s.solver
+
+  let get_abstract_solver s = s.solver
+
+  let get_context s = Abstract.Solver.get_context s.solver
+
+  let get_symbols s = s.symbols
+
+  let get_constants s = s.constants
+
+  let get_transition_formula s =
+    let all_symbols =
+      List.fold_left
+        (fun set (s,s') -> Symbol.Set.add s (Symbol.Set.add s' set))
+        s.constants
+        s.symbols
+    in
+    TransitionFormula.make
+      ~exists:(fun s -> Symbol.Set.mem s all_symbols)
+      (get_formula s)
+      s.symbols
+
+  let push s = Abstract.Solver.push s.solver
+
+  let pop s = Abstract.Solver.pop s.solver
+
+  let add s formulas =
+    Abstract.Solver.add
+      s.solver
+      (List.map (preprocess (get_context s) (get_theory s)) formulas)
+
+  let check s = Abstract.Solver.check s.solver
+
+  let get_model s = Abstract.Solver.get_model s.solver
+
+  let abstract s = Abstract.Solver.abstract s.solver
+end
+
 module type PreDomain = sig
   type 'a t
   val pp : 'a context -> (symbol * symbol) list -> Format.formatter -> 'a t -> unit
@@ -1089,17 +1146,7 @@ let phase_graph srk tf candidates algebra =
   done;
   !wg
 
-let phase_mp srk candidate_predicates tf nonterm =
-  let star tf =
-      let module E = (val if get_theory srk = `LIRR then 
-        (module LIRR : PreDomain) 
-      else (module LossyTranslation))
-      in 
-      let k = mk_symbol srk `TyInt in
-      let exists x = x != k && (TF.exists tf) x in
-      TF.make ~exists
-        (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf)) (TF.symbols tf)
-  in
+let phase_mp srk candidate_predicates star nonterm tf =
   let algebra = tf_algebra srk (TF.symbols tf) star in
   let wg = phase_graph srk tf candidate_predicates algebra in
   (* node (-1) is virtual entry.  Add edges to all isolated vertices

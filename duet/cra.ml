@@ -927,195 +927,98 @@ let preimage transition formula =
               substitute_const srk subst formula]
 
 (* Attractor region analysis *)
-let attractor_regions tf =
+let attractor_regions solver =
   let open Syntax in
-  let formula = TF.formula tf in
-  let attractors =
-    BatList.fold_left (fun xs (x, x') ->
-        let (x, x') = mk_const srk x, mk_const srk x' in
-        let lo =
-          let nonincreasing = mk_and srk [formula; mk_leq srk x' x] in
-          match SrkZ3.optimize_box srk (mk_and srk [formula; nonincreasing]) [x'] with
-          | `Sat [ivl] ->
-             (match Interval.lower ivl with
-              | Some lo -> [mk_leq srk (mk_real srk lo) x]
-              | None -> [])
-          | _ -> []
-        in
-        let hi =
-          let nondecreasing = mk_and srk [formula; mk_leq srk x x'] in
-          match SrkZ3.optimize_box srk (mk_and srk [formula; nondecreasing]) [x'] with
-          | `Sat [ivl] ->
-             (match Interval.upper ivl with
-              | Some hi -> [mk_leq srk x (mk_real srk hi)]
-              | None -> [])
-          | _ -> []
-        in
-        (lo@hi@xs))
-      []
-      (TF.symbols tf)
-  in
-  TF.map_formula (fun _ -> mk_and srk (formula::attractors)) tf
+  let formula = Iteration.Solver.get_formula solver in
+  BatList.fold_left (fun xs (x, x') ->
+      let (x, x') = mk_const srk x, mk_const srk x' in
+      let lo =
+        let nonincreasing = mk_and srk [formula; mk_leq srk x' x] in
+        match SrkZ3.optimize_box srk (mk_and srk [formula; nonincreasing]) [x'] with
+        | `Sat [ivl] ->
+          (match Interval.lower ivl with
+           | Some lo -> [mk_leq srk (mk_real srk lo) x]
+           | None -> [])
+        | _ -> []
+      in
+      let hi =
+        let nondecreasing = mk_and srk [formula; mk_leq srk x x'] in
+        match SrkZ3.optimize_box srk (mk_and srk [formula; nondecreasing]) [x'] with
+        | `Sat [ivl] ->
+          (match Interval.upper ivl with
+           | Some hi -> [mk_leq srk x (mk_real srk hi)]
+           | None -> [])
+        | _ -> []
+      in
+      (lo@hi@xs))
+    []
+    (Iteration.Solver.get_symbols solver)
 
-
+(* cohencu4,6, dijkstra1, egcd, fermat1 *)
 let omega_algebra = function
   | `Omega transition ->
      (** over-approximate possibly non-terminating conditions for a transition *)
      begin
        let open Syntax in
-       if get_theory srk = `LIRR then begin
-          let tf = TF.map_formula 
-            (Syntax.eliminate_floor_mod_div srk) 
-            (K.to_transition_formula transition) 
-          in
-          let nonterm tf =
-            let pre =
-              let fresh_skolem =
-                Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
-              in
-              let subst sym =
-                match V.of_symbol sym with
-                | Some _ -> mk_const srk sym
-                | None -> fresh_skolem sym
-              in
-              substitute_const srk subst (TF.formula tf)
-            in
-            let prf, has_prf =
-              if !termination_prf then
-                if TPRF.has_prf srk tf then 
-                  (logf ~level:`always "has prf";
-                  [Syntax.mk_false srk], true)
-                else
-                  [pre], false
-              else
-                  [pre], false   
-            in 
-            let plrf, _ =
-              if (not has_prf) && !termination_plrf then
-                if TPRF.has_plrf srk tf then
-                  (logf ~level:`always "has plrf";
-                  [Syntax.mk_false srk], true)
-                else
-                  [pre], false
-              else
-                  [pre], false
-            in 
-            let result =
-              Syntax.mk_and srk (prf@plrf)
-            in
-            result
-          in
-          if !termination_phase_analysis then begin
-            let predicates =
-              (* Use variable directions & signs as candidate invariants *)
-              List.map (fun (x,x') ->
-                  let x = mk_const srk x in
-                  let x' = mk_const srk x' in
-                  [mk_leq srk (mk_add srk [x; (mk_one srk)]) x';
+       let tf = K.to_transition_formula transition in
+       let solver = Iteration.Solver.make srk tf in
+       let nonterm tf =
+         let attractors =
+           if !termination_attractor && Syntax.get_theory srk = `LIRA then
+             attractor_regions solver
+           else
+             []
+         in
+         Iteration.Solver.push solver;
+         Iteration.Solver.add solver attractors;
+         (* Decision procedure(s) for unconditional termination *)
+         let terminates =
+           if Syntax.get_theory srk = `LIRR then
+             TPRF.has_prf solver
+             || TPRF.has_plrf solver
+           else
+             TLLRF.has_llrf solver
+         in
+         Iteration.Solver.pop solver;
+
+         if terminates then
+           Syntax.mk_false srk
+         else
+           let fresh_skolem =
+             Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+           in
+           let subst sym =
+             match V.of_symbol sym with
+             | Some _ -> mk_const srk sym
+             | None -> fresh_skolem sym
+           in
+           substitute_const srk subst (TF.formula tf)
+       in
+       if !termination_phase_analysis then begin
+           let predicates =
+             (* Use variable directions & signs as candidate invariants *)
+             List.map (fun (x,x') ->
+                 let x = mk_const srk x in
+                 let x' = mk_const srk x' in
+                 [mk_leq srk (mk_add srk [x; (mk_one srk)]) x';
                   mk_leq srk (mk_add srk [x'; (mk_one srk)]) x;
                   mk_eq srk x x'])
-                (TF.symbols tf)
-              |> List.concat
-            in
-            Iteration.phase_mp srk predicates tf nonterm
-          end else
-          nonterm tf
-       end
-       else
-        let tf =
-          TF.map_formula
-            (fun phi -> SrkSimplify.eliminate_floor srk (Nonlinear.linearize srk phi))
-            (K.to_transition_formula transition)
-        in
-        let nonterm tf =
-          let pre =
-            let fresh_skolem =
-              Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
-            in
-            let subst sym =
-              match V.of_symbol sym with
-              | Some _ -> mk_const srk sym
-              | None -> fresh_skolem sym
-            in
-            substitute_const srk subst (TF.formula tf)
-          in
-          let llrf, has_llrf =
-            if !termination_llrf then
-              if TLLRF.has_llrf srk tf then
-                [Syntax.mk_false srk], true
-              else if !termination_attractor
-                      && TLLRF.has_llrf srk (attractor_regions tf) then
-                [Syntax.mk_false srk], true
-              else
-                [pre], false
-            else
-              (* If LLRF is disabled, default to pre *)
-              [pre], false
-          in
-          let dta =
-            (* If LLRF succeeds, then we do not try dta *)
-            if (not has_llrf) && !termination_dta then
-              [mk_not srk (TDTA.mp srk tf)]
-            else []
-          in
-          let exp =
-            if (not has_llrf) && !termination_exp then
-              let mp =
-                Syntax.mk_not srk
-                  (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
-              in
-              let dta_entails_mp =
-                (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
-                Syntax.mk_forall_consts
-                  srk
-                  (fun _ -> false)
-                  (Syntax.mk_if srk (mk_and srk dta) mp)
-              in
-              match Quantifier.simsat srk dta_entails_mp with
-              | `Sat -> []
-              | _ -> [mp]
-            else []
-          in
-          let result =
-            Syntax.mk_and srk (llrf@dta@exp)
-          in
-          let file = get_gfile () in
-          if !dump_goals
-              && result <> (Syntax.mk_true srk)
-              && result <> (Syntax.mk_false srk) then begin
-              let filename =
-                Format.sprintf "%s-%d-term.smt2"
-                  (Filename.chop_extension (Filename.basename file.filename))
-                  (!nb_goals)
-            in
-            let chan = Stdlib.open_out filename in
-            let formatter = Format.formatter_of_out_channel chan in
-            logf ~level:`always "Writing goal formula to %s" filename;
-            Syntax.pp_smtlib2 srk formatter result;
-            Format.pp_print_newline formatter ();
-            Stdlib.close_out chan;
-            incr nb_goals
-            end;
-          match Quantifier.simsat srk result with
-          | `Unsat -> mk_false srk
-          | _ -> result
-        in
-        if !termination_phase_analysis then begin
-            let predicates =
-              (* Use variable directions & signs as candidate invariants *)
-              List.map (fun (x,x') ->
-                  let x = mk_const srk x in
-                  let x' = mk_const srk x' in
-                  [mk_lt srk x x';
-                    mk_lt srk x' x;
-                    mk_eq srk x x'])
-                (TF.symbols tf)
-              |> List.concat
-            in
-            Iteration.phase_mp srk predicates tf nonterm
-          end else
-          nonterm tf
-      end
+               (TF.symbols tf)
+             |> List.concat
+           in
+           let star tf =
+             let module E = Iteration.LossyTranslation in
+             let k = mk_symbol srk `TyInt in
+             let exists x = x != k && (TF.exists tf) x in
+             TF.make
+               ~exists
+               (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf))
+               (TF.symbols tf)
+           in
+           Iteration.phase_mp srk predicates star nonterm tf
+         end
+       else nonterm tf
+     end
   | `Add (cond1, cond2) ->
      (** combining possibly non-terminating conditions for multiple paths *)
      Syntax.mk_or srk [cond1; cond2]

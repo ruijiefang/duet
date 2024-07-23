@@ -1,6 +1,49 @@
 (** Approximate transitive closure computation. *)
 open Syntax
 
+module Solver : sig
+  type 'a t
+
+  (** Allocate a new solver. *)
+  val make : 'a context -> ?theory:[`LIRR | `LIRA ] -> 'a TransitionFormula.t -> 'a t
+
+  (** Symbolic abstraction as described in Reps, Sagiv, Yorsh---"Symbolic
+     implementation of the best transformer", VMCAI 2004. *)
+  val abstract : 'a t -> ('a, 'b) Abstract.domain -> 'b
+
+  (** Retrieve the formula associated with a solver. *)
+  val get_formula : 'a t -> 'a formula
+
+  val get_symbols : 'a t -> (symbol * symbol) list
+  val get_constants : 'a t -> Symbol.Set.t
+
+  val get_transition_formula : 'a t -> 'a TransitionFormula.t
+
+  (** Retrieve a model of the formula that not satisfy any blocking clause, if
+     possible.  *)
+  val get_model : 'a t -> [ `Sat of 'a Abstract.smt_model | `Unsat | `Unknown ]
+
+  val check : 'a t -> [ `Sat | `Unsat | `Unknown ]
+
+  val get_context : 'a t -> 'a context
+
+  val get_theory : 'a t -> [ `LIRR | `LIRA ]
+
+  (** [add s phis] conjoins each formula in [phis] to the formula associated
+     with the solver. *)
+  val add : 'a t -> ('a formula) list -> unit
+
+  (** Push a fresh entry onto the solver's stack.  Assertions added to the
+     formula with [add] are reverted after the entry is [pop]ed off the
+     stack. *)
+  val push : 'a t -> unit
+
+  (** Pop last entry off of the solver's stack *)
+  val pop : 'a t -> unit
+
+  val get_abstract_solver : 'a t -> 'a Abstract.Solver.t
+end
+
 module type PreDomain = sig
   type 'a t
   val pp : 'a context -> (symbol * symbol) list -> Format.formatter -> 'a t -> unit
@@ -91,6 +134,7 @@ module MakeDomain(Iter : PreDomain) : Domain
    via analyzing the phase transition structure of the transition formula. *)
 val phase_mp : 'a context -> 
                ('a formula) list ->
-               'a TransitionFormula.t ->
+               ('a TransitionFormula.t -> 'a TransitionFormula.t) ->
                ('a TransitionFormula.t -> 'a formula) ->
+               'a TransitionFormula.t ->
                'a formula

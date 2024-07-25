@@ -4,12 +4,13 @@ include Log.Make(struct let name = "TerminationExp" end)
 module TF = TransitionFormula
 module IS = Iteration.Solver
 
-let closure (module I : Iteration.PreDomain) srk tf =
+let closure (module I : Iteration.PreDomain) solver =
+  let srk = IS.get_context solver in
   let qe = Syntax.mk_exists_consts srk in
   let k = mk_symbol srk `TyInt in
   let phi_k = (* approximate k-fold composition of phi *)
-    I.abstract srk tf
-    |> I.exp srk (TF.symbols tf) (mk_const srk k)
+    I.abstract solver
+    |> I.exp srk (IS.get_symbols solver) (mk_const srk k)
   in 
   let f = mk_and srk [mk_leq srk (mk_zero srk) (mk_const srk k);
                       phi_k] in
@@ -28,7 +29,7 @@ let mp (module I : Iteration.PreDomain) solver =
   in
   let tf = IS.get_formula solver in
   let phi_k = (* approximate k-fold composition of phi *)
-    I.abstract srk (IS.get_transition_formula solver)
+    I.abstract solver
     |> I.exp srk (IS.get_symbols solver) (mk_const srk k)
   in
   let pre_symbols =

@@ -42,13 +42,15 @@ module Solver : sig
   val pop : 'a t -> unit
 
   val get_abstract_solver : 'a t -> 'a Abstract.Solver.t
+
+  val wedge_hull : 'a t -> 'a Wedge.t
 end
 
 module type PreDomain = sig
   type 'a t
   val pp : 'a context -> (symbol * symbol) list -> Format.formatter -> 'a t -> unit
   val exp : 'a context -> (symbol * symbol) list -> 'a arith_term -> 'a t -> 'a formula
-  val abstract : 'a context -> 'a TransitionFormula.t -> 'a t
+  val abstract : 'a Solver.t -> 'a t
 end
 
 module type PreDomainIter = sig
@@ -72,11 +74,9 @@ module type Domain = sig
   type 'a t
   val pp : Format.formatter -> 'a t -> unit
   val closure : 'a t -> 'a formula
-  val abstract : 'a context -> 'a TransitionFormula.t -> 'a t
+  val abstract : 'a Solver.t -> 'a t
   val tr_symbols : 'a t -> (symbol * symbol) list
 end
-
-module LIRR : PreDomain
 
 module LIRRGuard : PreDomainIter
 
@@ -134,7 +134,7 @@ module MakeDomain(Iter : PreDomain) : Domain
    via analyzing the phase transition structure of the transition formula. *)
 val phase_mp : 'a context -> 
                ('a formula) list ->
-               ('a TransitionFormula.t -> 'a TransitionFormula.t) ->
-               ('a TransitionFormula.t -> 'a formula) ->
-               'a TransitionFormula.t ->
+               ('a Solver.t -> 'a TransitionFormula.t) ->
+               ('a Solver.t -> 'a formula) ->
+               'a Solver.t ->
                'a formula

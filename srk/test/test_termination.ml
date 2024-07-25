@@ -36,9 +36,9 @@ let mk_qqx vec =
     Polynomial.QQX.zero
     (List.mapi (fun i k -> (i, QQ.of_int k)) vec)
 
-let mp_llrf_with_phase tf = 
-  let mp_llrf tf =
-    if has_llrf tf then
+let mp_llrf_with_phase phi =
+  let mp_llrf solver =
+    if TerminationLLRF.has_llrf solver then
       Syntax.mk_false srk
     else
       let fresh_skolem =
@@ -49,7 +49,7 @@ let mp_llrf_with_phase tf =
         | true -> mk_const srk sym
         | false -> fresh_skolem sym
       in
-      substitute_const srk subst (TransitionFormula.formula tf)
+      substitute_const srk subst (Iteration.Solver.get_formula solver)
   in
   let predicates =
     List.map (fun (x,x') ->
@@ -58,19 +58,21 @@ let mp_llrf_with_phase tf =
         [mk_lt srk x x';
          mk_lt srk x' x;
          mk_eq srk x x'])
-      (TransitionFormula.symbols tf)
+      (TF.symbols phi)
     |> List.concat
   in
-  let star tf =
+  let star solver =
     let module E = Iteration.LossyTranslation in 
     let k = mk_symbol srk `TyInt in
+    let tf = Iteration.Solver.get_transition_formula solver in
     let exists x = x != k && (TF.exists tf) x in
     TF.make
       ~exists
-      (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf))
+      (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract solver))
       (TF.symbols tf)
   in
-  mk_not srk (Iteration.phase_mp srk predicates star mp_llrf tf)
+  let solver = Iteration.Solver.make srk phi in
+  mk_not srk (Iteration.phase_mp srk predicates star mp_llrf solver)
 
 let assert_equal_pz x y =
   assert_equal 

@@ -251,7 +251,7 @@ let mp solver =
   | `Sat ->
     let tf = IS.get_transition_formula solver in
      let qdlts_abs =
-       DLTSPeriodicRational.abstract_rational srk tf
+       DLTSPeriodicRational.abstract_rational solver
        |> DLTS.simplify srk ~scale:true
      in
      let module PLM = Lts.PartialLinearMap in

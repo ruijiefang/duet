@@ -195,8 +195,9 @@ struct
   let star tr =
     let (module D) = !domain in
     let tf = to_transition_formula tr in
+    let solver = Iteration.Solver.make srk tf in
     logf ~level:`warn "Approximating transitive closure:@.  @[<v 0>%a@]" pp tr;
-    let iter = D.abstract srk tf in
+    let iter = D.abstract solver in
     let tr_symbols = TransitionFormula.symbols tf in
     let transform =
       List.fold_left (fun tr (pre, post) ->

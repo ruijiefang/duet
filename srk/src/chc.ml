@@ -165,8 +165,9 @@ module Fp = struct
         in
         let lc = mk_symbol srk `TyInt in
         let tr_phi = TransitionFormula.make phi trs in
+        let solver = Iteration.Solver.make srk tr_phi in
         pre, post, 
-        PD.exp srk trs (mk_const srk lc) (PD.abstract srk tr_phi)
+        PD.exp srk trs (mk_const srk lc) (PD.abstract solver)
       in
       {mul; add; star; zero; one}
     in

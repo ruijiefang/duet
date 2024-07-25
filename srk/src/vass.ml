@@ -7,6 +7,7 @@ module Z = Linear.ZZVector
 module Q = Quantifier
 module TF = TransitionFormula
 module Int = SrkUtil.Int
+module IS = Iteration.Solver
 module Accelerate =
   Iteration.MakeDomain(Iteration.Product(Iteration.LossyTranslation)
                          (Iteration.PolyhedronGuard))
@@ -165,7 +166,7 @@ let compute_single_scc_vass ?(exists=fun _ -> true) srk tr_symbols cs_lst phi =
   in
   (*Populate graph with transformers between two control states*)
   let abstract formula =
-    abstract srk (TF.make ~exists formula tr_symbols)
+    Vas.abstract (IS.make srk (TF.make ~exists formula tr_symbols))
   in
   let postify = substitute_map srk (TF.post_map srk tr_symbols) in
   BatArray.iteri (fun ind1 arr ->
@@ -297,15 +298,15 @@ let get_control_states srk tf =
   BatArray.of_list control_states', sink
 
 
-let abstract srk tf =
-  let exists = TF.exists tf in
-  let tr_symbols = TF.symbols tf in
-  let skolem_constants =
-    Symbol.Set.filter (fun a -> not (exists a)) (symbols (TF.formula tf))
-  in
-  let phi = Nonlinear.linearize srk (rewrite srk ~down:(pos_rewriter srk) (TF.formula tf)) in
+let abstract solver =
+  let tr_symbols = IS.get_symbols solver in
+  let skolem_constants = IS.get_constants solver in
+  let srk = IS.get_context solver in
+  let tf = IS.get_transition_formula solver in
+  let phi = IS.get_formula solver in
   let control_states, sink = get_control_states srk tf in
   let graph = compute_edges srk tr_symbols control_states phi in
+  let exists = TF.exists tf in
   let num_sccs, func_sccs = BGraphComp.scc graph in
   let sccs = Array.make num_sccs  [] in
   BatArray.iteri (fun ind lab -> sccs.(func_sccs ind)<-(lab :: sccs.(func_sccs ind)))
@@ -589,7 +590,7 @@ let compute_trans_post_cond srk pre_cs post_cs trans gamma_trans term_list tr_sy
       (Abstract.abstract ~exists:exists_post srk man
          (mk_and srk
             [preify post_trans;
-             Accelerate.closure (Accelerate.abstract srk lri_form)]))
+             Accelerate.closure (Accelerate.abstract (IS.make srk lri_form))]))
   in
   rslt
 

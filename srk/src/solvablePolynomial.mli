@@ -51,7 +51,7 @@ module DLTSPeriodicRational : sig
 
   (** Find best abstraction as a DLTS with rational (rather than
      periodic rational) spectrum *)
-  val abstract_rational : 'a context -> 'a TransitionFormula.t -> 'a t
+  val abstract_rational : 'a Iteration.Solver.t -> 'a t
 end
 
 

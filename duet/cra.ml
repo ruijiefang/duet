@@ -12,6 +12,7 @@ module G = RG.G
 module Ctx = Syntax.MakeSimplifyingContext ()
 module Int = SrkUtil.Int
 module TF = TransitionFormula
+module LIRR = LirrInvariants.LIRR
 
 let srk = Ctx.context
 
@@ -962,7 +963,7 @@ let omega_algebra = function
        let open Syntax in
        let tf = K.to_transition_formula transition in
        let solver = Iteration.Solver.make srk tf in
-       let nonterm tf =
+       let nonterm solver =
          let attractors =
            if !termination_attractor && Syntax.get_theory srk = `LIRA then
              attractor_regions solver
@@ -1006,18 +1007,19 @@ let omega_algebra = function
                (TF.symbols tf)
              |> List.concat
            in
-           let star tf =
+           let star solver =
              let module E = Iteration.LossyTranslation in
              let k = mk_symbol srk `TyInt in
-             let exists x = x != k && (TF.exists tf) x in
+             let tf = Iteration.Solver.get_transition_formula solver in
+             let exists x = x != k && TF.exists tf x in
              TF.make
                ~exists
-               (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf))
+               (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract solver))
                (TF.symbols tf)
            in
-           Iteration.phase_mp srk predicates star nonterm tf
+           Iteration.phase_mp srk predicates star nonterm solver
          end
-       else nonterm tf
+       else nonterm solver
      end
   | `Add (cond1, cond2) ->
      (** combining possibly non-terminating conditions for multiple paths *)

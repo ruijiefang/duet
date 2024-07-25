@@ -8,37 +8,37 @@ module SP = struct
   include Iteration.MakeDomain(Iteration.ProductWedge
                                  (SolvablePolynomial.SolvablePolynomial)
                                  (Iteration.WedgeGuard))
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRR srk tf))
 end
 module SPPR = struct
   include Iteration.MakeDomain(Iteration.ProductWedge
                                  (SolvablePolynomial.SolvablePolynomialPeriodicRational)
                                  (Iteration.WedgeGuard))
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRR srk tf))
 end
 module DLTS = struct
   include Iteration.MakeDomain(Iteration.Product
                                  (SolvablePolynomial.DLTSSolvablePolynomial)
                                  (Iteration.PolyhedronGuard))
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRR srk tf))
 end
 module WAT = struct
   include Iteration.MakeDomain(Iteration.Product
-                                 (Iteration.LIRR)
+                                 (LirrInvariants.LIRR)
                                  (Iteration.LIRRGuard))
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRR srk tf))
 end
 
 module GT = struct
   include Iteration.MakeDomain(Iteration.GuardedTranslation)
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRA srk tf))
 end
 
 module SPQ = struct
   include Iteration.MakeDomain(Iteration.Product
                                  (SolvablePolynomial.SolvablePolynomialLIRRQuadratic)
                                  (Iteration.LIRRGuard))
-  let star srk tf = closure (abstract srk tf)
+  let star srk tf = closure (abstract (Iteration.Solver.make ~theory:`LIRR srk tf))
 end
 
 

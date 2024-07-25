@@ -15,7 +15,7 @@ module TSet : BatSet.S with type elt = transformer
 type vas = TSet.t
 type 'a t = { v : vas; s_lst : M.t list}
 val gamma : 'a context ->  'a t -> (symbol * symbol) list -> 'a formula
-val abstract : 'a context -> 'a TransitionFormula.t -> 'a t
+val abstract : 'a Iteration.Solver.t -> 'a t
 val pp : 'a context -> (symbol * symbol) list -> Format.formatter -> 'a t -> unit
 val exp : 'a context -> (symbol * symbol) list -> 'a arith_term -> 'a t -> 'a formula
 

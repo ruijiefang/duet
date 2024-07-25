@@ -21,6 +21,8 @@ module PLM = Lts.PartialLinearMap
 
 module TF = TransitionFormula
 
+module IS = Iteration.Solver
+
 module Term = ArithTerm
 
 (* Closed forms for solvable polynomial maps with periodic rational
@@ -1265,8 +1267,8 @@ module SolvablePolynomialOne = struct
       block_eq = block_eq;
       block_leq = block_leq }
 
-  let abstract srk tf =
-    abstract_wedge srk (TF.symbols tf) (TF.wedge_hull srk tf)
+  let abstract solver =
+    abstract_wedge (IS.get_context solver) (IS.get_symbols solver) (IS.wedge_hull solver)
 
   let join srk tr_symbols iter iter' =
     Wedge.join (wedge_of srk tr_symbols iter) (wedge_of srk tr_symbols iter')
@@ -1276,7 +1278,6 @@ module SolvablePolynomialOne = struct
     Wedge.widen (wedge_of srk tr_symbols iter) (wedge_of srk tr_symbols iter')
     |> abstract_wedge srk tr_symbols
 
-  (*let exp = exp_ocrs*)
   let exp = exp_rat
   let equal = equal
   let pp = pp
@@ -1295,8 +1296,8 @@ module SolvablePolynomial = struct
       block_eq = block_eq;
       block_leq = block_leq }
 
-  let abstract srk tf =
-    abstract_wedge srk (TF.symbols tf) (TF.wedge_hull srk tf)
+  let abstract solver =
+    abstract_wedge (IS.get_context solver) (IS.get_symbols solver) (IS.wedge_hull solver)
 
   let join srk tr_symbols iter iter' =
     Wedge.join (wedge_of srk tr_symbols iter) (wedge_of srk tr_symbols iter')
@@ -1308,7 +1309,6 @@ module SolvablePolynomial = struct
 
   let equal = equal
   let pp = pp
-  (*let exp = exp_ocrs*)
   let exp = exp_rat
 end
 
@@ -1325,8 +1325,8 @@ module SolvablePolynomialPeriodicRational = struct
       block_eq = block_eq;
       block_leq = block_leq }
 
-  let abstract srk tf =
-    abstract_wedge srk (TF.symbols tf) (TF.wedge_hull srk tf)
+  let abstract solver =
+    abstract_wedge (IS.get_context solver) (IS.get_symbols solver) (IS.wedge_hull solver)
 
   let exp srk tr_symbols loop_counter iter =
     Nonlinear.ensure_symbols srk;
@@ -1710,14 +1710,19 @@ module DLTS = struct
   let exp srk tr_symbols loop_count iter =
     exp_impl SolvablePolynomial.exp srk tr_symbols loop_count iter
 
-  let abstract srk tf =
-    let tr_symbols = TF.symbols tf in
-    let phi = Nonlinear.linearize srk (TF.formula tf) in
+
+  let abstract solver =
+    let tr_symbols = IS.get_symbols solver in
+    let srk = IS.get_context solver in
+    let abs_solver = IS.get_abstract_solver solver in
     let phi_symbols =
-      Symbol.Set.filter (fun s -> typ_symbol srk s = `TyInt && TF.exists tf s) (symbols phi)
+      List.fold_left
+        (fun set (s,s') -> Symbol.Set.add s (Symbol.Set.add s' set))
+        (IS.get_constants solver)
+        tr_symbols
       |> Symbol.Set.elements
     in
-    let constants = Symbol.Set.elements (TF.symbolic_constants tf) in
+    let constants = Symbol.Set.elements (IS.get_constants solver) in
     (* pre_map is a mapping from dimensions that correspond to
        post-state dimensions to their pre-state counterparts *)
     let pre_map =
@@ -1729,8 +1734,8 @@ module DLTS = struct
         tr_symbols
     in
     let (mA, mB, nb_rows) =
-      BatList.fold_left (fun (mA, mB, i) t ->
-          logf "Equation: %a = 0" (Term.pp srk) t;
+      BatList.fold_left (fun (mA, mB, i) vec ->
+          logf "Equation: %a = 0" (Term.pp srk) (Linear.of_linterm srk vec);
           let (a, b) =
             BatEnum.fold (fun (a, b) (coeff, id) ->
                 if IntMap.mem id pre_map then
@@ -1740,11 +1745,11 @@ module DLTS = struct
                 else
                   (a, V.add_term coeff id b))
               (V.zero, V.zero)
-              (V.enum (Linear.linterm_of srk t))
+              (V.enum vec)
           in
           (QQMatrix.add_row i a mA, QQMatrix.add_row i b mB, i + 1))
         (QQMatrix.zero, QQMatrix.zero, 0)
-        (Abstract.affine_hull srk phi phi_symbols)
+        (Abstract.LinearSpan.affine_hull abs_solver phi_symbols)
     in
     let (mA, mB, _) =
       BatList.fold_left (fun (mA, mB, i) id ->
@@ -1790,10 +1795,13 @@ module DLTS = struct
     mk_and srk [map; guard]
 
   let join srk tr_symbols iter1 iter2 =
-    abstract srk (TF.make
-                    (mk_or srk [to_formula srk iter1;
-                                to_formula srk iter2])
-                    tr_symbols)
+    let solver =
+      IS.make srk (TF.make
+                     (mk_or srk [to_formula srk iter1;
+                                 to_formula srk iter2])
+                     tr_symbols)
+    in
+    abstract solver
 
 
   let simplify srk ?(scale=false) abs =
@@ -1902,8 +1910,10 @@ module DLTSSolvablePolynomial = struct
     in
     { dlts = pr_dlts; simulation }
 
-  let abstract srk tf =
-    let tr_symbols = TF.symbols tf in
+  let abstract solver =
+    let tr_symbols = IS.get_symbols solver in
+    let srk = IS.get_context solver in
+    let tf = IS.get_transition_formula solver in
     let post_symbols = TF.post_symbols tr_symbols in
     let subterm x = not (Symbol.Set.mem x post_symbols) in
     let wedge =
@@ -1925,16 +1935,18 @@ module DLTSPeriodicRational = struct
       |> SrkSimplify.simplify_term srk)
     |> BatArray.of_enum
 
-  let abstract srk tf =
-    let { dlts; simulation } = DLTS.abstract srk tf in
+  let abstract solver =
+    let { dlts; simulation } = DLTS.abstract solver in
+    let srk = IS.get_context solver in
     let (dlts, mS) =
       Lts.periodic_rational_spectrum_reflection dlts (Array.length simulation)
     in
     let simulation = compose_simulation srk mS simulation in
     { dlts; simulation }
 
-  let abstract_rational srk tf =
-    let { dlts; simulation } = DLTS.abstract srk tf in
+  let abstract_rational solver =
+    let { dlts; simulation } = DLTS.abstract solver in
+    let srk = IS.get_context solver in
     let (dlts, mS) =
       Lts.rational_spectrum_reflection dlts (Array.length simulation)
     in
@@ -2069,8 +2081,11 @@ module SolvablePolynomialLIRR = struct
     
 
   module PC = PolynomialCone
-  let abstract_sp abstraction srk tf =
-    let is_symbolic_constant = TF.is_symbolic_constant tf in
+  let abstract_sp abstraction solver =
+    let srk = IS.get_context solver in
+    let is_symbolic_constant x =
+      Symbol.Set.mem x (IS.get_constants solver)
+    in
     let abstract_cone ideal =
       let ideal_constants =
         List.fold_left (fun constants p ->
@@ -2091,7 +2106,7 @@ module SolvablePolynomialLIRR = struct
       let tr_symbols =
         List.fold_left2
           (fun tr_symbols k k' -> (k,k')::tr_symbols)
-          (TF.symbols tf)
+          (IS.get_symbols solver)
           ideal_constants
           ks
       in
@@ -2124,12 +2139,14 @@ module SolvablePolynomialLIRR = struct
     in
     let ideal =
       PC.get_ideal
-        (Lirr.abstract srk (fun cone -> PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+        (Lirr.abstract srk
+           (fun cone -> PC.make_cone (PC.get_ideal cone) [])
+           (IS.get_formula solver))
     in
     abstract_cone ideal
 
-  let abstract srk tf = 
-    abstract_sp TransitionIdeal.solvable_reflection srk tf
+  let abstract solver = 
+    abstract_sp TransitionIdeal.solvable_reflection solver
   
 end
 
@@ -2142,14 +2159,15 @@ module UltSolvablePolynomialLIRR = struct
   let exp =
     SolvablePolynomialLIRR.exp     
 
-  let abstract srk tf = 
-    SolvablePolynomialLIRR.abstract_sp TransitionIdeal.ultimately_solvable_reflection srk tf
+  let abstract solver = 
+    SolvablePolynomialLIRR.abstract_sp TransitionIdeal.ultimately_solvable_reflection solver
 end
 
 module SolvablePolynomialLIRRQuadratic = struct
   include SolvablePolynomialLIRR
-  let abstract srk tf =
-    let is_symbolic_constant = TF.is_symbolic_constant tf in
+  let abstract solver =
+    let srk = IS.get_context solver in
+    let is_symbolic_constant x = Symbol.Set.mem x (IS.get_constants solver) in
     let abstract_cone ideal =
       let ideal_constants =
         List.fold_left (fun constants p ->
@@ -2170,7 +2188,7 @@ module SolvablePolynomialLIRRQuadratic = struct
       let tr_symbols =
         List.fold_left2
           (fun tr_symbols k k' -> (k,k')::tr_symbols)
-          (TF.symbols tf)
+          (IS.get_symbols solver)
           ideal_constants
           ks
       in
@@ -2207,7 +2225,7 @@ module SolvablePolynomialLIRRQuadratic = struct
     let ideal =
       PC.get_ideal
         (Lirr.abstract srk (fun cone ->
-             PC.make_cone (PC.get_ideal cone) []) (TF.formula tf))
+             PC.make_cone (PC.get_ideal cone) []) (IS.get_formula solver))
     in
     abstract_cone ideal
 end

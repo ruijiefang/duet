@@ -83,4 +83,4 @@ let has_llrf solver = (llrf_residual solver = None)
 
 let mp solver =
   let srk = IS.get_context solver in
-  if has_llrf solver then mk_true srk else mk_false srk
+  if has_llrf solver then mk_false srk else mk_true srk

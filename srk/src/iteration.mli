@@ -46,83 +46,80 @@ module Solver : sig
   val wedge_hull : 'a t -> 'a Wedge.t
 end
 
-module type PreDomain = sig
+type 'a exp_op = 'a Solver.t -> 'a arith_term -> 'a formula
+
+type 'a wedge_exp_op =
+  'a context ->
+  (symbol * symbol) list ->
+  'a Wedge.t ->
+  'a arith_term ->
+  'a formula
+
+module Cartesian : sig
   type 'a t
-  val pp : 'a context -> (symbol * symbol) list -> Format.formatter -> 'a t -> unit
-  val exp : 'a context -> (symbol * symbol) list -> 'a arith_term -> 'a t -> 'a formula
-  val abstract : 'a Solver.t -> 'a t
+  val pp : 'a Solver.t -> Format.formatter -> 'a t -> unit
+  val precondition : 'a t -> 'a formula
+  val postcondition : 'a t -> 'a formula
 end
 
-module type PreDomainIter = sig
-  include PreDomain
-  val equal : ('a context) -> (symbol * symbol) list -> 'a t -> 'a t -> bool
-  val join : ('a context) -> (symbol * symbol) list -> 'a t -> 'a t -> 'a t
-  val widen : ('a context) -> (symbol * symbol) list -> 'a t -> 'a t -> 'a t
+module type Exp = sig
+  val exp : 'a exp_op
 end
 
-module type PreDomainWedge = sig
-  include PreDomain
-  val abstract_wedge : 'a context -> (symbol * symbol) list -> 'a Wedge.t -> 'a t
-end
-
-module type PreDomainWedgeIter = sig
-  include PreDomainIter
-  val abstract_wedge : 'a context -> (symbol * symbol) list -> 'a Wedge.t -> 'a t
+module type WedgeExp = sig
+  val wedge_exp : 'a wedge_exp_op
 end
 
 module type Domain = sig
   type 'a t
-  val pp : Format.formatter -> 'a t -> unit
-  val closure : 'a t -> 'a formula
+  val pp : 'a Solver.t -> Format.formatter -> 'a t -> unit
   val abstract : 'a Solver.t -> 'a t
-  val tr_symbols : 'a t -> (symbol * symbol) list
+  val exp_t : 'a Solver.t -> 'a t -> 'a arith_term -> 'a formula
+  val exp : 'a exp_op
 end
 
-module LIRRGuard : PreDomainIter
-
-module WedgeGuard : PreDomainWedgeIter
-
-module PolyhedronGuard : sig
-  include PreDomainIter
-  val precondition : 'a context -> 'a t -> 'a Formula.t
-  val postcondition : 'a context -> 'a t -> 'a Formula.t
+module type WedgeDomain = sig
+  type 'a t
+  val pp : 'a Solver.t -> Format.formatter -> 'a t -> unit
+  val wedge_abstract : 'a context ->
+    (symbol * symbol) list ->
+    'a Wedge.t ->
+    'a t
+  val exp_t : 'a context -> (symbol * symbol) list -> 'a t -> 'a arith_term -> 'a formula
+  val wedge_exp : 'a wedge_exp_op
 end
-module LinearGuard : PreDomainIter
+
+module LIRRGuard : Domain with type 'a t = 'a Cartesian.t
+
+module WedgeGuard : WedgeDomain with type 'a t = 'a Cartesian.t
+
+module PolyhedronGuard : Domain with type 'a t = 'a Cartesian.t
+
+module LinearGuard : Domain with type 'a t = 'a Cartesian.t
 
 (** Abstract a transition formula F(x,x') by a system of recurrences of the form
     a(x') >= a(x) + c
     where a is a linear map and c is a scalar. *)
-module LossyTranslation : PreDomain
+module LossyTranslation : Domain
 
-(** Abstract a transition formula F(x,x') a translation 
+(** Abstract a transitiPon formula F(x,x') a translation
       a(x') = a(x) + c
     guarded by a LIA formula *)
-module GuardedTranslation : PreDomain
+module GuardedTranslation : Domain
 
 (** Abstract a transition formula F(x,x',y) (where y denotes a set of
    symbolic constants) by a system of recurrences of the form
     [ax' >= ax + t(y)]
    where a is a linear map and t(y) is a (possibly non-linear)
    term over y. *)
-module NonlinearRecurrenceInequation : PreDomainWedge
+module NonlinearRecurrenceInequation : WedgeDomain
 
 (** Improve iteration operator using split invariants *)
-module Split(Iter : PreDomain) : PreDomain
+val split : 'a exp_op -> 'a exp_op
 
 (** Improve iteration operator using variable directions (increasing,
    decreasing, stable) to find phase splits. *)
-module InvariantDirection(Iter : PreDomain) : PreDomain
-
-
-module Product (A : PreDomain) (B : PreDomain) : PreDomain
-  with type 'a t = 'a A.t * 'a B.t
-
-(** Same as product, but faster for iteration domains that abstract
-   through the wedge domain. *)
-module ProductWedge (A : PreDomainWedge) (B : PreDomainWedge) : PreDomainWedge
-  with type 'a t = 'a A.t * 'a B.t
-
-module MakeDomain(Iter : PreDomain) : Domain
+val invariant_direction : 'a exp_op -> 'a exp_op
 
 (** Given a transition formula T and a transition predicate p, we say
    that p is an invariant of T if T(x,x') /\ T(x',x'') is consistent and
@@ -138,3 +135,11 @@ val phase_mp : 'a context ->
                ('a Solver.t -> 'a formula) ->
                'a Solver.t ->
                'a formula
+
+val product : 'a exp_op list -> 'a exp_op
+
+val closure : 'a exp_op -> 'a Solver.t -> 'a formula
+
+val wedge_product : 'a wedge_exp_op list -> 'a wedge_exp_op
+
+val wedge_lift : 'a wedge_exp_op -> 'a exp_op

@@ -338,7 +338,9 @@ let exp_base_helper srk (_ : (symbol * symbol) list) loop_counter s_lst transfor
 
 
 (*Compute closure*)
-let exp srk tr_symbols loop_counter vabs =
+let exp_t solver vabs loop_counter =
+  let srk = IS.get_context solver in
+  let tr_symbols = IS.get_symbols solver in
   let {v; s_lst} = vabs in
   (* if top*)  
   if(M.nb_rows (unify s_lst) = 0) 
@@ -350,7 +352,6 @@ let exp srk tr_symbols loop_counter vabs =
         (TSet.to_list v) kvarst ksumst (unify s_lst) tr_symbols in
     mk_and srk [formula; constr1]
   )
-
 
 (*Move matrix down by first_row rows*)
 let push_rows matrix first_row =
@@ -492,7 +493,10 @@ let alpha_hat srk imp tr_symbols =
   | false, false -> {v=TSet.singleton {a;b}; s_lst=[i;r]}
 
 (*TODO:Make a better pp function*)
-let pp srk syms formatter vas = Format.fprintf formatter "%a" (Formula.pp srk) (gamma srk vas syms)
+let pp solver formatter vas =
+  let srk = IS.get_context solver in
+  let syms = IS.get_symbols solver in
+  Format.fprintf formatter "%a" (Formula.pp srk) (gamma srk vas syms)
 
 let abstract solver =
   let srk = IS.get_context solver in
@@ -512,10 +516,12 @@ let abstract solver =
   in
   Abstract.Solver.with_blocking abs_solver go (mk_bottom tr_symbols)
 
+let exp solver loop_counter = exp_t solver (abstract solver) loop_counter
+
 module Monotone = struct
   type nonrec 'a t = 'a t
   let pp = pp
-  let exp = exp
+  let exp_t = exp_t
 
   let abstract solver =
     let srk = Iteration.Solver.get_context solver in
@@ -547,4 +553,6 @@ module Monotone = struct
 
     in
     Abstract.Solver.with_blocking abs_solver go (mk_bottom tr_symbols)
+
+  let exp solver loop_counter = exp_t solver (abstract solver) loop_counter
 end

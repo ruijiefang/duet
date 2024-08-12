@@ -178,15 +178,3 @@ let exp solver loop_counter =
       mk_and srk implied_zero_polys_formulas
     ]
   ]
-
-module LIRR = struct
-  type 'a t = 'a TF.t
-
-  let pp srk _ formatter tf = let f = TF.formula tf in Formula.pp srk formatter f
-
-  let abstract solver = Iteration.Solver.get_transition_formula solver
-
-  let exp srk _ loop_counter tf =
-    let solver = Iteration.Solver.make srk tf in
-    exp solver loop_counter
-end

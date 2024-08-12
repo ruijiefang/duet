@@ -12,7 +12,6 @@ module G = RG.G
 module Ctx = Syntax.MakeSimplifyingContext ()
 module Int = SrkUtil.Int
 module TF = TransitionFormula
-module LIRR = LirrInvariants.LIRR
 
 let srk = Ctx.context
 
@@ -1009,12 +1008,10 @@ let omega_algebra = function
            in
            let star solver =
              let module E = Iteration.LossyTranslation in
-             let k = mk_symbol srk `TyInt in
              let tf = Iteration.Solver.get_transition_formula solver in
-             let exists x = x != k && TF.exists tf x in
              TF.make
-               ~exists
-               (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract solver))
+               ~exists:(TF.exists tf)
+               (Iteration.closure Iteration.LossyTranslation.exp solver)
                (TF.symbols tf)
            in
            Iteration.phase_mp srk predicates star nonterm solver
@@ -1237,16 +1234,19 @@ let _ =
     ("-cra-split-loops",
      Arg.Unit (fun () ->
          if !monotone then
-           K.domain := (module Iteration.InvariantDirection(val !K.domain))
+           K.domain := Iteration.invariant_direction !K.domain
          else
-           K.domain := (module Iteration.Split(val !K.domain))),
+           K.domain := Iteration.split !K.domain),
      " Turn on loop splitting");
   CmdLine.register_config
     ("-cra-prsd",
      Arg.Unit (fun () ->
          let open Iteration in
          let open SolvablePolynomial in
-         K.domain := (module ProductWedge(SolvablePolynomialPeriodicRational)(WedgeGuard))),
+         K.domain :=
+           wedge_lift
+             (wedge_product [ SolvablePolynomialPeriodicRational.wedge_exp
+                            ; Iteration.WedgeGuard.wedge_exp])),
      " Use periodic rational spectral decomposition");
   CmdLine.register_config
     ("-cra-refine",
@@ -1261,19 +1261,21 @@ let _ =
      Arg.Unit (fun () ->
          let open Iteration in
          if !monotone then
-           K.domain := (module Product
-                                 (Product(Vas.Monotone)(PolyhedronGuard))
-                                 (LossyTranslation))
+           K.domain := product [ Vas.Monotone.exp
+                               ; PolyhedronGuard.exp
+                               ; LossyTranslation.exp ]
          else
-           K.domain := (module Product
-                                 (Product(Vas)(PolyhedronGuard))
-                                 (LossyTranslation))),
+           K.domain := product [ Vas.exp
+                               ; PolyhedronGuard.exp
+                               ; LossyTranslation.exp ]),
      " Use VAS abstraction");
   CmdLine.register_config
     ("-cra-vass",
      Arg.Unit (fun () ->
          let open Iteration in
-         K.domain := (module Product(Product(LossyTranslation)(PolyhedronGuard))(Vass))),
+         K.domain := product [ Vass.exp
+                             ; PolyhedronGuard.exp
+                             ; LossyTranslation.exp ]),
      " Use VASS abstraction");
   CmdLine.register_config
     ("-dump-goals",
@@ -1284,35 +1286,42 @@ let _ =
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(LossyTranslation)(PolyhedronGuard))),
+         K.domain := product [LossyTranslation.exp; PolyhedronGuard.exp]),
      " Disable non-monotone analysis features");
   CmdLine.register_config
     ("-lirr",
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(LIRR)(LIRRGuard))),
+         K.domain := product [LirrInvariants.exp; LIRRGuard.exp]),
      " Use weak arithmetic theory");
   CmdLine.register_config
     ("-lirr-sp",
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(Product(SolvablePolynomial.SolvablePolynomialLIRR)(LIRRGuard))(LIRR))),
+         K.domain := product [ LirrInvariants.exp
+                             ; LIRRGuard.exp
+                             ; SolvablePolynomial.SolvablePolynomialLIRR.exp ]),
      " Use weak arithmetic theory with solvable polynomial maps");
   CmdLine.register_config
     ("-lirr-usp",
      Arg.Unit (fun () ->
         let open Iteration in
         monotone := true;
-        K.domain := (module Product(Product(SolvablePolynomial.UltSolvablePolynomialLIRR)(LIRRGuard))(LIRR))),
+        K.domain := product [ SolvablePolynomial.UltSolvablePolynomialLIRR.exp
+                            ; LIRRGuard.exp
+                            ; LirrInvariants.exp ]),
     " Use weak arithmetic theory with ultimately solvable polynomial maps");
   CmdLine.register_config
     ("-lirr-sp-quad",
      Arg.Unit (fun () ->
         let open Iteration in
         monotone := true;
-        K.domain := (module Product(SolvablePolynomial.UltSolvablePolynomialLIRR)(Product(Product(SolvablePolynomial.SolvablePolynomialLIRRQuadratic)(LIRRGuard))(LIRR)))),
+        K.domain := product [ SolvablePolynomial.UltSolvablePolynomialLIRR.exp
+                            ; SolvablePolynomial.SolvablePolynomialLIRRQuadratic.exp
+                            ; LIRRGuard.exp
+                            ; LirrInvariants.exp ]),
     " Use weak arithmetic theory with solvable polynomial maps using quadratic simulations");
   CmdLine.register_config
     ("-termination-no-exp",

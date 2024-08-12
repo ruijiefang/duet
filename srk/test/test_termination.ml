@@ -15,7 +15,7 @@ let mp_exp =
   let all_sym = (List.map fst tr_symbols)@(List.map snd tr_symbols) in
   fun tr_symbols phi ->
   TerminationExp.mp
-    (module Iteration.LossyTranslation)
+    Iteration.LossyTranslation.exp
     (Iteration.Solver.make
        srk
        (TransitionFormula.make
@@ -62,13 +62,17 @@ let mp_llrf_with_phase phi =
     |> List.concat
   in
   let star solver =
-    let module E = Iteration.LossyTranslation in 
+    let rtc =
+      Iteration.closure
+        Iteration.LossyTranslation.exp
+        solver
+    in
     let k = mk_symbol srk `TyInt in
     let tf = Iteration.Solver.get_transition_formula solver in
     let exists x = x != k && (TF.exists tf) x in
     TF.make
       ~exists
-      (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract solver))
+      rtc
       (TF.symbols tf)
   in
   let solver = Iteration.Solver.make srk phi in

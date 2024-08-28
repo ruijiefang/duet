@@ -246,6 +246,8 @@ module K = struct
       Log.time "cra:star" star x
 
   let project = exists V.is_global
+
+  let project_custom v = exists v 
 end
 
 type ptr_term =

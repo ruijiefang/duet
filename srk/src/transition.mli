@@ -70,6 +70,9 @@ module Make
   (** Non-deterministically choose between two transitions *)
   val add : t -> t -> t
 
+  (** take conjunction of two transition formulas *)
+  val conjunct : t -> t -> t
+
   (** Unexecutable transition (unit of [add]). *)
   val zero : t
 
@@ -110,15 +113,41 @@ module Make
       support the proof (for each [i], [{ phi_{i-1} } tr_i { phi_i }] holds,
       where [phi_0] is [true] and [phi_n] implies the post-condition). *)
 
-  val interpolate : t list -> C.t formula -> [ `Valid of C.t formula list
-                                             | `Invalid
-                                             | `Unknown ]
+      val interpolate : t list -> C.t formula -> [ `Valid of C.t formula list
+      | `Invalid
+      | `Unknown ]
+
+      val contextualize :  t -> t -> t  -> [ `Sat of t | `Unsat ]
+
+      (** Same as interpolate, but returns a concrete model if interpllation fails. *)
+      val interpolate_or_concrete_model : t list -> C.t formula 
+        -> [`Valid of C.t formula list | `Invalid of C.t Interpretation.interpretation | `Unknown ]
+
+
+
+    (**  
+        transtion : guard, transform
+        interpretation: M
+        find a model of the guard where we use M to replace all the pre-state value.
+        check interpretation.substitute 
+    *)
+    val get_post_model : C.t Interpretation.interpretation -> t -> (C.t Interpretation.interpretation) option 
+
+
+  (** Underapproximate existential quantification using model-based projection. 
+      The variables to be preserved are set to `true` in the initial map. 
+      Note the input map specifies variables to be preserved, not removed. *)
+      val project_mbp : (var -> bool) -> t -> [> `Sat of t | `Unsat]
+
 
   (** Given a pre-condition [P], a path [path], and a post-condition [Q],
       determine whether the Hoare triple [{P}path{Q}] is valid. *)
   val valid_triple : C.t formula -> t list -> C.t formula -> [ `Valid
                                                              | `Invalid
                                                              | `Unknown ]
+
+  val contains_havoc : t -> bool
+
 
   val defines : t -> var list
   val uses : t -> var list

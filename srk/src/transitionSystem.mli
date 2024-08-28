@@ -79,6 +79,10 @@ module Make
   (** Get procedure summary; delegates call to WG.RecGraph.get_summary *)
   val get_summary : query -> (vertex * vertex) -> transition
 
+  (** delegates call to RecGraph.inter_path_summary / RecGraph.intra_path_summary *)
+  val inter_path_summary : query -> vertex -> vertex -> transition 
+
+  val intra_path_summary : query -> vertex -> vertex -> transition 
 
   (** Compute interval invariants for each loop header of a transition system.
       The invariant computed for a loop is defined only over the variables

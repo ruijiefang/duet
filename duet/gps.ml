@@ -494,7 +494,7 @@ module GPS = struct
       let f = List.map (fun (_, w, _) -> w) in 
       let left = f left in 
       let right = f right in
-      match K.project (V.is_global) (path_condition ctx UnderApprox err_leaf |> seq) with 
+      match K.project_mbp (V.is_global) (path_condition ctx UnderApprox err_leaf |> seq) with 
       | `Sat t -> `Unsafe t 
       | _ -> 
         Printf.printf " ------------------------ handle_path_to_error debug info: called by case %s ------------------\n" caller_id; 
@@ -537,7 +537,7 @@ module GPS = struct
             Summarizer.refine_over_summary (get_summarizer ctx) (ProcName.make (src, dst)) r;
             handle_path_to_error ctx left curr right dir err_leaf
            | Unsafe trs -> 
-            begin match trs |> K.project (V.is_global) with 
+            begin match trs |> K.project_mbp (V.is_global) with 
             | `Sat tr -> 
               Summarizer.refine_under_summary (get_summarizer ctx) (ProcName.make (src, dst)) tr;
               begin match right with 
@@ -622,12 +622,12 @@ module BM = BatMap.Make(Int)
 let analyze_concolic_mcl file = 
   let open Srk.Iteration in 
   populate_offset_table file;
-  K.domain := (module (Split(Product(LinearRecurrenceInequation)(PolyhedronGuard))));
+  K.domain := (module (Split(Product(LossyTranslation)(PolyhedronGuard))));
   match file.entry_points with
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
-      let (ts, assertions) = make_transition_system true rg in
+      let (ts, assertions) = make_transition_system rg in
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
       TSDisplay.display ts;
       Printf.printf "\nentry: %d\n" entry; 
@@ -648,12 +648,12 @@ let analyze_concolic_mcl file =
 let analyze_concolic_mcl file = 
   let open Srk.Iteration in 
   populate_offset_table file;
-  K.domain := (module (Split(Product(LinearRecurrenceInequation)(PolyhedronGuard))));
+  K.domain := (module (Split(Product(LossyTranslation)(PolyhedronGuard))));
   match file.entry_points with
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
-      let (ts, assertions) = make_transition_system true rg in
+      let (ts, assertions) = make_transition_system rg in
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
       TSDisplay.display ts;
       Printf.printf "\nentry: %d\n" entry; 
@@ -676,7 +676,7 @@ let dump_cfg simplify file =
     begin 
       let rg = Interproc.make_recgraph file in 
       let _ (* entry *) = (RG.block_entry rg main).did in 
-      let (ts, assertions) = make_transition_system simplify rg in 
+      let (ts, assertions) = make_transition_system rg in 
       let ts, _ = make_ts_assertions_unreachable ts assertions in 
       TSDisplay.display ts
     end

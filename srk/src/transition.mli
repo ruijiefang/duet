@@ -9,6 +9,7 @@ module type Var = sig
   val compare : t -> t -> int
   val symbol_of : t -> symbol
   val of_symbol : symbol -> t option
+  val is_global : t -> bool
 end
 
 module Make

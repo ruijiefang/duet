@@ -11,6 +11,8 @@ module type Var = sig
   val compare : t -> t -> int
   val symbol_of : t -> symbol
   val of_symbol : symbol -> t option
+
+  val is_global : t -> bool 
 end
 
 module Make
@@ -545,7 +547,7 @@ struct
 
 
   let interpolate_query trs post sat_callback unsat_callback = 
-    let solver = Smt.Solver.make C.context in 
+    let solver = Smt.StdSolver.make C.context in 
     (* Break guards into conjunctions, associate each conjunct with an indicator *)
     let guards =
       List.map (fun tr ->
@@ -596,7 +598,7 @@ struct
     let symbols, added_formulas = List.fold_left 
       (fun (symbols, added_formulas) (tr, guard) ->
         let f = to_ss_formula tr guard in 
-          Smt.Solver.add solver [f];
+          Smt.StdSolver.add solver [f];
           (Syntax.symbols f) :: symbols, f::added_formulas)
          ([], []) (List.combine trs guards) in 
     let _ = List.iter (fun f -> 
@@ -611,7 +613,7 @@ struct
     let symbols = (Syntax.symbols target) :: symbols 
       |> List.rev
       |> List.map (fun ss -> Symbol.Set.diff ss indicator_symbols) in 
-      Smt.Solver.add solver [target];
+      Smt.StdSolver.add solver [target];
       Printf.printf "-----------------------------interpolation---\n";
       List.iter (fun f -> 
         let f = substitute_const srk
@@ -623,8 +625,8 @@ struct
           Printf.printf "-------------------interpolation end---\n";
       Printf.printf "--- indicator length %d\n" @@ List.length indicators;
       logf ~level:`always "\ntarget formula: %a\n" (Syntax.pp_expr srk) target;
-      Smt.Solver.add solver indicators; 
-      match Smt.Solver.get_unsat_core_or_model solver with 
+      Smt.StdSolver.add solver indicators; 
+      match Smt.StdSolver.get_unsat_core_or_model solver with 
         | `Sat m ->  
           (sat_callback m symbols sst ss_inv)
         | `Unsat core -> (unsat_callback trs post guards core)

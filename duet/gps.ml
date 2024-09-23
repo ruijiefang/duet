@@ -91,6 +91,24 @@ let make_ts_assertions_unreachable (ts : cfg_t) assertions =
       new_vertices := u :: !new_vertices 
   ); !pts, !new_vertices
 
+let instrument_with_rets (ts : cfg_t) : cfg_t = 
+  let mk_int k = Ctx.mk_real (QQ.of_int k) in 
+  let largest = ref (WG.fold_vertex (fun v max -> if v > max then v else max) ts 0) in 
+  let new_vtx () = 
+    largest := !largest + 1; !largest in
+  let hazard_var = Var.mk (Varinfo.mk_global "__duet_hazard" (Concrete (Int 8))) in 
+  let hazard_var_sym = Syntax.mk_symbol srk ~name:"__duet_hazard" `TyInt in 
+  let hazard_var_term = Syntax.mk_const srk hazard_var_sym in 
+    let open Syntax.Infix(Ctx) in 
+    let assume_true = K.assume (Syntax.mk_eq srk (hazard_var_term) (mk_int 1)) in
+    let assign_zero = K.assign (VVal hazard_var) (mk_int 0) in 
+    let assign_one  = K.assign (VVal hazard_var) (mk_int 1) in 
+  let all_succs u = WG.U.succ u in 
+  let _ = 
+    Hashtbl.add V.sym_to_var hazard_var_sym (VVal hazard_var);
+    ValueHT.add V.var_to_sym (VVal hazard_var) hazard_var_sym
+  in ts
+
 let instrument_with_gas (ts: cfg_t) = 
   let mk_int k = Ctx.mk_real (QQ.of_int k) in 
   let largest = ref (WG.fold_vertex (fun v max -> if v > max then v else max) ts 0) in 
@@ -645,7 +663,7 @@ let analyze_concolic_mcl file =
 
 
 
-let analyze_concolic_mcl file = 
+let analyze_concolic_mcl enable_gas file = 
   let open Srk.Iteration in 
   populate_offset_table file;
   K.domain := (module (Split(Product(LossyTranslation)(PolyhedronGuard))));
@@ -654,6 +672,7 @@ let analyze_concolic_mcl file =
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
       let (ts, assertions) = make_transition_system rg in
+      let ts = if enable_gas then instrument_with_gas ts else ts in 
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
       TSDisplay.display ts;
       Printf.printf "\nentry: %d\n" entry; 
@@ -684,4 +703,6 @@ let dump_cfg simplify file =
 
 let _ = 
   CmdLine.register_pass 
-    ("-mcl-concolic", analyze_concolic_mcl, " GPS model checking algorithm");
+    ("-mcl-concolic", analyze_concolic_mcl false, " GPS model checking algorithm");
+  CmdLine.register_pass
+    ("-mcl-concolic-gas", analyze_concolic_mcl true, " GPS model checking algorithm")

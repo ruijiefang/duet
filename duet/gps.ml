@@ -647,7 +647,7 @@ let analyze_concolic_mcl file =
       let entry = (RG.block_entry rg main).did in
       let (ts, assertions) = make_transition_system rg in
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
-      TSDisplay.display ts;
+      if !CmdLine.display_graphs then TSDisplay.display ts;
       Printf.printf "\nentry: %d\n" entry; 
       List.iter (fun err_loc ->
         Printf.printf "testing reachability of location %d\n" err_loc ; 
@@ -674,7 +674,7 @@ let analyze_concolic_mcl enable_gas file =
       let (ts, assertions) = make_transition_system rg in
       let ts = if enable_gas then instrument_with_gas ts else ts in 
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
-      TSDisplay.display ts;
+      if !CmdLine.display_graphs then TSDisplay.display ts;
       Printf.printf "\nentry: %d\n" entry; 
       List.iter (fun err_loc ->
         Printf.printf "testing reachability of location %d\n" err_loc ; 

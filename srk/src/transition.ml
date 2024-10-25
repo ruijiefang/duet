@@ -607,24 +607,24 @@ struct
           match Hashtbl.find_opt ss_inv v with 
           | None -> Syntax.mk_const srk v 
           | Some v' -> Syntax.mk_const srk v') f
-        in logf ~level:`always "added formula: %a\n" (Syntax.pp_expr srk) f) added_formulas  
+        in logf "added formula: %a\n" (Syntax.pp_expr srk) f) added_formulas  
     (* subscript the symbols in the `post` formula, as well *) in 
     let target = substitute_const srk subscript (mk_not srk post) in
     let symbols = (Syntax.symbols target) :: symbols 
       |> List.rev
       |> List.map (fun ss -> Symbol.Set.diff ss indicator_symbols) in 
       Smt.StdSolver.add solver [target];
-      Printf.printf "-----------------------------interpolation---\n";
+      logf "-----------------------------interpolation---\n";
       List.iter (fun f -> 
         let f = substitute_const srk
           (fun v -> 
             match Hashtbl.find_opt ss_inv v with 
             | None -> Syntax.mk_const srk v 
             | Some v' -> Syntax.mk_const srk v') f
-          in logf ~level:`always "indicator formula: %a\n" (Syntax.pp_expr srk) f) indicators;
-          Printf.printf "-------------------interpolation end---\n";
-      Printf.printf "--- indicator length %d\n" @@ List.length indicators;
-      logf ~level:`always "\ntarget formula: %a\n" (Syntax.pp_expr srk) target;
+          in logf "indicator formula: %a\n" (Syntax.pp_expr srk) f) indicators;
+          logf "-------------------interpolation end---\n";
+      logf "--- indicator length %d\n" @@ List.length indicators;
+      logf "\ntarget formula: %a\n" (Syntax.pp_expr srk) target;
       Smt.StdSolver.add solver indicators; 
       match Smt.StdSolver.get_unsat_core_or_model solver with 
         | `Sat m ->  
@@ -658,8 +658,8 @@ struct
                 match Hashtbl.find_opt ss s with 
                 | Some sss -> Interpretation.value model sss 
                 | None -> Interpretation.value model s))*) (*(Interpretation.empty srk)*) symbols in 
-          Printf.printf "hashtable length: %d\n" (Hashtbl.length ss_inv);
-          Interpretation.pp Format.std_formatter m; 
+          logf "hashtable length: %d\n" (Hashtbl.length ss_inv);
+          logf "%a" Interpretation.pp m; 
           Format.print_flush ();
       (* symbols is a list of subscripted symbols arranged in left-to-right order. 
          folding over this in left-to-right order amounts to forward concrete execution. *)
@@ -718,7 +718,7 @@ struct
         | None -> false 
         | Some v -> 
           if Var.is_global v then begin 
-            Printf.printf "symbol %s is global\n" (Syntax.show_symbol srk (Hashtbl.find reverse_subscript_tbl x)); true 
+            logf "symbol %s is global\n" (Syntax.show_symbol srk (Hashtbl.find reverse_subscript_tbl x)); true 
           end else false
         end
       with Not_found -> false  
@@ -757,25 +757,25 @@ struct
           in let projected = local_project value_of_coord xs cube 
         in cube_of srk projected |> Syntax.mk_and srk
         | None, Some f  ->  
-          Printf.printf "contextualize: select_implicant failed on left formula: \n";
-          logf ~level: `always "\n-- left formula: %a\n" (Syntax.pp_expr srk) f1;
-          logf ~level: `always "\n-- right formula:%a\n" (Syntax.pp_expr srk) f3;
-          List.iteri (fun _ x -> logf ~level: `always "\n  -- impicant of right formula:%a\n" (Syntax.pp_expr srk) x) f;
-          logf ~level:`always "\n *  model: %a\n" (Interpretation.pp) model;
+          logf "contextualize: select_implicant failed on left formula: \n";
+          logf "\n-- left formula: %a\n" (Syntax.pp_expr srk) f1;
+          logf "\n-- right formula:%a\n" (Syntax.pp_expr srk) f3;
+          List.iteri (fun _ x -> logf "\n  -- impicant of right formula:%a\n" (Syntax.pp_expr srk) x) f;
+          logf "\n *  model: %a\n" (Interpretation.pp) model;
           failwith "error extrapolating: select_implicant failed on left formula"
         | Some f, None -> 
-          Printf.printf "contextualize: select_implicant failed on right formula: \n";
-          logf ~level: `always "\n-- left formula: %a\n" (Syntax.pp_expr srk) f1;
-          List.iteri (fun _ x -> logf ~level: `always "\n  -- impicant of left formula:%a\n" (Syntax.pp_expr srk) x) f;
-          logf ~level: `always "\n-- right formula:%a\n" (Syntax.pp_expr srk) f3;
-          logf ~level:`always "\n *  model: %a\n" (Interpretation.pp) model;
+          logf "contextualize: select_implicant failed on right formula: \n";
+          logf "\n-- left formula: %a\n" (Syntax.pp_expr srk) f1;
+          List.iteri (fun _ x -> logf "\n  -- impicant of left formula:%a\n" (Syntax.pp_expr srk) x) f;
+          logf "\n-- right formula:%a\n" (Syntax.pp_expr srk) f3;
+          logf "\n *  model: %a\n" (Interpretation.pp) model;
           failwith "error extrapolating: select_implicant failed on right formula"
         | None, None -> 
-          logf ~level:`always "left: %a\n" (Syntax.pp_expr srk) f1;
+          logf "left: %a\n" (Syntax.pp_expr srk) f1;
           Format.print_flush ();
-          logf ~level:`always "right: %a\n" (Syntax.pp_expr srk) f3;
+          logf "right: %a\n" (Syntax.pp_expr srk) f3;
           Format.print_flush (); 
-          logf ~level:`always "\n *  model: %a\n" (Interpretation.pp) model;
+          logf "\n *  model: %a\n" (Interpretation.pp) model;
           Format.print_flush ();
           failwith "error extrapolating: select_implicant failed on both formulae" 
         in 
@@ -862,9 +862,9 @@ struct
             in let projected = local_project value_of_coord xs cube 
             in cube_of srk projected |> Syntax.mk_and srk
           | _ -> 
-            logf ~level:`always "\n--select_implicant formula: %a\n" (Syntax.pp_expr srk) formula;
+            logf "\n--select_implicant formula: %a\n" (Syntax.pp_expr srk) formula;
             Format.print_flush ();
-            logf ~level:`always "\n--select_implicant model: %a\n" (Interpretation.pp) model;
+            logf "\n--select_implicant model: %a\n" (Interpretation.pp) model;
             Format.print_flush();
             failwith "error projecting: select_implicant returned None"    
       in match Smt.get_model ~symbols:(tr_symbols |> Symbol.Set.elements) srk tr_formula with 

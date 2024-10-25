@@ -15,6 +15,7 @@ module Int = SrkUtil.Int
 module TF = TransitionFormula*)
 module TS = TransitionSystem.Make(Ctx)(V)(K)
 
+include Log.Make(struct let name = "gps" end)
 
 module ProcName = struct 
   type t = int * int 
@@ -48,14 +49,14 @@ let mk_false () = Syntax.mk_false Ctx.context
 let mk_query ts entry = TS.mk_query ts entry (if !monotone then (module MonotoneDom) else (module TransitionDom))
 
 let log_formulas prefix formulas = 
-  List.iteri (fun i f -> logf ~level:`always "[formula] %s(%i): %a\n" prefix i (Syntax.pp_expr srk) f) formulas 
+  List.iteri (fun i f -> logf "[formula] %s(%i): %a\n" prefix i (Syntax.pp_expr srk) f) formulas 
 
 let log_weights prefix weights = 
-  List.iteri (fun i f -> logf ~level:`always "[weight] %s(%i): %a\n" prefix i K.pp f) weights
+  List.iteri (fun i f -> logf "[weight] %s(%i): %a\n" prefix i K.pp f) weights
 
 
 let log_model prefix model = 
-  logf ~level:`always "[model] %s: %a\n" prefix Interpretation.pp model
+  logf "[model] %s: %a\n" prefix Interpretation.pp model
 
 (*
 let assert_i = ref 0
@@ -216,9 +217,9 @@ let log_labelled_weights s uu prefix weights =
           | OverApprox -> Summarizer.over_proc_summary s (ProcName.make (u, v)) 
           | UnderApprox -> Summarizer.under_proc_summary s (ProcName.make (u, v)) 
         end in 
-        logf ~level:`always "[labelled weight] %s(%i, call(%d,%d)): %a\n" prefix i u v K.pp p
+        logf "[labelled weight] %s(%i, call(%d,%d)): %a\n" prefix i u v K.pp p
       | Weight w -> 
-        logf ~level:`always "[labelled weight] %s(%i): %a\n" prefix i K.pp w) weights
+        logf "[labelled weight] %s(%i): %a\n" prefix i K.pp w) weights
 
 let srk = Ctx.context 
 
@@ -373,7 +374,7 @@ module GPS = struct
         | UnderApprox -> Summarizer.under_proc_summary summarizer (ProcName.make (src, dst)) 
         end
       | Weight w -> w) (to_weights cfg_nodes) in 
-      Printf.printf " ---- path_condition: path length: %d, before add1: %d\n" ((List.length pathcond)+1) (List.length pathcond);
+      logf " ---- path_condition: path length: %d, before add1: %d\n" ((List.length pathcond)+1) (List.length pathcond);
     let l = (K.assume !ctx.pre_state) :: pathcond in 
         log_weights "path conditions " l; l
 
@@ -383,7 +384,7 @@ module GPS = struct
     let equalities = make_equalities ctx |> K.assume in 
     log_weights "\npost_path_summary: " [post_path_summary];
     log_weights "\nequalities: " [equalities];
-    Printf.printf "\n";
+    logf "\n";
     K.guard (K.mul post_path_summary equalities) 
 
   (* Interpolate the path (entry) -> (CFG vertex corresponding to src node) -> (sink CFG vertex). If fail, then get model. *)
@@ -392,7 +393,7 @@ module GPS = struct
     let prefix = path_condition ctx OverApprox src in 
     log_weights "\nprefix " prefix;
     log_formulas "\nsuffix " [suffix];
-    Printf.printf "\n";
+    logf "\n";
     K.interpolate_or_concrete_model prefix suffix
 
   let get_global_ctx (ctx: intra_context ref) = (!ctx.global_ctx)
@@ -402,19 +403,19 @@ module GPS = struct
      Returns `Success if refine is able to refine. *)
   let mc_refine (ctx: intra_context ref) (v: ReachTree.node) = 
     let handle_failure v m = 
-      logf ~level:`always " *********************** REFINEMENT FAILED *************************\n"; 
+      logf " *********************** REFINEMENT FAILED *************************\n"; 
       let path_condition = path_condition ctx OverApprox v 
       in `Failure (m, path_condition) 
     in let art = !ctx.art in 
     let path = ReachTree.tree_path art v in 
       match interpolate_or_get_model ctx v @@ ReachTree.get_err_loc art with 
       `Invalid v_model -> 
-        logf ~level:`always "Unable to refine but got model\n";
+        logf "Unable to refine but got model\n";
         (* v is no longer a frontier node. *)
         handle_failure v v_model
       | `Unknown -> failwith "mc_refine: got UNKNOWN as a result for interpolate_or_get_model"
       | `Valid interpolants ->
-        logf ~level:`always "--- mc_refine: interpolation succeeded. path length %d, interpolant length %d" (List.length path) (List.length interpolants);
+        logf "--- mc_refine: interpolation succeeded. path length %d, interpolant length %d" (List.length path) (List.length interpolants);
         ReachTree.refine art path interpolants
         |> List.iter (fun x -> !ctx.worklist <- worklist_push x !ctx.worklist); 
         `Success 
@@ -426,7 +427,7 @@ module GPS = struct
       | Some ((u, u_model), w) -> 
         if print_tree then 
         ReachTree.log_art !ctx.art;
-        logf ~level:`always " visit %d (%d)\n" (ReachTree.of_node u) (ReachTree.maps_to !ctx.art u);
+        logf " visit %d (%d)\n" (ReachTree.of_node u) (ReachTree.maps_to !ctx.art u);
         !ctx.execlist <- w;
         if (ReachTree.maps_to !ctx.art u) = (ReachTree.get_err_loc !ctx.art) then
           begin match Smt.is_sat srk (make_equalities ctx) with 
@@ -435,7 +436,7 @@ module GPS = struct
           | _ -> !ctx.worklist <- worklist_push u !ctx.worklist; `Continue
           end
         else begin
-            logf ~level:`always "model of %d (%d): \n" (ReachTree.of_node u) (ReachTree.maps_to !ctx.art u);
+            logf "model of %d (%d): \n" (ReachTree.of_node u) (ReachTree.maps_to !ctx.art u);
             log_model "" u_model;
             let new_concolic_nodes, new_frontier_nodes = ReachTree.expand !ctx.recurse_level !ctx.art u u_model in 
               List.iter (fun concolic_node -> !ctx.execlist <- worklist_push concolic_node !ctx.execlist) new_concolic_nodes;
@@ -465,17 +466,17 @@ module GPS = struct
       (* Fetched tree node u from work list. First attempt to close it. *)
       if not (ReachTree.is_covered !ctx.art u) then 
         begin
-          logf ~level:`always " uncovered. try close\n";
+          logf " uncovered. try close\n";
           begin match ReachTree.lclose !ctx.art u with (* Close succeeded. No need to further explore it. *)
           | true, leaves ->  
-            logf ~level:`always "Close succeeded.\n"; 
+            logf "Close succeeded.\n"; 
             worklist_push_all leaves;
             `Continue
           | false, leaves -> (* u is uncovered. *)
             worklist_push_all leaves;
             begin match mc_refine ctx u with 
               | `Success -> (* refinement succeeded *)
-                logf ~level:`always "refinement_phase: refinement succeeded\n";
+                logf "refinement_phase: refinement succeeded\n";
                 (* for every node along path of refinement try close *)
                 let path = ReachTree.tree_path !ctx.art u in 
                   List.iter 
@@ -493,7 +494,7 @@ module GPS = struct
           end
         end
       else begin 
-        logf ~level:`always "refinement_phase: %d is covered\n" (ReachTree.of_node u);
+        logf "refinement_phase: %d is covered\n" (ReachTree.of_node u);
         `Continue
       end
     | None -> failwith "refinement_phase: encountered an empty worklist for refinement\n" (* cannot happen *)
@@ -515,15 +516,15 @@ module GPS = struct
       match K.project_mbp (V.is_global) (path_condition ctx UnderApprox err_leaf |> seq) with 
       | `Sat t -> `Unsafe t 
       | _ -> 
-        Printf.printf " ------------------------ handle_path_to_error debug info: called by case %s ------------------\n" caller_id; 
+        logf " ------------------------ handle_path_to_error debug info: called by case %s ------------------\n" caller_id; 
         log_weights "faulty weight: " (path_condition ctx UnderApprox err_leaf);
-        Printf.printf "\nlength of left path: %d" (List.length left);
-        Printf.printf "\nlength of right path: %d" (List.length right);
-        Printf.printf "\nPrinting left path... \n";
+        logf "\nlength of left path: %d" (List.length left);
+        logf "\nlength of right path: %d" (List.length right);
+        logf "\nPrinting left path... \n";
         log_labelled_weights (get_summarizer ctx) UnderApprox "left path - " left;
         failwith "error: handle_path_to_error: cannot project path condition" in 
     let handle_left_case caller_id =
-      Printf.printf "handle_path_to_error: %s\n" caller_id;
+      logf "handle_path_to_error: %s\n" caller_id;
       `Safe in 
     match curr with 
     | (_, Weight _, _) -> 
@@ -578,7 +579,7 @@ module GPS = struct
   
     
   and intraproc_check (ctx: intra_context ref) : mc_result = 
-    logf ~level:`always " *********************************************** recurse_level: %d\n" !ctx.recurse_level;
+    logf " *********************************************** recurse_level: %d\n" !ctx.recurse_level;
     let continue = ref true in 
     let state = ref `Continue in
       !ctx.worklist <- worklist_push (ReachTree.root) !ctx.worklist; 
@@ -587,7 +588,7 @@ module GPS = struct
           (* concolic phase *)
           begin match concolic_phase ctx with 
           | `Unsafe w -> 
-            logf ~level:`always "--- concolic_mcmillan_execute: found path-to-error at tree node %d (cfg vertex %d) \n" (ReachTree.of_node w) (ReachTree.maps_to !ctx.art w);
+            logf "--- concolic_mcmillan_execute: found path-to-error at tree node %d (cfg vertex %d) \n" (ReachTree.of_node w) (ReachTree.maps_to !ctx.art w);
             let path_to_w = 
               ReachTree.tree_path !ctx.art w 
               |> art_cfg_path_pair ctx 
@@ -600,7 +601,7 @@ module GPS = struct
                   !ctx.worklist <- worklist_push w !ctx.worklist;
                   continue := true
                 | `Unsafe pathcond ->  
-                  logf ~level:`always "--- conoclic_mcmilan_execute: managed to concretize an intraprocedural path-to-error. returning... ";
+                  logf "--- conoclic_mcmilan_execute: managed to concretize an intraprocedural path-to-error. returning... ";
                   state := `Concretized (pathcond);
                   continue := false
                 end
@@ -628,7 +629,7 @@ module GPS = struct
     * ptt is a pointer to the reachability tree.
     *)
     let global_context = mk_mc_context ts entry in 
-    logf ~level:`always "executing concolic mcmillan's algorithm\n";
+    logf "executing concolic mcmillan's algorithm\n";
     (*let ts_with_gas = instrument_with_gas ts in *)
     let main_context = mk_intra_context global_context (entry, err_loc) ts 0 K.one entry err_loc in 
     intraproc_check main_context 
@@ -648,7 +649,7 @@ let analyze_concolic_mcl file =
       let (ts, assertions) = make_transition_system rg in
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
       if !CmdLine.display_graphs then TSDisplay.display ts;
-      Printf.printf "\nentry: %d\n" entry; 
+      logf "\nentry: %d\n" entry; 
       List.iter (fun err_loc ->
         Printf.printf "testing reachability of location %d\n" err_loc ; 
         Printf.printf "------------------------------\n";
@@ -675,7 +676,7 @@ let analyze_concolic_mcl enable_gas file =
       let ts = if enable_gas then instrument_with_gas ts else ts in 
       let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
       if !CmdLine.display_graphs then TSDisplay.display ts;
-      Printf.printf "\nentry: %d\n" entry; 
+      logf "\nentry: %d\n" entry; 
       List.iter (fun err_loc ->
         Printf.printf "testing reachability of location %d\n" err_loc ; 
         Printf.printf "------------------------------\n";

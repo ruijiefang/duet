@@ -143,18 +143,18 @@ struct
   let log_formulas prefix formulas =
     List.iteri
       (fun i f ->
-        logf ~level:`always "[formula] %s(%i): %a\n" prefix i
+        logf "[formula] %s(%i): %a\n" prefix i
           (Syntax.pp_expr Ctx.context)
           f)
       formulas
 
   let log_weights prefix weights =
     List.iteri
-      (fun i f -> logf ~level:`always "[weight] %s(%i): %a\n" prefix i K.pp f)
+      (fun i f -> logf "[weight] %s(%i): %a\n" prefix i K.pp f)
       weights
 
   let log_model prefix model =
-    logf ~level:`always "[model] %s: %a\n" prefix Interpretation.pp model
+    logf "[model] %s: %a\n" prefix Interpretation.pp model
 
   type t = {
     graph : TS.t;
@@ -200,14 +200,14 @@ struct
   (** [print_tree t ident v] prints an ART t with indentation `ident` rooted at node v *)
   let print_tree (art : t ref) (indent : string) (v : node) =
     let rec print_tree_ (art : t ref) indent v =
-      logf ~level:`always "%s|" indent;
-      logf ~level:`always "%s+-%d(%d)" indent v
+      logf "%s|" indent;
+      logf "%s+-%d(%d)" indent v
         (IntMap.find v !art.cfg_vertex |> VN.of_vertex);
       List.iter
         (fun x -> print_tree_ art (indent ^ " ") x)
         (IntMap.find_default [] v !art.children)
     in
-    logf ~level:`always "*";
+    logf "*";
     print_tree_ art indent v
 
   (*  [parent t i] gets parent of node i in tree t.  *)
@@ -404,7 +404,7 @@ struct
            (maps_to art w |> VN.of_vertex);
     match Smt.entails Ctx.context v_label w_label with
     | `Yes ->
-        logf ~level:`always "   cover success (v=%d, w=%d). \n" v w;
+        logf "   cover success (v=%d, w=%d). \n" v w;
         log_formulas "        v label " [ v_label ];
         log_formulas "        w label " [ w_label ];
         let reverse_covers_w =
@@ -459,7 +459,7 @@ struct
                          let x_leaves = leaves art x in
                          List.iter
                            (fun x_leaf ->
-                             logf ~level:`always
+                             logf
                                "         close: adding %d back to worklist \n"
                                x_leaf;
                              wl' := x_leaf :: !wl')
@@ -476,7 +476,7 @@ struct
     match IntMap.find_opt v !art.covers with
     | None -> if v == 0 then false else is_covered art (parent art v)
     | Some u ->
-        logf ~level:`always "  | covered by %d\n" u;
+        logf "  | covered by %d\n" u;
         true
 
   (* refine the label of each tree node u along path from tree root to v. *)
@@ -506,21 +506,21 @@ struct
                   match Smt.entails Ctx.context x_label u_label with
                   | `No | `Unknown ->
                       (* remove (x, u) from covering. *)
-                      logf ~level:`always "   refine: removing cover (%d->%d)\n"
+                      logf "   refine: removing cover (%d->%d)\n"
                         x u;
                       !art.covers <- IntMap.remove x !art.covers;
                       (* add x's subtree leaves back to the worklist. *)
                       let x_leaves = leaves art x in
                       List.iter
                         (fun x_leaf ->
-                          logf ~level:`always
+                          logf
                             "         refine: adding %d back to worklist \n"
                             x_leaf;
                           worklist := x_leaf :: !worklist)
                         x_leaves;
                       l
                   | `Yes ->
-                      logf ~level:`always
+                      logf
                         "    refine: cover (x %d-> u %d) still holds\n" x u;
                       log_formulas " x label: " [ x_label ];
                       log_formulas " u label: " [ u_label ];
@@ -623,10 +623,10 @@ struct
       | [] (* leaf node *) -> (
           match IntMap.find_opt v !t.covers with
           | None ->
-              logf ~level:`always "!!! found uncovered leaf: %d\n" v;
+              logf "!!! found uncovered leaf: %d\n" v;
               TS.fold_succ_e
                 (fun (x, _, y) _ ->
-                  logf ~level:`always
+                  logf
                     "  ERROR ERROR ERROR: mapped cfg vertex %d has \
                      out-neighbor %d\n"
                     (VN.of_vertex x) (VN.of_vertex y);
@@ -636,24 +636,24 @@ struct
       | _ -> (
           match IntMap.find_opt v !t.covers with
           | None ->
-              logf ~level:`always "node %d uncovered\n" v;
+              logf "node %d uncovered\n" v;
               List.fold_left (fun acc u -> aux u && acc) true children
           | Some u ->
-              logf ~level:`always "node %d covered by %d\n" v u;
+              logf "node %d covered by %d\n" v u;
               true)
     in
-    logf ~level:`always "verifying well-labelledness of ART...\n";
+    logf "verifying well-labelledness of ART...\n";
     let r = aux 0 in
-    logf ~level:`always "...done verifying well-labelledness of ART\n";
+    logf "...done verifying well-labelledness of ART\n";
     r
 
   let check_covering_welformedness (t : t ref) =
-    logf ~level:`always "checking welformedness of covering relations\n";
+    logf "checking welformedness of covering relations\n";
     IntMap.iter
       (fun dst covered_from ->
         ISet.iter
           (fun src ->
-            logf ~level:`always "checking if (%d, %d) in covering\n" src dst;
+            logf "checking if (%d, %d) in covering\n" src dst;
             match IntMap.find_opt src !t.covers with
             | Some dst' ->
                 if dst' <> dst then
@@ -662,7 +662,7 @@ struct
             | None -> failwith "ERROR: not in covering")
           covered_from)
       !t.reverse_covers;
-    logf ~level:`always "performing a reverse check\n";
+    logf "performing a reverse check\n";
     IntMap.iter
       (fun src dst ->
         match IntMap.find_opt dst !t.reverse_covers with
@@ -682,7 +682,7 @@ struct
                   reverse_covers\n"
                  src dst)
       !t.covers;
-    logf ~level:`always "...done checking welformedness of covering relations\n"
+    logf "...done checking welformedness of covering relations\n"
 
   (** pretty-printing functionalities *)
   let tree_printer_get_name (art : t ref) i =
@@ -692,17 +692,17 @@ struct
         Printf.sprintf "[%d(%d)]->%d" i (maps_to art i |> VN.of_vertex) j
 
   let log_art (art : t ref) =
-    logf ~level:`always " +----------------- ART ----------------+\n";
+    logf " +----------------- ART ----------------+\n";
     let string_of_art =
       Tree_printer.to_string ~line_prefix:"* "
         ~get_name:(tree_printer_get_name art)
         ~get_children:(children art) 0
     in
-    logf ~level:`always "%s" string_of_art;
-    logf ~level:`always " +----------------- ART ----------------+\n"
+    logf "%s" string_of_art;
+    logf " +----------------- ART ----------------+\n"
 
   let log_node u = 
-    logf ~level:`always " node: visit %d\n" u 
+    logf " node: visit %d\n" u 
   
   let of_node u = u
 end

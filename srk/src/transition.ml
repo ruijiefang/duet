@@ -684,10 +684,10 @@ struct
     in
     (* preprocess each formula to get rid of certain undesirable things *)
     let preprocess_formula f = 
-      let nnf_rewriter = Syntax.nnf_rewriter srk in
+      let pos_rewriter = Syntax.pos_rewriter srk in
       f |> Syntax.eliminate_ite srk 
         |> Syntax.eliminate_floor_mod_div srk
-        |> Syntax.rewrite srk ~down:nnf_rewriter  in 
+        |> Syntax.rewrite srk ~down:pos_rewriter  in 
     (* Convert tr into a formula, and simultaneously update the subscript
         table *) 
     let to_ss_formula tr subscript_tbl reverse_subscript_tbl =
@@ -736,11 +736,11 @@ struct
     in
     let project srk (f1: 'a formula) (f3: 'a formula) symbols_f1 symbols_f3 all_symbols model = 
       let open Polyhedron in 
-      (* first do NNF conversion on f1, f3 before computing their implicants *)
+      (* first do POS conversion on f1, f3 before computing their implicants *)
       (* rjf Mar '24: we do this as part of preprocessing to avoid rewriting the formula after an SMT query to get `model`*)
-      (*let nnf_rewriter = Syntax.nnf_rewriter srk in
-      let f1 = Syntax.rewrite srk ~down:(nnf_rewriter) f1 in 
-      let f3 = Syntax.rewrite srk ~down:(nnf_rewriter) f3 in*) 
+      (*let pos_rewriter = Syntax.pos_rewriter srk in
+      let f1 = Syntax.rewrite srk ~down:(pos_rewriter) f1 in 
+      let f3 = Syntax.rewrite srk ~down:(pos_rewriter) f3 in*) 
       let implicant_o1 = Interpretation.select_implicant model f1 in
       let implicant_o2 = Interpretation.select_implicant model f3 in 
         match implicant_o1, implicant_o2 with 
@@ -812,9 +812,9 @@ struct
       let ss_to_sym = Hashtbl.create 991 in 
       (* preprocessing of a formula *)
       let preprocess f =
-        let nnf_rewriter = Syntax.nnf_rewriter srk in 
+        let pos_rewriter = Syntax.pos_rewriter srk in 
         f |> Syntax.eliminate_ite srk |> Syntax.eliminate_floor_mod_div srk
-          |> Syntax.rewrite srk ~down:nnf_rewriter   in 
+          |> Syntax.rewrite srk ~down:pos_rewriter   in 
       let phis =
         M.fold (fun var term phis ->
             let var_sym = Var.symbol_of var in
@@ -839,14 +839,14 @@ struct
       let tr_symbols_removed = Symbol.Set.diff tr_symbols tr_symbols_preserved in 
       let prj formula voc model = 
         let open Polyhedron in 
-        (* first do NNF conversion on [formula] before computing their implicants *)
+        (* first do POS conversion on [formula] before computing their implicants *)
         (* rjf Mar '24: This is done using the preprocess function defined above.*)
-        (*let nnf_rewriter = Syntax.nnf_rewriter srk in
+        (*let pos_rewriter = Syntax.pos_rewriter srk in
         let formula' = 
           formula 
           |> Syntax.eliminate_ite srk 
           |> Syntax.eliminate_floor_mod_div srk 
-          |> Syntax.rewrite srk ~down:(nnf_rewriter) in*)
+          |> Syntax.rewrite srk ~down:(pos_rewriter) in*)
         let implicant = Interpretation.select_implicant model formula in
           match implicant with 
           | Some i ->

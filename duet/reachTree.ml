@@ -49,6 +49,7 @@ module ART
         Ctx.t Interpretation.interpretation ->
         t ->
         Ctx.t Interpretation.interpretation option
+      val is_deterministic : t -> bool
     end)
     (TS : sig
       type vertex
@@ -349,6 +350,12 @@ struct
           on the concolic execution worklist. Otherwise, it is a frontier node, and put it on the 
           refinement worklist. *)
 
+  let is_deterministic =
+    let is_det tr =
+      not (K.contains_havoc tr) || K.is_deterministic tr
+    in
+    Memo.memo is_det
+
   (* returns (new nodes on concolic worklist, new nodes on frontier worklist) *)
   (* a newly expanded node (leaf) is deemed a _concolic node_ if it can inherit
      a post-state model from its parent by means of symbol substitution. It is deemed
@@ -367,12 +374,12 @@ struct
         let weight =
           match weight with
           | TransitionSystem.Weight w ->
-              if K.contains_havoc w then
-                (* w /\ guard (summary from y -> error location) *)
-                K.mul w
-                  (K.assume
-                  @@ K.guard (oracle !art.interproc y !art.err_loc))
-              else w
+            if is_deterministic w then w
+            else
+              K.mul w
+                (K.assume
+                 @@ K.guard (oracle !art.interproc y !art.err_loc))
+
           | TransitionSystem.Call (u, v) ->
               let proc = (VN.to_vertex u, VN.to_vertex v) |> PN.make in
               Summarizer.over_proc_summary !art.interproc proc

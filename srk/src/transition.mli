@@ -161,4 +161,10 @@ module Make
   val domain : (module Iteration.PreDomain) ref
   val star : t -> t
   val linearize : t -> t
+
+  (** If [is_deterministic tr] holds, [tr] is deterministic (at most one
+     post-state for any given pre-state).  If [is_deterministic tr] does not
+     hold, either [tr] is non-deterministic, or a proof of determinacy could
+     not be found. *)
+  val is_deterministic : t -> bool
 end

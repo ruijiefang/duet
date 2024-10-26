@@ -970,4 +970,18 @@ struct
       Nonlinear.linearize srk (mk_and srk (tr.guard::defs))
     in
     { transform; guard }
+
+  let is_deterministic tr =
+    let tr' = rename_skolems tr in
+    let solver = Smt.Solver.make srk in
+    let same_post =
+      M.fold (fun var t rest ->
+          (mk_eq srk t (M.find var tr'.transform)::rest))
+        tr.transform
+        []
+    in
+    Smt.Solver.add solver [tr.guard; tr'.guard; mk_not srk (mk_and srk same_post)];
+    match Smt.Solver.check solver with
+    | `Unsat -> true
+    | `Sat | `Unknown -> false
 end

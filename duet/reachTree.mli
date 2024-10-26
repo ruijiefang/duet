@@ -32,6 +32,7 @@ module ART :
            val get_post_model :
              Ctx.t Srk.Interpretation.interpretation ->
              t -> Ctx.t Srk.Interpretation.interpretation option
+           val is_deterministic : t -> bool
          end)
     (** transition system with edge weights from K *)
     (TS : sig

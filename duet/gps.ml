@@ -76,21 +76,17 @@ let process_interproc_assertion (ts: cfg_t) (phi: Ctx.formula) v =
 
 (* Convert assertion checking problem to vertex reachability problem. *)
 let make_ts_assertions_unreachable (ts : cfg_t) assertions = 
-  let largest = ref (WG.fold_vertex (fun v max -> if v > max then v else max) ts 0) in 
-  let pts = ref ts in 
-  let new_vertices = ref [] in 
-  assertions |> SrkUtil.Int.Map.iter (
-    fun v (phi, _, _) -> 
-      (* For each assertion, create new vertex after the assertion state 
-       * with edge into the vertex being the negated condition. *)
-      let u = !largest + 1 in 
-      largest := (!largest) + 1; 
-      pts := WG.add_vertex !pts u ;
-      pts := WG.add_edge !pts v (Weight (K.assume (Ctx.mk_not phi))) u ;
-      let s = Printf.sprintf " Adding assertion node %d -> %d for label " v u in 
-      log_formulas s [ Ctx.mk_not phi ] ; 
-      new_vertices := u :: !new_vertices 
-  ); !pts, !new_vertices
+  let err_loc = 1 + (WG.fold_vertex (fun v max -> if v > max then v else max) ts 0) in
+  let ts = WG.add_vertex ts err_loc in
+  let ts =
+    SrkUtil.Int.Map.fold (fun v (phi, _, _) ts ->
+        let s = Printf.sprintf " Adding assertion node %d -> %d for label " v err_loc in 
+        log_formulas s [ Ctx.mk_not phi ] ; 
+        WG.add_edge ts v (Weight (K.assume (Ctx.mk_not phi))) err_loc)
+      assertions
+      ts
+  in
+  (ts, err_loc)
 
 let instrument_with_rets (ts : cfg_t) : cfg_t = 
   let mk_int k = Ctx.mk_real (QQ.of_int k) in 
@@ -638,31 +634,6 @@ module GPS = struct
 
 module BM = BatMap.Make(Int)
 
-let analyze_concolic_mcl file = 
-  let open Srk.Iteration in 
-  populate_offset_table file;
-  K.domain := (module (Split(Product(LossyTranslation)(PolyhedronGuard))));
-  match file.entry_points with
-  | [main] -> begin
-      let rg = Interproc.make_recgraph file in
-      let entry = (RG.block_entry rg main).did in
-      let (ts, assertions) = make_transition_system rg in
-      let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
-      if !CmdLine.display_graphs then TSDisplay.display ts;
-      logf "\nentry: %d\n" entry; 
-      List.iter (fun err_loc ->
-        Printf.printf "testing reachability of location %d\n" err_loc ; 
-        Printf.printf "------------------------------\n";
-        match GPS.execute ts entry err_loc with 
-        | Safe _ -> Printf.printf "  proven safe\n";
-        | Unsafe _ -> Printf.printf "  proven unsafe\n";
-        Printf.printf "------------------------------\n"
-        ) new_vertices 
-      end
-  | _ -> assert false
-
-
-
 
 let analyze_concolic_mcl enable_gas file = 
   let open Srk.Iteration in 
@@ -674,19 +645,18 @@ let analyze_concolic_mcl enable_gas file =
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
       let (ts, assertions) = make_transition_system rg in
-      let ts = if enable_gas then instrument_with_gas ts else ts in 
-      let ts, new_vertices = make_ts_assertions_unreachable ts assertions in 
+      let ts = if enable_gas then instrument_with_gas ts else ts in
+      let ts, err_loc = make_ts_assertions_unreachable ts assertions in 
       if !CmdLine.display_graphs then TSDisplay.display ts;
       logf "\nentry: %d\n" entry; 
-      List.iter (fun err_loc ->
-        Printf.printf "testing reachability of location %d\n" err_loc ; 
-        Printf.printf "------------------------------\n";
-        match GPS.execute ts entry err_loc with 
-        | Safe _ -> Printf.printf "  proven safe\n";
-        | Unsafe _ -> Printf.printf "  proven unsafe\n";
-        Printf.printf "------------------------------\n"
-        ) new_vertices 
-      end
+      Printf.printf "testing reachability of location %d\n" err_loc ; 
+      Printf.printf "------------------------------\n";
+      begin match GPS.execute ts entry err_loc with 
+      | Safe _ -> Printf.printf "  proven safe\n";
+      | Unsafe _ -> Printf.printf "  proven unsafe\n"
+      end;
+      Printf.printf "------------------------------\n"
+    end
   | _ -> assert false
 
 (** dump simplified CFG before doing model checking / CRA / concolic execution *)

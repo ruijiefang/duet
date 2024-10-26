@@ -667,7 +667,8 @@ let analyze_concolic_mcl file =
 let analyze_concolic_mcl enable_gas file = 
   let open Srk.Iteration in 
   populate_offset_table file;
-  K.domain := (module (Split(Product(LossyTranslation)(PolyhedronGuard))));
+  K.domain := split (product [ PolyhedronGuard.exp
+                             ; LossyTranslation.exp ]);
   match file.entry_points with
   | [main] -> begin
       let rg = Interproc.make_recgraph file in

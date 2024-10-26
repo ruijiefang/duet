@@ -5,7 +5,7 @@ module TF = TransitionFormula
 module P = Polynomial
 module PC = PolynomialCone
 module V = Linear.QQVector
-
+module QQXs = P.QQXs
 
 include Log.Make(struct let name = "LirrInvariants" end)
 
@@ -18,7 +18,7 @@ let for_all_vars predicate polynomial =
   BatEnum.for_all
     (fun (_, mono) ->
        BatEnum.for_all
-         (fun (dim, _) -> predicate (symbol_of_int dim))
+         (fun (dim, _) -> predicate dim)
          (P.Monomial.enum mono))
     (P.QQXs.enum polynomial)
 
@@ -34,7 +34,7 @@ let filter_polys_linear_in_dims predicate polys =
              (fun (lin, higher) (coeff, dim) ->
                 if dim == Linear.const_dim then
                   (lin, P.QQXs.add_term coeff P.Monomial.one higher)
-                else if predicate (symbol_of_int dim) then
+                else if predicate dim then
                   (V.add_term coeff dim lin, higher)
                 else
                   (lin, P.QQXs.add_term coeff (P.Monomial.singleton dim 1) higher))
@@ -79,115 +79,92 @@ let find_inv_functionals dx_dims implied_ideal =
     (fun base_vec -> QQMatrix.vector_right_mul lin_part_mat base_vec)
     null_space
 
-let compute_LIRR_invariants srk tr_symbols loop_counter tf =
-  let tf = TF.map_formula (Syntax.eliminate_floor_mod_div srk) tf in
-  (* For each variable x, create a symbol d_x representing x' - x *)
-  let (dx_subst_diff, dx_subst_x, dx_defs) =
-    List.fold_left
-      (fun (dx_subst_diff, dx_subst_x, dx_defs) (x, x') ->
-         let name = Format.asprintf "d_%a" (pp_symbol srk) x in
-         let dx = mk_symbol srk ~name (typ_symbol srk x) in
-         let diff = mk_sub srk (mk_const srk x') (mk_const srk x) in
-         let dx_subst_diff = Symbol.Map.add dx diff dx_subst_diff in
-         let dx_subst_x = Symbol.Map.add dx (mk_const srk x) dx_subst_x in
-         let dx_defs = (mk_eq srk (mk_const srk dx) diff)::dx_defs in
-         (dx_subst_diff, dx_subst_x, dx_defs))
-      (Symbol.Map.empty, Symbol.Map.empty, [])
+let exp solver loop_counter =
+  let srk = Iteration.Solver.get_context solver in
+  let tr_symbols = Iteration.Solver.get_symbols solver in
+  let pre_symbols =
+    List.map (fun (s,_) -> mk_const srk s) tr_symbols
+    |> Array.of_list
+  in
+  let delta =
+    List.map
+      (fun (s,s') -> mk_sub srk (mk_const srk s') (mk_const srk s))
       tr_symbols
+    |> Array.of_list
   in
-  let formula_with_dx = mk_and srk ((TF.formula tf) :: dx_defs) in
-  let is_dx x = Symbol.Map.mem x dx_subst_x in
   let inv_functionals =
-    mk_exists_consts srk is_dx formula_with_dx
-    |> Lirr.abstract srk (project_down_to_linear is_dx)
-    |> PC.get_ideal
-    |> find_inv_functionals is_dx
-    |> List.map (Linear.term_of_vec
-                   srk
-                   (fun i -> Symbol.Map.find (symbol_of_int i) dx_subst_x))
+    Abstract.LinearSpan.abstract
+      (Iteration.Solver.get_abstract_solver solver)
+      delta
+    |> List.map (Linear.term_of_vec srk (Array.get pre_symbols))
+    |> Array.of_list
   in
-  (* For each invariant functional f_i, create a symbol z_i representing f *)
-  let (z_subst, z_defs) =
-    BatList.fold_lefti
-      (fun (z_subst, z_defs) i inv_func ->
-         let name = Format.asprintf "z_%d" i in
-         let z = mk_symbol srk ~name `TyReal in
-         let z_subst = Symbol.Map.add z inv_func z_subst in
-         let z_defs = (mk_eq srk (mk_const srk z) inv_func)::z_defs in
-         (z_subst, z_defs))
-      (Symbol.Map.empty, [])
-      inv_functionals
+  let delta_inv =
+    Array.init ((Array.length delta) + (Array.length inv_functionals))
+      (fun i ->
+         if i < Array.length delta then
+           delta.(i)
+         else
+           inv_functionals.(i - (Array.length delta)))
   in
-  let is_z x = Symbol.Map.mem x z_subst in
-  let is_invariant_symbol x =
-    is_z x || TF.is_symbolic_constant tf x
-  in
-  let existential_formula =
-    mk_exists_consts
-      srk
-      (fun symbol -> is_invariant_symbol symbol || is_dx symbol)
-      (mk_and srk (formula_with_dx :: z_defs))
-  in
-  (* dx variables may only appear linearly; *)
-  let inv_cone =
-    let elim_order = P.Monomial.block [is_dx % symbol_of_int] P.Monomial.degrevlex in
-    let cl cone =
+  let is_delta i = i < Array.length delta in
+  let delta_inv_polys = Array.map (QQXs.of_term srk) delta_inv in
+  let elim_order = P.Monomial.block [is_delta] P.Monomial.degrevlex in
+  let of_model = function
+    | `LIRA _ -> assert false
+    | `LIRR m ->
+      (* Restrict to linear monomials over delta and monomials over the
+         invariant functionals, which are associated with dimensions >= the
+         length of delta *)
+      let cone =
+        PolynomialCone.inverse_image (Lirr.Model.nonnegative_cone m) delta_inv_polys
+      in
       PolynomialCone.change_monomial_ordering cone elim_order
       |> PC.restrict (fun m ->
           match P.Monomial.destruct_var m with
           | Some _ -> true
           | None -> BatEnum.for_all
-                      (is_invariant_symbol % symbol_of_int % fst)
+                      (fun (x, _) -> x >= Array.length delta)
                       (P.Monomial.enum m))
-    in
-    Lirr.abstract srk cl existential_formula
   in
-  (* Convert polynomial to term, substituting z variables for corresponding
-     invariant functionals *)
-  let inv_term_of_poly =
-    P.QQXs.term_of
-      srk
-      (fun dim ->
-         let symbol = symbol_of_int dim in
-         match Symbol.Map.find_opt symbol z_subst with
-         | Some t -> t
-         | None ->
-           assert (TF.is_symbolic_constant tf symbol);
-           mk_const srk symbol)
+  let formula_of = PC.to_formula srk (Array.get delta_inv) in
+  let join =
+    PC.intersection
   in
-  (* Convert term over dx variables to a term over the corresponding differences *)
-  let diff_term_of_vec =
-    Linear.term_of_vec
-      srk
-      (fun dim ->
-         let symbol = symbol_of_int dim in
-         match Symbol.Map.find_opt symbol dx_subst_diff with
-         | Some t -> t
-         | None -> mk_const srk symbol)
+  let top = PC.top in
+  let bottom = PC.make_cone (P.Rewrite.mk_rewrite P.Monomial.degrevlex [QQXs.one]) [] in
+  let domain =
+    Abstract.{ join; top; of_model; bottom; formula_of }
   in
+  let rec_cone =
+    Iteration.Solver.abstract solver domain
+  in
+  (* Convert vectors and polynomial to terms, associating dimension i to
+     delta_inv[i] *)
+  let term_of_qqxs = QQXs.term_of srk (Array.get delta_inv) in
+  let term_of_vec = Linear.term_of_vec srk (Array.get delta_inv) in
   let zero = mk_zero srk in
-  let ideal = PC.get_ideal inv_cone in
   let implied_zero_polys_formulas =
     BatList.filter_map (fun p ->
-        if for_all_vars is_invariant_symbol p
-        then Some (mk_eq srk zero (inv_term_of_poly p))
+        if for_all_vars (not % is_delta) p
+        then Some (mk_eq srk zero (term_of_qqxs p))
         else None)
-      (P.Rewrite.generators ideal)
+      (P.Rewrite.generators (PC.get_ideal rec_cone))
   in
   let implied_recurrent_poly_eqs =
-    filter_polys_linear_in_dims is_dx (P.Rewrite.generators ideal)
+    filter_polys_linear_in_dims is_delta (P.Rewrite.generators (PC.get_ideal rec_cone))
     |> BatList.map (fun (vec, poly) ->
-        mk_eq srk zero (mk_add srk [diff_term_of_vec vec
+        mk_eq srk zero (mk_add srk [term_of_vec vec
                                    ; mk_mul srk [loop_counter
-                                                ; inv_term_of_poly poly]]))
+                                                ; term_of_qqxs poly]]))
   in
   let implied_recurrent_poly_ineqs =
-    PC.get_cone_generators inv_cone
-    |> filter_polys_linear_in_dims is_dx
+    PC.get_cone_generators rec_cone
+    |> filter_polys_linear_in_dims is_delta
     |> BatList.map (fun (vec, poly) ->
-        mk_leq srk zero (mk_add srk [diff_term_of_vec vec
+        mk_leq srk zero (mk_add srk [term_of_vec vec
                                     ; mk_mul srk [loop_counter
-                                                 ; inv_term_of_poly poly]]))
+                                                 ; term_of_qqxs poly]]))
   in
   mk_or srk [
     mk_and srk [ (* Reflexive closure *)

@@ -4,6 +4,7 @@ open BatPervasives
 
 include Log.Make(struct let name = "srk.abstract" end)
 
+module A = BatDynArray
 module V = Linear.QQVector
 module CS = CoordinateSystem
 module QQXs = Polynomial.QQXs
@@ -119,6 +120,24 @@ type 'a smt_model =
   [ `LIRA of 'a Interpretation.interpretation
   | `LIRR of Lirr.Model.t ]
 
+module Model = struct
+  type 'a t = 'a smt_model
+
+  let sat srk m formula =
+    match m with
+    | `LIRR m -> Lirr.Model.evaluate_formula srk m formula
+    | `LIRA m -> Interpretation.evaluate_formula m formula
+
+  let sign srk m t =
+    match m with
+    | `LIRR m -> Lirr.Model.sign srk m t
+    | `LIRA m ->
+      match QQ.compare (Interpretation.evaluate_term m t) QQ.zero with
+      | 0 -> `Zero
+      | c when c < 0 -> `Neg
+      | _ -> `Pos
+end
+
 type ('a, 'b) domain =
   { join : 'b -> 'b -> 'b
   ; of_model : 'a smt_model -> 'b
@@ -131,11 +150,14 @@ module Solver = struct
     [ `LIRA of 'a Smt.StdSolver.t
     | `LIRR of 'a Lirr.Solver.t ]
 
+  type 'a level =
+    { models : ('a smt_model) A.t
+    ; mutable formula : 'a formula }
+
   type 'a t =
     { solver : 'a smt_solver
     ; context : 'a context
-    ; mutable formula : 'a formula
-    ; mutable models : 'a smt_model list }
+    ; stack : ('a level) A.t }
 
   let make srk ?(theory=get_theory srk) formula =
     let solver =
@@ -149,17 +171,40 @@ module Solver = struct
         Smt.StdSolver.add s [formula];
         `LIRA s
     in
+    let stack = A.singleton { models = A.create (); formula = formula } in
     { solver = solver
-    ; models = []
-    ; formula = formula
+    ; stack = stack
     ; context = srk }
 
-  let get_formula solver = solver.formula
+  let get_formula solver = (A.last solver.stack).formula
   let get_context solver = solver.context
   let get_theory solver =
     match solver.solver with
     | `LIRR _ -> `LIRR
     | `LIRA _ -> `LIRA
+
+  let push s =
+    begin match s.solver with
+      | `LIRA s ->
+        Smt.StdSolver.push s
+      | `LIRR s ->
+        Lirr.Solver.push s
+    end;
+    let top = A.last s.stack in
+    let top_clone =
+      { models = A.copy top.models
+      ; formula = top.formula }
+    in
+    A.add s.stack top_clone
+
+  let pop s =
+    begin match s.solver with
+      | `LIRA s ->
+        Smt.StdSolver.pop s 1
+      | `LIRR s ->
+        Lirr.Solver.pop s 1
+    end;
+    A.delete_last s.stack
 
   let with_blocking s f x =
     match s.solver with
@@ -187,7 +232,7 @@ module Solver = struct
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
         | `Sat m ->
-          s.models <- (`LIRA m)::s.models;
+          A.iter (fun level -> A.add level.models (`LIRA m)) s.stack;
           `Sat (`LIRA m)
       end
     | `LIRR smt_solver ->
@@ -195,9 +240,15 @@ module Solver = struct
         | `Unsat -> `Unsat
         | `Unknown -> `Unknown
         | `Sat m ->
-          s.models <- (`LIRR m)::s.models;
+          A.iter (fun level -> A.add level.models (`LIRR m)) s.stack;
           `Sat (`LIRR m)
       end
+
+  let check s =
+    match get_model s with
+    | `Sat _ -> `Sat
+    | `Unsat -> `Unsat
+    | `Unknown -> `Unknown
 
   let abstract solver domain =
     let rec fix prop =
@@ -208,10 +259,10 @@ module Solver = struct
       | `Unknown -> domain.top
     in
     let init =
-      List.fold_left
+      A.fold_left
         (fun a m -> domain.join a (domain.of_model m))
         domain.bottom
-        solver.models
+        (A.last solver.stack).models
     in
     with_blocking solver fix init
 
@@ -222,8 +273,9 @@ module Solver = struct
 
   let add s phis =
     let srk = get_context s in
-    s.formula <- mk_and srk (s.formula::phis);
-    s.models <- List.filter (fun m -> List.for_all (sat srk m) phis) s.models;
+    let top = A.last s.stack in
+    top.formula <- mk_and srk (top.formula::phis);
+    A.keep (fun m -> List.for_all (sat srk m) phis) top.models;
     match s.solver with
     | `LIRA s -> Smt.StdSolver.add s phis
     | `LIRR s -> Lirr.Solver.add s phis
@@ -409,7 +461,7 @@ module LinearSpan = struct
       | _ -> assert false
     in
     let mat =
-      List.fold_left (fun mat m ->
+      A.fold_left (fun mat m ->
           let m = lira_model m in
           let row_num = next_row () in
           let point_row =
@@ -420,7 +472,7 @@ module LinearSpan = struct
           in
           QQMatrix.add_row row_num point_row mat)
         QQMatrix.zero
-        solver.models
+        (A.last solver.stack).models
     in
     let dims = BatList.of_enum (0 -- (Array.length terms - 1)) in
     let mat =
@@ -470,7 +522,7 @@ module LinearSpan = struct
                 QQVector.zero
                 terms
             in
-            solver.models <- (`LIRA point)::solver.models;
+            A.iter (fun level -> A.add level.models (`LIRA point)) solver.stack;
             let mat' = QQMatrix.add_row row_num point_row mat in
             (* We never choose the same candidate function again,
                because the only solutions to the system of equations
@@ -488,10 +540,9 @@ module LinearSpan = struct
       | `LIRA _ -> assert false
       | `LIRR m ->
         let ideal = PolynomialCone.get_ideal (Lirr.Model.nonnegative_cone m) in
-        Log.error ">> %a" (I.pp (_pp_numeric_dim "x")) ideal;
         let shift =
           QQXs.substitute (fun i ->
-              let i' = if i > 0 then i + dim else i in
+              let i' = if i >= 0 then i + dim else i in
               QQXs.of_dim i')
         in
         let reduced =

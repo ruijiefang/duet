@@ -266,14 +266,11 @@ let mk_mod_c99 left right =
     Ctx.mk_and [Ctx.mk_leq zero t
                ; Ctx.mk_not (Ctx.mk_lt t zero)]
   in
-  let m = Ctx.mk_mod left right in
   Ctx.mk_ite
     (pos left)
-    m
-    (Ctx.mk_ite
-       (pos right)
-       (Ctx.mk_sub m right)
-       (Ctx.mk_add [m; right]))
+    (Ctx.mk_mod left right)
+    (Ctx.mk_neg (Ctx.mk_mod (Ctx.mk_neg left) right))
+
 
 let int_binop op left right =
   match op with
@@ -392,19 +389,15 @@ and tr_bexpr bexpr =
                 let ta = tr_expr_val a in
                 let tb = tr_expr_val b in
                 let sign_constraint =
-                  if k >= 0 then
-                    Syntax.mk_iff Ctx.context
-                      (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                      (Ctx.mk_leq (Ctx.mk_int 0) tb)
-                  else
-                    Syntax.mk_iff Ctx.context
-                      (Ctx.mk_leq ta (Ctx.mk_int 0))
-                      (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                  (* C99: remainder has same sign as dividend *)
+                  if k = 0 then []
+                  else if k > 0 then [Ctx.mk_leq (Ctx.mk_int 0) ta]
+                  else [Ctx.mk_leq ta (Ctx.mk_int 0)]
                 in
                 (Ctx.mk_and
-                  [(Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
-                    |> Ctx.mk_is_int
-                  ; sign_constraint])
+                  (((Ctx.mk_div (Ctx.mk_sub ta (Ctx.mk_int k)) tb)
+                   |> Ctx.mk_is_int)
+                   :: sign_constraint))
             | _ ->
               Ctx.mk_eq x y
             else 
@@ -416,17 +409,15 @@ and tr_bexpr bexpr =
             match rx, ry with
             | (BinaryOp (a, Mod, b, _), Constant (CInt (k, _))) ->
               (* a mod b != k <==> (a + r - k)/b is an integer for some 1 <= r
-                 <= |b|-1 or k has the wrong sign (positive when signs of a/b
-                 are the different, or negative when they are the same *)
+                 <= |b|-1 or k has the wrong sign (should be same as the sign
+                 of a) *)
               let ta = tr_expr_val a in
               let tb = tr_expr_val b in
               let r = nondet_const "rem" `TyInt in
               begin
                 if k >= 0 then
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq ta (Ctx.mk_int 0))
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq ta (Ctx.mk_int 0))
                     ; Ctx.mk_and
                         [ Ctx.mk_leq (Ctx.mk_int 0) r
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -436,9 +427,7 @@ and tr_bexpr bexpr =
                         ; Ctx.mk_is_int (Ctx.mk_div (Ctx.mk_sub ta r) tb)]]
                 else
                   Ctx.mk_or
-                    [Syntax.mk_iff Ctx.context
-                       (Ctx.mk_leq (Ctx.mk_int 0) ta)
-                       (Ctx.mk_leq (Ctx.mk_int 0) tb)
+                    [(Ctx.mk_leq (Ctx.mk_int 0) ta)
                     ; Ctx.mk_and
                         [ Ctx.mk_leq r (Ctx.mk_int 0)
                         ; Ctx.mk_or [ Ctx.mk_leq r (Ctx.mk_int (k-1))
@@ -919,7 +908,9 @@ let analyze file =
             Ctx.mk_and [K.guard path; Ctx.mk_not phi]
             |> SrkSimplify.simplify_terms srk
           in
-          logf "Path condition:@\n%a"
+          logf "Path condition to %s:%d:@\n%a"
+            loc.Cil.file
+            loc.Cil.line
             (Syntax.pp_smtlib2 Ctx.context) path_condition;
           dump_goal loc path_condition;
           if !monotone then
@@ -972,195 +963,97 @@ let preimage transition formula =
               substitute_const srk subst formula]
 
 (* Attractor region analysis *)
-let attractor_regions tf =
+let attractor_regions solver =
   let open Syntax in
-  let formula = TF.formula tf in
-  let attractors =
-    BatList.fold_left (fun xs (x, x') ->
-        let (x, x') = mk_const srk x, mk_const srk x' in
-        let lo =
-          let nonincreasing = mk_and srk [formula; mk_leq srk x' x] in
-          match SrkZ3.optimize_box srk (mk_and srk [formula; nonincreasing]) [x'] with
-          | `Sat [ivl] ->
-             (match Interval.lower ivl with
-              | Some lo -> [mk_leq srk (mk_real srk lo) x]
-              | None -> [])
-          | _ -> []
-        in
-        let hi =
-          let nondecreasing = mk_and srk [formula; mk_leq srk x x'] in
-          match SrkZ3.optimize_box srk (mk_and srk [formula; nondecreasing]) [x'] with
-          | `Sat [ivl] ->
-             (match Interval.upper ivl with
-              | Some hi -> [mk_leq srk x (mk_real srk hi)]
-              | None -> [])
-          | _ -> []
-        in
-        (lo@hi@xs))
-      []
-      (TF.symbols tf)
-  in
-  TF.map_formula (fun _ -> mk_and srk (formula::attractors)) tf
+  let formula = Iteration.Solver.get_formula solver in
+  BatList.fold_left (fun xs (x, x') ->
+      let (x, x') = mk_const srk x, mk_const srk x' in
+      let lo =
+        let nonincreasing = mk_and srk [formula; mk_leq srk x' x] in
+        match SrkZ3.optimize_box srk (mk_and srk [formula; nonincreasing]) [x'] with
+        | `Sat [ivl] ->
+          (match Interval.lower ivl with
+           | Some lo -> [mk_leq srk (mk_real srk lo) x]
+           | None -> [])
+        | _ -> []
+      in
+      let hi =
+        let nondecreasing = mk_and srk [formula; mk_leq srk x x'] in
+        match SrkZ3.optimize_box srk (mk_and srk [formula; nondecreasing]) [x'] with
+        | `Sat [ivl] ->
+          (match Interval.upper ivl with
+           | Some hi -> [mk_leq srk x (mk_real srk hi)]
+           | None -> [])
+        | _ -> []
+      in
+      (lo@hi@xs))
+    []
+    (Iteration.Solver.get_symbols solver)
 
-
+(* cohencu4,6, dijkstra1, egcd, fermat1 *)
 let omega_algebra = function
   | `Omega transition ->
      (** over-approximate possibly non-terminating conditions for a transition *)
      begin
        let open Syntax in
-       if get_theory srk = `LIRR then begin
-          let tf = TF.map_formula 
-            (Syntax.eliminate_floor_mod_div srk) 
-            (K.to_transition_formula transition) 
-          in
-          let nonterm tf =
-            let pre =
-              let fresh_skolem =
-                Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
-              in
-              let subst sym =
-                match V.of_symbol sym with
-                | Some _ -> mk_const srk sym
-                | None -> fresh_skolem sym
-              in
-              substitute_const srk subst (TF.formula tf)
-            in
-            let prf, has_prf =
-              if !termination_prf then
-                if TPRF.has_prf srk tf then 
-                  (logf ~level:`always "has prf";
-                  [Syntax.mk_false srk], true)
-                else
-                  [pre], false
-              else
-                  [pre], false   
-            in 
-            let plrf, _ =
-              if (not has_prf) && !termination_plrf then
-                if TPRF.has_plrf srk tf then
-                  (logf ~level:`always "has plrf";
-                  [Syntax.mk_false srk], true)
-                else
-                  [pre], false
-              else
-                  [pre], false
-            in 
-            let result =
-              Syntax.mk_and srk (prf@plrf)
-            in
-            result
-          in
-          if !termination_phase_analysis then begin
-            let predicates =
-              (* Use variable directions & signs as candidate invariants *)
-              List.map (fun (x,x') ->
-                  let x = mk_const srk x in
-                  let x' = mk_const srk x' in
-                  [mk_leq srk (mk_add srk [x; (mk_one srk)]) x';
+       let tf = K.to_transition_formula transition in
+       let solver = Iteration.Solver.make srk tf in
+       let nonterm solver =
+         let attractors =
+           if !termination_attractor && Syntax.get_theory srk = `LIRA then
+             attractor_regions solver
+           else
+             []
+         in
+         Iteration.Solver.push solver;
+         Iteration.Solver.add solver attractors;
+         (* Decision procedure(s) for unconditional termination *)
+         let terminates =
+           if Syntax.get_theory srk = `LIRR then
+             TPRF.has_prf solver
+             || TPRF.has_plrf solver
+           else
+             TLLRF.has_llrf solver
+         in
+         Iteration.Solver.pop solver;
+
+         if terminates then
+           Syntax.mk_false srk
+         else
+           let fresh_skolem =
+             Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+           in
+           let subst sym =
+             match V.of_symbol sym with
+             | Some _ -> mk_const srk sym
+             | None -> fresh_skolem sym
+           in
+           substitute_const srk subst (TF.formula tf)
+       in
+       if !termination_phase_analysis then begin
+           let predicates =
+             (* Use variable directions & signs as candidate invariants *)
+             List.map (fun (x,x') ->
+                 let x = mk_const srk x in
+                 let x' = mk_const srk x' in
+                 [mk_leq srk (mk_add srk [x; (mk_one srk)]) x';
                   mk_leq srk (mk_add srk [x'; (mk_one srk)]) x;
                   mk_eq srk x x'])
-                (TF.symbols tf)
-              |> List.concat
-            in
-            Iteration.phase_mp srk predicates tf nonterm
-          end else
-          nonterm tf
-       end
-       else
-        let tf =
-          TF.map_formula
-            (fun phi -> SrkSimplify.eliminate_floor srk (Nonlinear.linearize srk phi))
-            (K.to_transition_formula transition)
-        in
-        let nonterm tf =
-          let pre =
-            let fresh_skolem =
-              Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
-            in
-            let subst sym =
-              match V.of_symbol sym with
-              | Some _ -> mk_const srk sym
-              | None -> fresh_skolem sym
-            in
-            substitute_const srk subst (TF.formula tf)
-          in
-          let llrf, has_llrf =
-            if !termination_llrf then
-              if TLLRF.has_llrf srk tf then
-                [Syntax.mk_false srk], true
-              else if !termination_attractor
-                      && TLLRF.has_llrf srk (attractor_regions tf) then
-                [Syntax.mk_false srk], true
-              else
-                [pre], false
-            else
-              (* If LLRF is disabled, default to pre *)
-              [pre], false
-          in
-          let dta =
-            (* If LLRF succeeds, then we do not try dta *)
-            if (not has_llrf) && !termination_dta then
-              [mk_not srk (TDTA.mp srk tf)]
-            else []
-          in
-          let exp =
-            if (not has_llrf) && !termination_exp then
-              let mp =
-                Syntax.mk_not srk
-                  (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
-              in
-              let dta_entails_mp =
-                (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
-                Syntax.mk_forall_consts
-                  srk
-                  (fun _ -> false)
-                  (Syntax.mk_if srk (mk_and srk dta) mp)
-              in
-              match Quantifier.simsat srk dta_entails_mp with
-              | `Sat -> []
-              | _ -> [mp]
-            else []
-          in
-          let result =
-            Syntax.mk_and srk (llrf@dta@exp)
-          in
-          let file = get_gfile () in
-          if !dump_goals
-              && result <> (Syntax.mk_true srk)
-              && result <> (Syntax.mk_false srk) then begin
-              let filename =
-                Format.sprintf "%s-%d-term.smt2"
-                  (Filename.chop_extension (Filename.basename file.filename))
-                  (!nb_goals)
-            in
-            let chan = Stdlib.open_out filename in
-            let formatter = Format.formatter_of_out_channel chan in
-            logf ~level:`always "Writing goal formula to %s" filename;
-            Syntax.pp_smtlib2 srk formatter result;
-            Format.pp_print_newline formatter ();
-            Stdlib.close_out chan;
-            incr nb_goals
-            end;
-          match Quantifier.simsat srk result with
-          | `Unsat -> mk_false srk
-          | _ -> result
-        in
-        if !termination_phase_analysis then begin
-            let predicates =
-              (* Use variable directions & signs as candidate invariants *)
-              List.map (fun (x,x') ->
-                  let x = mk_const srk x in
-                  let x' = mk_const srk x' in
-                  [mk_lt srk x x';
-                    mk_lt srk x' x;
-                    mk_eq srk x x'])
-                (TF.symbols tf)
-              |> List.concat
-            in
-            Iteration.phase_mp srk predicates tf nonterm
-          end else
-          nonterm tf
-      end
+               (TF.symbols tf)
+             |> List.concat
+           in
+           let star solver =
+             let module E = Iteration.LossyTranslation in
+             let tf = Iteration.Solver.get_transition_formula solver in
+             TF.make
+               ~exists:(TF.exists tf)
+               (Iteration.closure Iteration.LossyTranslation.exp solver)
+               (TF.symbols tf)
+           in
+           Iteration.phase_mp srk predicates star nonterm solver
+         end
+       else nonterm solver
+     end
   | `Add (cond1, cond2) ->
      (** combining possibly non-terminating conditions for multiple paths *)
      Syntax.mk_or srk [cond1; cond2]
@@ -1377,16 +1270,19 @@ let _ =
     ("-cra-split-loops",
      Arg.Unit (fun () ->
          if !monotone then
-           K.domain := (module Iteration.InvariantDirection(val !K.domain))
+           K.domain := Iteration.invariant_direction !K.domain
          else
-           K.domain := (module Iteration.Split(val !K.domain))),
+           K.domain := Iteration.split !K.domain),
      " Turn on loop splitting");
   CmdLine.register_config
     ("-cra-prsd",
      Arg.Unit (fun () ->
          let open Iteration in
          let open SolvablePolynomial in
-         K.domain := (module ProductWedge(SolvablePolynomialPeriodicRational)(WedgeGuard))),
+         K.domain :=
+           wedge_lift
+             (wedge_product [ SolvablePolynomialPeriodicRational.wedge_exp
+                            ; Iteration.WedgeGuard.wedge_exp])),
      " Use periodic rational spectral decomposition");
   CmdLine.register_config
     ("-cra-refine",
@@ -1401,19 +1297,21 @@ let _ =
      Arg.Unit (fun () ->
          let open Iteration in
          if !monotone then
-           K.domain := (module Product
-                                 (Product(Vas.Monotone)(PolyhedronGuard))
-                                 (LossyTranslation))
+           K.domain := product [ Vas.Monotone.exp
+                               ; PolyhedronGuard.exp
+                               ; LossyTranslation.exp ]
          else
-           K.domain := (module Product
-                                 (Product(Vas)(PolyhedronGuard))
-                                 (LossyTranslation))),
+           K.domain := product [ Vas.exp
+                               ; PolyhedronGuard.exp
+                               ; LossyTranslation.exp ]),
      " Use VAS abstraction");
   CmdLine.register_config
     ("-cra-vass",
      Arg.Unit (fun () ->
          let open Iteration in
-         K.domain := (module Product(Product(LossyTranslation)(PolyhedronGuard))(Vass))),
+         K.domain := product [ Vass.exp
+                             ; PolyhedronGuard.exp
+                             ; LossyTranslation.exp ]),
      " Use VASS abstraction");
   CmdLine.register_config
     ("-dump-goals",
@@ -1424,35 +1322,42 @@ let _ =
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(LossyTranslation)(PolyhedronGuard))),
+         K.domain := product [LossyTranslation.exp; PolyhedronGuard.exp]),
      " Disable non-monotone analysis features");
   CmdLine.register_config
     ("-lirr",
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(LIRR)(LIRRGuard))),
+         K.domain := product [LirrInvariants.exp; LIRRGuard.exp]),
      " Use weak arithmetic theory");
   CmdLine.register_config
     ("-lirr-sp",
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(Product(SolvablePolynomial.SolvablePolynomialLIRR)(LIRRGuard))(LIRR))),
+         K.domain := product [ LirrInvariants.exp
+                             ; LIRRGuard.exp
+                             ; SolvablePolynomial.SolvablePolynomialLIRR.exp ]),
      " Use weak arithmetic theory with solvable polynomial maps");
   CmdLine.register_config
     ("-lirr-usp",
      Arg.Unit (fun () ->
         let open Iteration in
         monotone := true;
-        K.domain := (module Product(Product(SolvablePolynomial.UltSolvablePolynomialLIRR)(LIRRGuard))(LIRR))),
+        K.domain := product [ SolvablePolynomial.UltSolvablePolynomialLIRR.exp
+                            ; LIRRGuard.exp
+                            ; LirrInvariants.exp ]),
     " Use weak arithmetic theory with ultimately solvable polynomial maps");
   CmdLine.register_config
     ("-lirr-sp-quad",
      Arg.Unit (fun () ->
         let open Iteration in
         monotone := true;
-        K.domain := (module Product(SolvablePolynomial.UltSolvablePolynomialLIRR)(Product(Product(SolvablePolynomial.SolvablePolynomialLIRRQuadratic)(LIRRGuard))(LIRR)))),
+        K.domain := product [ SolvablePolynomial.UltSolvablePolynomialLIRR.exp
+                            ; SolvablePolynomial.SolvablePolynomialLIRRQuadratic.exp
+                            ; LIRRGuard.exp
+                            ; LirrInvariants.exp ]),
     " Use weak arithmetic theory with solvable polynomial maps using quadratic simulations");
   CmdLine.register_config
     ("-termination-no-exp",

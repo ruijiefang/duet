@@ -41,6 +41,12 @@ type ('a, 'b) domain =
   ; top : 'b
   ; bottom : 'b }
   
+module Model : sig
+  type 'a t = 'a smt_model
+  val sat : 'a context -> 'a t -> 'a formula -> bool
+  val sign : 'a context -> 'a t -> 'a arith_term -> [ `Zero | `Pos | `Neg | `Unknown ]
+end
+
 (** A solver contains a single formula that can be abstracted in various ways
    (convex hull, affine hull, sign analysis, ...); the solver allows different
    abstraction routines to share the work of computing a diverse set of models
@@ -62,6 +68,8 @@ module Solver : sig
      possible.  *)
   val get_model : 'a t -> [ `Sat of 'a smt_model | `Unsat | `Unknown ]
 
+  val check : 'a t -> [ `Sat | `Unsat | `Unknown ]
+
   val get_context : 'a t -> 'a context
 
   val get_theory : 'a t -> [ `LIRR | `LIRA ]
@@ -71,15 +79,23 @@ module Solver : sig
   val with_blocking : 'a t -> ('c -> 'b) -> 'c -> 'b
 
   (** [block s phi] adds [phi] as a blocking clause (i.e., [get_model s] may
-     no longer return a model that satisfies [phi]).  [block] should only be
-     called within a procedure that passed to [with_blocking], to ensure that
-     blocking clauses are removed.  *)
+     no longer return a model that satisfies [phi], but the underyling formula
+     of the solver remains unchanged).  [block] should only be called within a
+     procedure that passed to [with_blocking], to ensure that blocking clauses
+     are removed.  *)
   val block : 'a t -> 'a formula -> unit
 
-  (** [add s phis] each formula in [phis] to the formula associated with the
-     solver. *)
+  (** [add s phis] conjoins each formula in [phis] to the formula associated
+     with the solver. *)
   val add : 'a t -> ('a formula) list -> unit
 
+  (** Push a fresh entry onto the solver's stack.  Assertions added to the
+     formula with [add] are reverted after the entry is [pop]ed off the
+     stack. *)
+  val push : 'a t -> unit
+
+  (** Pop last entry off of the solver's stack *)
+  val pop : 'a t -> unit
 end
 
 (** The sign domain represents formulas of the form (/\ t <> 0), where t

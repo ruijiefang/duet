@@ -579,22 +579,23 @@ struct
       let path_weights = 
         artpath 
         |> glue 
-        |> List.map (fun (x, y) -> TS.edge_weight !art.graph (maps_to art x) (maps_to art y)) 
-        |> List.map 
-          (fun weight -> 
-          match weight with 
-          | TransitionSystem.Call (src, dst) ->
-            Summarizer.over_proc_summary !art.interproc @@ PN.make (VN.to_vertex src, VN.to_vertex dst)
-          | TransitionSystem.Weight wht -> wht) in 
-      match K.interpolate_or_concrete_model ((K.assume w_label) :: path_weights) (Syntax.mk_not Ctx.context w_label) with 
+        |> List.map (fun (x, y) ->
+            match TS.edge_weight !art.graph (maps_to art x) (maps_to art y) with
+            | TransitionSystem.Call (src, dst) ->
+              Summarizer.over_proc_summary
+                !art.interproc
+                (PN.make (VN.to_vertex src, VN.to_vertex dst))
+            | TransitionSystem.Weight wht -> wht)
+      in
+      let w_path_weights = (K.assume w_label) :: path_weights in
+      match K.interpolate_or_concrete_model w_path_weights w_label with
       | `Valid itps -> 
-        let new_frontiers = refine art artpath (List.tl itps) in 
-        begin match Smt.entails Ctx.context (label art v) (label art w) with 
-        | `Yes -> 
-          
+        let new_frontiers = refine art (List.tl artpath) (List.tl itps) in
+        if cover art v w then
           (true, new_frontiers)
-        | _ -> failwith "error: force_cover is buggy!"
-        end
+        else
+          failwith "error: force_cover is buggy!"
+
       | `Invalid _ -> (false, []) 
       | `Unknown -> failwith "force_cover: interpolation failed with status UNKNOWN."
     end

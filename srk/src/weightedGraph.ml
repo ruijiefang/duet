@@ -522,12 +522,6 @@ module RecGraph = struct
   type query =
     { recgraph : t;
 
-      (* The instrumented graph retains the path_graph of recgraph as a
-         subgraph, and for each call-edge (u,v) to target procedure (src,tgt),
-         adds an edge (u, src) to the target procedure. *)
-         instrumented_graph : Pathexpr.simple Pathexpr.t weighted_graph;
-
-
       (* The intraprocedural path graph has an edge u->v for
          each entry vertex u and each vertex v reachable from u,
          weighted with a path expression for the paths from u to v. *)

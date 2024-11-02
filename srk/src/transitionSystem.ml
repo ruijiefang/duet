@@ -50,6 +50,7 @@ module Make
   type tlabel = T.t label
 
   type query = T.t WG.RecGraph.weight_query
+  type reverse_query = T.t WG.RecGraph.reverse_query
 
   let mk_query ?(delay=1) ts source dom =
     let rg =
@@ -151,16 +152,15 @@ module Make
       (T.transform tr)
 
 
-    let set_summary q (u, v) summary = 
-      WG.RecGraph.set_summary q (u, v) summary
+  let set_summary q (u, v) summary = 
+    WG.RecGraph.set_summary q (u, v) summary
   
-    let get_summary q (u, v) = 
-      WG.RecGraph.get_summary q (u, v)
+  let get_summary q (u, v) = 
+    WG.RecGraph.get_summary q (u, v)
     
-    let inter_path_summary = WG.RecGraph.inter_path_summary
-  
-    let intra_path_summary = WG.RecGraph.intra_path_summary 
-    
+  let mk_reverse_query = WG.RecGraph.mk_reverse_query
+  let exit_summary = WG.RecGraph.exit_summary
+  let target_summary = WG.RecGraph.target_summary
 
   (* Variables whose abstract values may change as the result of a
      transition *)

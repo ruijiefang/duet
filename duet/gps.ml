@@ -156,12 +156,18 @@ module Summarizer =
         graph: cfg_t;
         src: int;
         query: TS.query;
+        rev_query: TS.reverse_query;
         mutable underapprox: K.t SMap.t
       }
 
-      let init (graph: cfg_t) (src: int) : t =
-        let q = mk_query graph src in  
-        { graph = graph; src = src; query = q; underapprox = SMap.empty }
+      let init (graph: cfg_t) (src: int) (tgt: int): t =
+        let q = mk_query graph src in
+        let rq = TS.mk_reverse_query q tgt in
+        { graph = graph
+        ; src = src
+        ; query = q
+        ; rev_query = rq
+        ; underapprox = SMap.empty }
 
       (** retrieve over-approximate procedure summary *)
       let over_proc_summary (ctx: t) ((u, v) : ProcName.t) =
@@ -194,10 +200,10 @@ module Summarizer =
         set_under_proc_summary ctx (u, v) summary'
       
       let path_weight_intra (ctx: t) (src: int) (dst: int) =
-          TS.intra_path_summary ctx.query src dst
+          TS.exit_summary ctx.rev_query src dst
       
-      let path_weight_inter (ctx: t) (src: int) (dst: int) =
-          TS.inter_path_summary ctx.query src dst 
+      let path_weight_inter (ctx: t) (src: int) =
+          TS.target_summary ctx.rev_query src
   end
 
 
@@ -316,9 +322,9 @@ module GPS = struct
       art = ReachTree.make ts entry err_loc pre_state !gctx.interproc;
       global_ctx = gctx;
     }
-  and mk_mc_context (global_cfg: cfg_t) (global_src: int) = 
+  and mk_mc_context (global_cfg: cfg_t) (global_src: int) (err_loc: int)= 
     ref {
-      interproc = Summarizer.init global_cfg global_src;
+      interproc = Summarizer.init global_cfg global_src err_loc;
     }
 
   (** place an element in front of the deque (worklist) *)
@@ -334,8 +340,8 @@ module GPS = struct
       Syntax.mk_eq srk s s' :: acc) !ctx.equalities [Syntax.mk_true srk]
     |> Syntax.mk_and srk 
 
-  let oracle ctx u v= 
-    if !ctx.recurse_level = 0 then Summarizer.path_weight_inter (get_summarizer ctx) u v
+  let oracle ctx u v = 
+    if !ctx.recurse_level = 0 then Summarizer.path_weight_inter (get_summarizer ctx) u
       else Summarizer.path_weight_intra (get_summarizer ctx) u v
 
   let rec art_cfg_path_pair (ctx: intra_context ref) (p: ReachTree.node list) = 
@@ -626,7 +632,7 @@ module GPS = struct
     * vtxcnt (keeps track of largest unused vertex number in tree), 
     * ptt is a pointer to the reachability tree.
     *)
-    let global_context = mk_mc_context ts entry in 
+    let global_context = mk_mc_context ts entry err_loc in 
     logf "executing concolic mcmillan's algorithm\n";
     (*let ts_with_gas = instrument_with_gas ts in *)
     let main_context = mk_intra_context global_context (entry, err_loc) ts 0 K.one entry err_loc in 

@@ -564,6 +564,11 @@ module RecGraph = struct
       (* An algebra for assigning weights to non-call edges and *)
       algebra : 'a Pathexpr.nested_algebra }
 
+  type 'a reverse_query =
+    { parent : 'a weight_query
+    ; path_to_exit : Pathexpr.nested Pathexpr.t weighted_graph
+    ; path_to_target : int -> Pathexpr.nested Pathexpr.t }
+
   let pathexpr_algebra context =
     { mul = mk_mul context;
       add = mk_add context;
@@ -601,13 +606,6 @@ module RecGraph = struct
       |> VertexSet.elements
     in
     let intraproc_paths = msat_path_weight rg.path_graph sources in
-    let instrumented_edges = 
-      M.fold (fun (u, _) (entry, _) acc -> 
-          (u,entry) :: acc
-        ) rg.call_edges []
-    in let instrumented_graph = 
-      List.fold_left (fun acc (u, src) -> 
-        add_edge acc u (Pathexpr.mk_one rg.context) src) rg.path_graph instrumented_edges in 
     let interproc =
       let intraproc_paths = edge_weight intraproc_paths in
       List.fold_left (fun interproc_graph src ->
@@ -626,11 +624,11 @@ module RecGraph = struct
         sources
     in
     { recgraph = rg;
-      instrumented_graph = instrumented_graph;
       intraproc_paths = intraproc_paths;
       interproc = interproc;
       interproc_paths = msat_path_weight interproc [src];
       src = src }
+
 
   let call_pathexpr query (src, tgt) =
     (* intraproc_paths is only set when src is an entry vertex *)
@@ -742,20 +740,13 @@ module RecGraph = struct
     query.changed := CallSet.add call !(query.changed);
     HT.replace query.summaries call weight
 
-
-
-  let intra_path_summary (wq: 'a weight_query) src tgt = 
-    let q = wq.query in 
-    let g = q.recgraph in 
-    let (table, algebra) = prepare wq in
-    Pathexpr.eval ~table ~algebra (path_weight g.path_graph src tgt)
-
-  let inter_path_summary (wq: 'a weight_query) src tgt = 
-    let q = wq.query in 
-    let g = q.instrumented_graph in 
-    let (table, algebra) = prepare wq in 
-    Pathexpr.eval ~table ~algebra (path_weight g src tgt) 
-  
+  let exit_summary rev_query src tgt = 
+    let (table, algebra) = prepare rev_query.parent in
+    Pathexpr.eval_nested ~table ~algebra (path_weight rev_query.path_to_exit tgt src)
+   
+  let target_summary rev_query src =
+    let (table, algebra) = prepare rev_query.parent in
+    Pathexpr.eval_nested ~table ~algebra (rev_query.path_to_target src)
 
   let mk_weight_query query algebra =
     { query = query;
@@ -763,6 +754,70 @@ module RecGraph = struct
       changed = ref CallSet.empty;
       table = Pathexpr.mk_table ();
       algebra = algebra }
+
+  let mk_reverse_query weight_query tgt =
+    let rg = weight_query.query.recgraph in
+    let context = rg.context in
+    let reverse f graph = (* Reverse edges in a graph *)
+      let reverse_algebra =
+        { mul = (fun x y -> mk_mul context y x);
+          add = mk_add context;
+          star = mk_star context;
+          zero = mk_zero context;
+          one = mk_one context }
+      in
+      let vertices =
+        fold_vertex
+          (fun v rev_graph -> add_vertex rev_graph v)
+          graph
+          (empty reverse_algebra)
+      in
+      fold_edges
+        (fun (u, w, v) rev_graph -> add_edge rev_graph v (f w) u)
+        graph
+        vertices
+    in
+    (* rg.path_graph, with each edge reversed *)
+    let reverse_graph = reverse Pathexpr.promote rg.path_graph in
+    let callset =
+      M.fold (fun _ call callset ->
+          CallSet.add call callset)
+        rg.call_edges
+        CallSet.empty
+    in
+    let entries, exits =
+      let entries, exits =
+        CallSet.fold (fun (entry, exit) (entries, exits) ->
+            (VertexSet.add entry entries, VertexSet.add exit exits))
+          callset
+          (VertexSet.empty, VertexSet.empty)
+      in
+      (VertexSet.elements entries, VertexSet.elements exits)
+    in
+    (* Intraprocedural paths from entries to target *)
+    let (_, entry_to_target, _) =
+      _path_weight reverse_graph omega_trivial tgt
+    in
+    let reverse_interproc =
+      List.fold_left (fun g entry ->
+          add_edge g tgt (Pathexpr.mk_segment context (entry_to_target entry)) entry)
+        (reverse (fun x -> x) weight_query.query.interproc)
+        entries
+    in
+    let (_, entry_to_target, _) =
+      _path_weight reverse_interproc omega_trivial tgt
+    in
+    (* Interprocedural paths from entries to target *)
+    let instrumented_graph = 
+      M.fold (fun (u, _) (entry, _) acc ->
+          add_edge acc tgt (entry_to_target entry) u)
+        rg.call_edges
+        reverse_graph
+    in
+    let (_, path_to_target, _) = _path_weight instrumented_graph omega_trivial tgt in
+    let path_to_exit = msat_path_weight reverse_graph exits in
+    { parent = weight_query; path_to_exit; path_to_target }
+
 
   let path_weight query tgt =
     let (table, algebra) = prepare query in

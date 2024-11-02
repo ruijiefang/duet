@@ -42,6 +42,7 @@ module Make
   type transition = T.t
   type t = (transition label) WeightedGraph.t
   type query = T.t WeightedGraph.RecGraph.weight_query
+  type reverse_query = T.t WeightedGraph.RecGraph.reverse_query
 
   module VarSet : BatSet.S with type elt = Var.t
 
@@ -69,6 +70,10 @@ module Make
      starting at a given vertex. *)
   val omega_path_weight : query -> (transition,'b) Pathexpr.omega_algebra -> 'b
 
+  val mk_reverse_query : query -> vertex -> reverse_query
+  val exit_summary : reverse_query -> vertex -> vertex -> T.t
+  val target_summary : reverse_query -> vertex -> T.t
+
   (** Project out local variables from each transition that are referenced
       only by that transition. *)
   val remove_temporaries : t -> t
@@ -79,11 +84,6 @@ module Make
 
   (** Get procedure summary; delegates call to WG.RecGraph.get_summary *)
   val get_summary : query -> (vertex * vertex) -> transition
-
-  (** delegates call to RecGraph.inter_path_summary / RecGraph.intra_path_summary *)
-  val inter_path_summary : query -> vertex -> vertex -> transition 
-
-  val intra_path_summary : query -> vertex -> vertex -> transition 
 
   (** Compute interval invariants for each loop header of a transition system.
       The invariant computed for a loop is defined only over the variables

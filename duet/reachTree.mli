@@ -40,13 +40,16 @@ module ART :
             type transition = K.t
             type t 
             type query
+            type reverse_query
             val empty : t
             val path_weight : query -> vertex -> transition
             val call_weight : query -> vertex * vertex -> transition
+            val mk_reverse_query : query -> vertex -> reverse_query
+            val exit_summary : reverse_query -> vertex -> vertex -> K.t
+            val target_summary : reverse_query -> vertex -> K.t
+
             val set_summary : query -> vertex * vertex -> transition -> unit
             val get_summary : query -> vertex * vertex -> transition
-            val inter_path_summary : query -> vertex -> vertex -> transition
-            val intra_path_summary : query -> vertex -> vertex -> transition
             val omega_path_weight :
               query -> (transition, 'b) Srk.Pathexpr.omega_algebra -> 'b
             val remove_temporaries : t -> t
@@ -81,7 +84,7 @@ module ART :
     (Summarizer : sig
                     type t
                     (** [init g s] returns a Summarizer.t type for a given transition system, source vertex pair (g, s). *)
-                    val init : TS.t -> TS.vertex -> t
+                    val init : TS.t -> TS.vertex -> TS.vertex -> t
                     (** [over_proc_summary s n] returns the over-approximate procedure summary for procedure `n`. *)
                     val over_proc_summary : t -> PN.t -> K.t
                     (** [under_proc_summary s n] returns the under-approximate procedure summary (initially `false`) for procedure `n`. *)
@@ -97,7 +100,7 @@ module ART :
                     (** [path_weight_intra s u v] gives the weighted path summary between (u, v) on an intraprocedural CFG *)
                     val path_weight_intra : t -> TS.vertex -> TS.vertex -> K.t
                     (** [path_weight_inter s u v] gives the inter-procedural path weight between (u, v) *)
-                    val path_weight_inter : t -> TS.vertex -> TS.vertex -> K.t
+                    val path_weight_inter : t -> TS.vertex -> K.t
                   end)
     ->
     sig

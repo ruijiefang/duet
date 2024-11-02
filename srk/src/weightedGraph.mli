@@ -147,6 +147,10 @@ module RecGraph : sig
      weight queries. *)
   type 'a weight_query
 
+  (** A weight query is an intermediate structure for perfoming
+     single-destination path weight queries. *)
+  type 'a reverse_query
+
   exception No_summary of call
 
   (** The callgraph of a recursive graph has calls as vertices, and an
@@ -193,6 +197,11 @@ module RecGraph : sig
      weights to call edges. *)
   val mk_weight_query : query -> 'a Pathexpr.nested_algebra -> 'a weight_query
 
+  (** Create a reverse query for the selected destination.  The reverse query
+     shares procedure summaries with the underlying weight query, so
+     [set_summary] impacts both. *)
+  val mk_reverse_query : 'a weight_query -> vertex -> 'a reverse_query
+
   (** Build call summaries via successive approximation. *)
   val summarize_iterative : query ->
                             'a Pathexpr.nested_algebra ->
@@ -210,9 +219,14 @@ module RecGraph : sig
   val get_summary : 'a weight_query -> call -> 'a
   val set_summary : 'a weight_query -> call -> 'a -> unit
 
-  val intra_path_summary : 'a weight_query -> int -> int -> 'a
+  (** [exit_summary rq u v] computes the sum of the weights of all
+     intraprocedural paths beginning at [u] and ending at [v].  The target
+     vertex [v] is required to be the exit vertex of some procedure. *)
+  val exit_summary : 'a reverse_query -> vertex -> vertex -> 'a
 
-  val inter_path_summary : 'a weight_query -> int -> int -> 'a
+  (** Find the sum of weights of all interprocedural paths beginning
+      at the given vertex and ending in the query's target *)
+  val target_summary : 'a reverse_query -> vertex -> 'a
  
   (** Find the sum of weights of all infinite interprocedural paths
      beginning at the query's source vertex. *)

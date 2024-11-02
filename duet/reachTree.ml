@@ -56,14 +56,18 @@ module ART
       type transition = K.t
       type t
       type query
+      type reverse_query
 
       val empty : t
       val path_weight : query -> vertex -> transition
       val call_weight : query -> vertex * vertex -> transition
       val set_summary : query -> vertex * vertex -> transition -> unit
       val get_summary : query -> vertex * vertex -> transition
-      val inter_path_summary : query -> vertex -> vertex -> transition
-      val intra_path_summary : query -> vertex -> vertex -> transition
+
+
+      val mk_reverse_query : query -> vertex -> reverse_query
+      val exit_summary : reverse_query -> vertex -> vertex -> K.t
+      val target_summary : reverse_query -> vertex -> K.t
 
       val omega_path_weight :
         query -> (transition, 'b) Srk.Pathexpr.omega_algebra -> 'b
@@ -112,7 +116,6 @@ module ART
     end)
     (Summarizer : sig
       type t
-      val init : TS.t -> TS.vertex -> t
       val over_proc_summary : t -> PN.t -> K.t
       val under_proc_summary : t -> PN.t -> K.t
       val set_over_proc_summary : t -> PN.t -> K.t -> unit
@@ -120,7 +123,7 @@ module ART
       val refine_over_summary : t -> PN.t -> K.t -> unit
       val refine_under_summary : t -> PN.t -> K.t -> unit
       val path_weight_intra : t -> TS.vertex -> TS.vertex -> K.t
-      val path_weight_inter : t -> TS.vertex -> TS.vertex -> K.t
+      val path_weight_inter : t -> TS.vertex -> K.t
     end) = 
 struct
   (* type for a tree node *)
@@ -362,9 +365,9 @@ struct
      a _frontier node_ if concrete execution cannot reach it from its parent node. A
      frontier node does not have a model associated with it and is in need of refinement. *)
   let expand recurse_level (art : t ref) (v : node) (m: Ctx.t Interpretation.interpretation)=
-    let oracle =
-      if recurse_level = 0 then Summarizer.path_weight_inter
-      else Summarizer.path_weight_intra
+    let oracle s src tgt =
+      if recurse_level = 0 then Summarizer.path_weight_inter s src
+      else Summarizer.path_weight_intra s src tgt
     in
     let vg = maps_to art v in
     let new_concolic_nodes, new_frontier_nodes = (ref [], ref []) in
@@ -535,9 +538,9 @@ struct
                 l ISet.empty
             in
             !art.reverse_covers <- IntMap.add u u_coverers !art.reverse_covers)
-      path interpolants;
+      path
+      interpolants;
     !worklist
-
   
   let rec glue l = 
     match l with 

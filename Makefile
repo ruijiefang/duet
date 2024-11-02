@@ -9,7 +9,7 @@ clean:
 	dune clean
 
 test:
-	dune runtest -f
+	dune runtest --profile release -f
 
 install:
 	dune build @install

@@ -35,6 +35,7 @@ module Make
        val one : t
        val star : t -> t
        val exists : (var -> bool) -> t -> t
+       val try_rtc : t -> t option
      end) : sig
 
   type vertex = int

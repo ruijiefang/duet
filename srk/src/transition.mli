@@ -167,4 +167,9 @@ module Make
      hold, either [tr] is non-deterministic, or a proof of determinacy could
      not be found. *)
   val is_deterministic : t -> bool
+
+  (** Attempt to compute the reflexive transitive closure of the input
+     transition formula; return [None] of the exact RTC was not successfully
+     found. *)
+  val try_rtc : t -> t option
 end

@@ -41,6 +41,7 @@ module Make
        val one : t
        val star : t -> t
        val exists : (var -> bool) -> t -> t
+       val try_rtc : t -> t option
      end)
 = struct
 
@@ -682,10 +683,30 @@ module Make
             let ug = WG.forget_weights tg in
             if (p v
                 || WG.mem_edge tg v v
-                || WG.U.in_degree ug v != 1
-                || WG.U.out_degree ug v != 1)
+                || (WG.U.in_degree ug v != 1
+                    && WG.U.out_degree ug v != 1))
             then
-              tg
+              begin if WG.mem_edge tg v v then
+                  match WG.edge_weight tg v v with
+                  | Weight tr ->
+                    (try begin match T.try_rtc tr with
+                     | Some rtc ->
+                       let u = -1 in
+                       (try
+                          let tg = WG.remove_edge tg v v in
+                          let tg =
+                            WG.contract_vertex (WG.split_vertex tg v (Weight rtc) u) u
+                          in
+                          continue := true;
+                          tg
+                        with _ -> tg)
+                     | None -> tg end
+                      with _ -> tg)
+                  | Call (_, _) -> tg
+                else
+                  tg
+              end
+
             else begin
               try
                 let tg = WG.contract_vertex tg v in

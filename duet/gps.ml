@@ -114,13 +114,15 @@ let instrument_with_gas (ts: cfg_t) =
   let gas_var = Var.mk (Varinfo.mk_global "__duet_gas" (Concrete (Int 8))) in 
   let gas_var_sym = Syntax.mk_symbol srk ~name:"__duet_gas" `TyInt in  
   let gas_var_term = Syntax.mk_const srk gas_var_sym in 
-  let gasexpr =  
-    let open Syntax.Infix(Ctx) in 
-      let assume_positive = K.assume (Syntax.mk_lt srk (mk_int 0) gas_var_term) in 
-      let decr_by_one = Syntax.mk_sub srk gas_var_term (mk_int 1) |> K.assign (VVal gas_var) in 
-      K.mul assume_positive decr_by_one in 
   Hashtbl.add V.sym_to_var gas_var_sym (VVal gas_var);
   ValueHT.add V.var_to_sym (VVal gas_var) gas_var_sym;
+  let gasexpr =
+    let assume_positive = K.assume (Syntax.mk_lt srk (mk_int 0) gas_var_term) in
+    let decr_by_one =
+      Syntax.mk_sub srk gas_var_term (mk_int 1) |> K.assign (VVal gas_var)
+    in
+    K.mul assume_positive decr_by_one
+  in
   (* for each call-edge, u->v, add new predecessor edge x->u->v where x->u is an instrumented edge. *)
   let loop_headers = 
     let module L = Loop.Make(TSG) in 

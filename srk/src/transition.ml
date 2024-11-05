@@ -618,8 +618,7 @@ struct
           logf "-------------------interpolation end---\n";
       logf "--- indicator length %d\n" @@ List.length indicators;
       logf "\ntarget formula: %a\n" (Syntax.pp_expr srk) target;
-      Smt.StdSolver.add solver indicators; 
-      match Smt.StdSolver.get_unsat_core_or_model solver with 
+      match Smt.StdSolver.get_unsat_core_or_model solver indicators with 
         | `Sat m ->  
           (sat_callback m symbols sst ss_inv)
         | `Unsat core -> (unsat_callback trs post guards core)

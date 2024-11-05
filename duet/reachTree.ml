@@ -72,8 +72,6 @@ module ART
       val omega_path_weight :
         query -> (transition, 'b) Srk.Pathexpr.omega_algebra -> 'b
 
-      val remove_temporaries : t -> t
-
       val forward_invariants_ivl :
         t -> vertex -> (vertex * Ctx.t Srk.Syntax.formula) list
 

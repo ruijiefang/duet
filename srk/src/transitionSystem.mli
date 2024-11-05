@@ -74,10 +74,9 @@ module Make
   val exit_summary : reverse_query -> vertex -> vertex -> T.t
   val target_summary : reverse_query -> vertex -> T.t
 
-  (** Project out local variables from each transition that are referenced
-      only by that transition. *)
-  val remove_temporaries : t -> t
-
+  (** Project out variables that do not satisfy the given predicate from each
+     transition that are referenced only by that transition. *)
+  val remove_temporaries : (Var.t -> bool) -> t -> t
 
   (** Set procedure summary; delegates call to WG.RecGraph.set_summary *)
   val set_summary : query -> (vertex * vertex) -> transition -> unit 

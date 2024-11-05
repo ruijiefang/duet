@@ -791,13 +791,21 @@ let decorate_transition_system predicates ts entry =
       WG.split_vertex ts v (Weight (K.assume invariant)) fresh_id)
     ts
 
+module VSet = BatSet.Make(V)
 let make_transition_system rg =
   let call_edge block =
     Call ((RG.block_entry rg block).did, (RG.block_exit rg block).did)
   in
   let assertions = ref SrkUtil.Int.Map.empty in
-  let add_assert v e =
-    assertions := SrkUtil.Int.Map.add v e (!assertions)
+  let assert_vars = ref VSet.empty in
+  let add_assert v (cond, loc, msg) =
+    assertions := SrkUtil.Int.Map.add v (cond, loc, msg) (!assertions);
+    let open Syntax in
+    Symbol.Set.iter (fun (s : Syntax.symbol) ->
+        match V.of_symbol s with
+        | Some v -> assert_vars := VSet.add v (!assert_vars)
+        | None -> ())
+      (Syntax.symbols cond)
   in
   let ts =
     BatEnum.fold (fun ts (block, graph) ->
@@ -856,8 +864,11 @@ let make_transition_system rg =
         let point_of_interest v =
           v = entry || v = exit || SrkUtil.Int.Map.mem v (!assertions)
         in
+        let elim_var v =
+          V.is_global v || VSet.mem v (!assert_vars)
+        in
         let tg = TS.simplify point_of_interest tg in
-        let tg = TS.remove_temporaries tg in
+        let tg = TS.remove_temporaries elim_var tg in
         let tg =
           if !forward_inv_gen then
             Log.phase "Forward invariant generation"

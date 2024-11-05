@@ -523,11 +523,11 @@ module Make
   module VHT = BatHashtbl.Make(Var)
 
   (* Remove temporary variables that are referenced by only one transition *)
-  let remove_temporaries tg =
+  let remove_temporaries proj tg =
     (* Map each local variable to the set of transitions that refer to it *)
     let ref_map = VHT.create 991 in
     let add_ref var (u, v) =
-      if not (Var.is_global var) then
+      if not (proj var) then
         VHT.modify_def PS.empty var (PS.add (u,v)) ref_map
     in
     tg |> WG.iter_edges (fun (u, label, v) ->

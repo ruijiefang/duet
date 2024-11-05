@@ -530,7 +530,6 @@ module Make
       if not (proj var) then
         VHT.modify_def PS.empty var (PS.add (u,v)) ref_map
     in
-    List.iter (fun x -> VarSet.iter (fun var -> add_ref ) (references x)) assertions;
     tg |> WG.iter_edges (fun (u, label, v) ->
         match label with
         | Call _ -> ()
@@ -555,7 +554,7 @@ module Make
               List.fold_right VarSet.remove (uses tr) (PHT.find tmp_map (u, v))
             in
             Weight (T.exists (fun x -> not (VarSet.mem x tmp)) tr)
-          with Not_found -> label)
+          with Not_found -> label)  
 
   let forward_invariants_ivl tg entry =
     let init v =

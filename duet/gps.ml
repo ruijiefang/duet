@@ -685,7 +685,7 @@ module GPS = struct
 module BM = BatMap.Make(Int)
 
 
-let analyze_concolic_mcl enable_gas enable_summary enable_rtc file = 
+let analyze_concolic_mcl enable_gas enable_summary file = 
   let open Srk.Iteration in 
   populate_offset_table file;
   K.domain := split (product [ PolyhedronGuard.exp

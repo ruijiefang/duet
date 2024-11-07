@@ -483,9 +483,9 @@ let tr_instr ctx instr =
         let havoc = mk_def (Assign (v, Havoc (Concrete (Int 1)))) in
         let assume0 =
           mk_def (Assume (Atom (Le, Aexpr.zero, AccessPath (Variable v)))) in 
-       (* let assume1 = TODO:
-          mk_def (Assume (Atom (Le, AccessPath (Variable v), Constant (CInt (255, 1))))) in *)
-          mk_seq havoc assume0 
+          let assume1 = 
+          mk_def (Assume (Atom (Le, AccessPath (Variable v), Constant (CInt (255, 1))))) in 
+          mk_seq havoc @@ mk_seq assume0 assume1 
       | ("__VERIFIER_nondet_int", Some (Variable v), []) ->
         mk_def (Assign (v, Havoc (Concrete (Int machine_int_width))))
       | ("__VERIFIER_nondet_long", Some (Variable v), []) ->

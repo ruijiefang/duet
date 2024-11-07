@@ -730,6 +730,8 @@ let _ =
     ("-mcl-concolic-gas", analyze_concolic_mcl true true, " GPS model checking algorithm");
   CmdLine.register_pass
     ("-mcl-concolic-nosum", analyze_concolic_mcl false false, "GPS without CRA-generated summary");
+  CmdLine.register_pass 
+    ("-mcl-concolic-nosum-nogas", analyze_concolic_mcl true false, "GPS with gas but without CRA-generated summary");
   CmdLine.register_pass
     ("-dump-unsimplified-cfg", dump_cfg false, "dump unsimplified CFG");
   CmdLine.register_pass

@@ -81,7 +81,7 @@ module ART
         vertex ->
         (vertex * Ctx.t Srk.Syntax.formula) list
 
-      val simplify : (vertex -> bool) -> t -> t
+      val simplify : ?try_rtc:bool -> (vertex -> bool) -> t -> t
 
       val iter_succ_e :
         (vertex * transition TransitionSystem.label * vertex -> unit) ->
@@ -188,7 +188,7 @@ struct
         vtxcnt = 1;
         cfg_vertex = IntMap.add 0 entry IntMap.empty;
         parents = IntMap.add 0 (-1) IntMap.empty;
-        labels = IntMap.add 0 pre_state IntMap.empty;
+        labels = IntMap.add 0 (mk_true ()) IntMap.empty;
         children = IntMap.add 0 [] IntMap.empty;
         covers = IntMap.empty; (* for (u, v) in cover, u is ancestor of v and label(v) |= label(u). v is covered if (u, v) in cover. Then cover[v] = u. *)
         reverse_covers = IntMap.empty; (* for each v, store the v's that cover it: i.e. cover[v] *)

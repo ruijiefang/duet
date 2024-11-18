@@ -6,9 +6,9 @@ type 'a label =
 
 module Make
     (C : sig
-       type t
-       val context : t Syntax.context
-     end)
+      type t
+      val context : t context
+      end)
     (Var : sig
        type t
        val pp : Format.formatter -> t -> unit
@@ -102,7 +102,7 @@ module Make
       the given predicate.  Simplification does not guarantee that all such
       vertices are contracted.  In particular, simplification will not
       contract vertices with loops or vertices adjacent to call edges. *)
-  val simplify : (vertex -> bool) -> t -> t
+  val simplify :  ?try_rtc:bool -> (vertex -> bool) -> t -> t
 
   (** Given a transition system and entry, compute a set of loop
      headers along with the set of variables that are read within the

@@ -57,7 +57,7 @@ module ART :
             val forward_invariants_ivl_pa :
               Ctx.t Srk.Syntax.formula list ->
               t -> vertex -> (vertex * Ctx.t Srk.Syntax.formula) list
-            val simplify : (vertex -> bool) -> t -> t
+            val simplify : ?try_rtc:bool -> (vertex -> bool) -> t -> t
             val iter_succ_e :
               ((vertex * (transition TransitionSystem.label) * vertex) -> unit) -> t -> vertex -> unit
             val edge_weight :

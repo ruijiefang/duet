@@ -5,15 +5,17 @@ include Log.Make(struct let name = "srk.transitionSystem" end)
 
 module WG = WeightedGraph
 module Int = SrkUtil.Int
+module ISet = BatSet.Make(Int)
 
 type 'a label =
   | Weight of 'a
   | Call of int * int
 
+
 module Make
     (C : sig
        type t
-       val context : t context
+       val context : t context     
      end)
     (Var : sig
        type t
@@ -675,7 +677,8 @@ module Make
     in
     List.map invariants (L.all_loops (L.loop_nest tg))
 
-  let simplify p tg =
+
+  let simplify ?(try_rtc=false) p tg =
     let rec go tg =
       let continue = ref false in
       let tg' =
@@ -687,30 +690,33 @@ module Make
                 || (WG.U.in_degree ug v != 1
                     && WG.U.out_degree ug v != 1))
             then
-              let _ = Printf.printf "trying rtc on vertex %d\n " v in 
-              begin if WG.mem_edge tg v v then
-                  match WG.edge_weight tg v v with
-                  | Weight tr ->
-                    (try begin match T.try_rtc tr with
-                     | Some rtc ->
-                       let u = -1 in
-                       (try
-                          Printf.printf "removing edge from %d %d\n" v v;
-                          let tg = WG.remove_edge tg v v in
-                          let tg =
-                            Printf.printf "success: contracting vertex %d %d\n" v u;
-                            WG.contract_vertex (WG.split_vertex tg v (Weight rtc) u) u
-                          in
-                          continue := true;
-                          tg
-                        with _ -> tg)
-                     | None -> Printf.printf "...failed.\n"; tg end
-                      with _ -> tg)
-                  | Call (_, _) -> tg
-                else
-                  tg
+              begin if try_rtc then begin 
+                let _ = Printf.printf "trying rtc on vertex %d\n " v in 
+                  begin if WG.mem_edge tg v v then
+                      match WG.edge_weight tg v v with
+                      | Weight tr ->
+                        (try begin match T.try_rtc tr with
+                        | Some rtc ->
+                          let u = -1 in
+                          (try
+                              Printf.printf "removing edge from %d %d\n" v v;
+                              let tg = WG.remove_edge tg v v in
+                              let tg =
+                                Printf.printf "success: contracting vertex %d %d\n" v u;
+                                WG.contract_vertex (WG.split_vertex tg v (Weight rtc) u) u
+                              in
+                              continue := true;
+                              tg
+                            with _ -> tg)
+                        | None -> Printf.printf "...failed.\n"; tg end
+                          with _ -> tg)
+                      | Call (_, _) -> tg
+                    else
+                      tg
+                    end
+                  end 
+                else tg 
               end
-
             else begin
               try
                 let tg = WG.contract_vertex tg v in

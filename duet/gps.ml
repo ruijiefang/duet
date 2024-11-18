@@ -37,7 +37,6 @@ end
 module ProcMap = BatMap.Make(ProcName)
 module IntMap = BatMap.Make(Int)
 module StringMap = BatMap.Make(String)
-module ISet = BatSet.Make(Int)
 module DQ = BatDeque
 module ARR = Batteries.DynArray 
 type cfg_t = TSG.t
@@ -106,49 +105,6 @@ let instrument_with_rets (ts : cfg_t) : cfg_t =
     ValueHT.add V.var_to_sym (VVal hazard_var) hazard_var_sym
   in ts
 
-let instrument_with_gas (ts: cfg_t) = 
-  let mk_int k = Ctx.mk_real (QQ.of_int k) in 
-  let largest = ref (WG.fold_vertex (fun v max -> if v > max then v else max) ts 0) in 
-  let new_vtx () = 
-    largest := !largest + 1; !largest in
-  let gas_var = Var.mk (Varinfo.mk_global "__duet_gas" (Concrete (Int 8))) in 
-  let gas_var_sym = Syntax.mk_symbol srk ~name:"__duet_gas" `TyInt in  
-  let gas_var_term = Syntax.mk_const srk gas_var_sym in 
-  Hashtbl.add V.sym_to_var gas_var_sym (VVal gas_var);
-  ValueHT.add V.var_to_sym (VVal gas_var) gas_var_sym;
-  let gasexpr =
-    let assume_positive = K.assume (Syntax.mk_lt srk (mk_int 0) gas_var_term) in
-    let decr_by_one =
-      Syntax.mk_sub srk gas_var_term (mk_int 1) |> K.assign (VVal gas_var)
-    in
-    K.mul assume_positive decr_by_one
-  in
-  (* for each call-edge, u->v, add new predecessor edge x->u->v where x->u is an instrumented edge. *)
-  let loop_headers = 
-    let module L = Loop.Make(TSG) in 
-    List.map (fun loop -> L.header loop) @@ L.all_loops (L.loop_nest ts) in 
-  let call_edge_headers = 
-    WG.fold_edges (fun (u, w, _) ls -> 
-      match w with 
-      | Call _ -> u :: ls 
-      | _ -> ls) ts [] in 
-  let modify ts u =
-    let g = ref ts in 
-    (* step 1: add new in-edge to (u, v) *) 
-    let x = new_vtx () in 
-      g := WG.add_vertex !g x;
-      (* step 2: add weighted edge x-(gasexpr)->u *)
-      g := WG.add_edge !g x (Weight gasexpr) u;
-      (* step 3: redirect every p->u to be y->x->u *)
-      WG.iter_pred_e (fun (p, weight, _) -> 
-        g := WG.add_edge !g p weight x;
-        g := WG.remove_edge !g p u  
-        ) ts u;
-      !g in 
-  let g = ref ts in 
-  List.iter (fun u -> g := modify !g u) (loop_headers @ call_edge_headers);
-  !g
-
 module Summarizer = 
   struct 
       module SMap = BatMap.Make(ProcName)
@@ -212,8 +168,14 @@ module Summarizer =
 
       (** retrieve under-approximate procedure summary *)
       let under_proc_summary (ctx: t) ((u, v): ProcName.t) : K.t = 
-        SMap.find_default K.zero (u, v) ctx.underapprox
-        |> K.exists (V.is_global) 
+        match SMap.find_default K.zero (u, v) ctx.underapprox
+          |> K.project_mbp (V.is_global) 
+        with
+        | `Sat tr -> tr  
+        |  _ -> 
+          log_weights "under_proc_summary: this weight is unsat: " [SMap.find_default K.zero (u, v) ctx.underapprox];
+          K.zero 
+          (*failwith "under_proc_summary: cannot model-based project"*)
         
       (** set under-approximate procedure summary *)
       let set_under_proc_summary (ctx: t) ((u, v): ProcName.t) (w: K.t) : unit = 
@@ -399,6 +361,19 @@ module GPS = struct
     art_cfg_path_pair ctx p 
     |> List.map (fun (_, (u, v), _) -> (u, v))
   
+  let print_vocabulary tr = 
+    let g_vocab, l_vocab = K.vocabulary tr in
+    let vname x = 
+      match V.of_symbol x with 
+      | Some var -> V.show var 
+      | None -> " [havoc] "
+    in
+    log_weights " [vocabulary of transition] " [tr]; 
+    logf " ------ globals: ---- {\n";
+    List.iter (fun x -> logf "     %s %s\n" (Syntax.show_symbol srk x) (vname x)) g_vocab;
+    logf "}\n ------ locals:  ---- {\n";
+    List.iter (fun x -> logf "     %s %s\n" (Syntax.show_symbol srk x) (vname x)) l_vocab
+
   (* CFG path condition from art.src -> art.v *)
   let path_condition (ctx: intra_context ref) condition_type (v: ReachTree.node) =
     let art = !ctx.art in 
@@ -417,7 +392,11 @@ module GPS = struct
       | Call (src, dst) -> 
         begin match condition_type with 
         | OverApprox -> Summarizer.over_proc_summary summarizer (ProcName.make (src, dst))
-        | UnderApprox -> Summarizer.under_proc_summary summarizer (ProcName.make (src, dst)) 
+        | UnderApprox -> 
+            let under = Summarizer.under_proc_summary summarizer (ProcName.make (src, dst)) in 
+              log_weights "underapproximate summary" [under];
+              print_vocabulary under;
+              under
         end
       | Weight w -> w) (to_weights cfg_nodes) in 
       logf " ---- path_condition: path length: %d, before add1: %d\n" ((List.length pathcond)+1) (List.length pathcond);
@@ -548,8 +527,9 @@ module GPS = struct
 
   let extract_refinement (ctx: intra_context ref) = 
     let art = !ctx.art in
-    let rfn = ReachTree.label art ReachTree.root |> promote in 
-    K.exists (fun v -> V.is_global v) rfn 
+    let rfn = ReachTree.label art ReachTree.root |> promote in
+    log_weights "refinement: " [rfn];
+    K.exists (fun v -> V.is_global v) (rfn) 
   
   let seq = List.fold_left K.mul K.one (* sequentially multiply, left-right *)
 
@@ -568,7 +548,8 @@ module GPS = struct
         logf "\nlength of right path: %d" (List.length right);
         logf "\nPrinting left path... \n";
         log_labelled_weights (get_summarizer ctx) UnderApprox "left path - " left;
-        failwith "error: handle_path_to_error: cannot project path condition" in 
+        logf "error: handle_path_to_error: cannot project path condition" ;
+        `Safe in 
     let handle_left_case caller_id =
       logf "handle_path_to_error: %s\n" caller_id;
       `Safe in 
@@ -634,7 +615,7 @@ module GPS = struct
           (* concolic phase *)
           begin match concolic_phase ctx with 
           | `Unsafe w -> 
-            logf "--- concolic_mcmillan_execute: found path-to-error at tree node %d (cfg vertex %d) \n" (ReachTree.of_node w) (ReachTree.maps_to !ctx.art w);
+            logf "--- GPS: found path-to-error at tree node %d (cfg vertex %d) \n" (ReachTree.of_node w) (ReachTree.maps_to !ctx.art w);
             let path_to_w = 
               ReachTree.tree_path !ctx.art w 
               |> art_cfg_path_pair ctx 
@@ -647,7 +628,7 @@ module GPS = struct
                   !ctx.worklist <- worklist_push w !ctx.worklist;
                   continue := true
                 | `Unsafe pathcond ->  
-                  logf "--- conoclic_mcmilan_execute: managed to concretize an intraprocedural path-to-error. returning... ";
+                  logf "--- GPS: managed to concretize an intraprocedural path-to-error. returning... ";
                   state := `Concretized (pathcond);
                   continue := false
                 end
@@ -675,8 +656,7 @@ module GPS = struct
     * ptt is a pointer to the reachability tree.
     *)
     let global_context = mk_mc_context ts entry err_loc enable_summary in 
-    logf "executing concolic mcmillan's algorithm\n";
-    (*let ts_with_gas = instrument_with_gas ts in *)
+    logf "executing GPS: start\n";
     let main_context = mk_intra_context global_context (entry, err_loc) ts 0 K.one entry err_loc in 
     intraproc_check main_context 
     end
@@ -685,7 +665,7 @@ module GPS = struct
 module BM = BatMap.Make(Int)
 
 
-let analyze_concolic_mcl enable_gas enable_summary file = 
+let analyze_mc enable_gas enable_summary file = 
   let open Srk.Iteration in 
   populate_offset_table file;
   K.domain := split (product [ PolyhedronGuard.exp
@@ -694,8 +674,7 @@ let analyze_concolic_mcl enable_gas enable_summary file =
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
-      let (ts, assertions) = make_transition_system rg in
-      let ts = if enable_gas then instrument_with_gas ts else ts in
+      let (ts, assertions) = make_transition_system ~simplify:true ~instr_gas:enable_gas entry rg in
       let ts, err_loc = make_ts_assertions_unreachable ts assertions in 
       if !CmdLine.display_graphs then TSDisplay.display ts;
       logf "\nentry: %d\n" entry; 
@@ -710,14 +689,14 @@ let analyze_concolic_mcl enable_gas enable_summary file =
   | _ -> assert false
 
 (** dump simplified CFG before doing model checking / CRA / concolic execution *)
-let dump_cfg simplify file = 
+let dump_cfg simplify instrument file = 
   populate_offset_table file;
   match file.entry_points with 
   | [main] ->
     begin 
       let rg = Interproc.make_recgraph file in 
-      let _ (* entry *) = (RG.block_entry rg main).did in 
-      let (ts, assertions) = make_transition_system ~simplify:simplify rg in 
+      let entry  = (RG.block_entry rg main).did in 
+      let (ts, assertions) = make_transition_system ~simplify:simplify ~instr_gas:instrument entry rg in 
       let ts, _ = make_ts_assertions_unreachable ts assertions in 
       TSDisplay.display ts
     end
@@ -725,14 +704,18 @@ let dump_cfg simplify file =
 
 let _ = 
   CmdLine.register_pass 
-    ("-mcl-concolic", analyze_concolic_mcl false true, " GPS model checking algorithm");
+    ("-gps", analyze_mc false true, " GPS model checking algorithm");
   CmdLine.register_pass
-    ("-mcl-concolic-gas", analyze_concolic_mcl true true, " GPS model checking algorithm");
+    ("-gps-gas", analyze_mc true true, " GPS model checking algorithm");
   CmdLine.register_pass
-    ("-mcl-concolic-nosum", analyze_concolic_mcl false false, "GPS without CRA-generated summary");
+    ("-gps-nosum", analyze_mc false false, "GPS without CRA-generated summary");
   CmdLine.register_pass 
-    ("-mcl-concolic-nosum-nogas", analyze_concolic_mcl true false, "GPS with gas but without CRA-generated summary");
+    ("-gps-nosum-nogas", analyze_mc true false, "GPS with gas but without CRA-generated summary");
   CmdLine.register_pass
-    ("-dump-unsimplified-cfg", dump_cfg false, "dump unsimplified CFG");
+    ("-dump-unsimplified-cfg", dump_cfg false false, "dump unsimplified CFG");
   CmdLine.register_pass
-    ("-dump-simplified-cfg", dump_cfg true, "dump simplified CFG")
+    ("-dump-simplified-cfg", dump_cfg true false, "dump simplified CFG");
+  CmdLine.register_pass
+    ("-dump-instrumented-unsimplified-cfg", dump_cfg false true, "dump unsimplified CFG");
+  CmdLine.register_pass
+    ("-dump-instrumented-simplified-cfg", dump_cfg true true, "dump simplified CFG");

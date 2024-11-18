@@ -787,12 +787,97 @@ let decorate_transition_system predicates ts entry =
       let invariant =
         abstract_domain.formula_of (abstract_domain.exists (member live) (inv v))
       in
+      logf "loop header location: %d" v;
       logf "Found invariant at %d:@;%a" v (Syntax.Formula.pp srk) invariant;
+      logf "New ID: %d" fresh_id; 
       WG.split_vertex ts v (Weight (K.assume invariant)) fresh_id)
     ts
 
 module VSet = BatSet.Make(V)
-let make_transition_system ?(simplify=true) rg =
+module ISet = BatSet.Make(Int)
+
+let create_gas_variable () = 
+  let mk_int k = Ctx.mk_real (QQ.of_int k) in 
+  let gas_var = Var.mk (Varinfo.mk_global "__duet_gas" (Concrete (Int 8))) in 
+  let gas_var_sym = Syntax.mk_symbol srk ~name:"__duet_gas" `TyInt in  
+  let gas_var_term = Syntax.mk_const srk gas_var_sym in 
+  Hashtbl.add V.sym_to_var gas_var_sym (VVal gas_var);
+  ValueHT.add V.var_to_sym (VVal gas_var) gas_var_sym;
+  let gasexpr = (Syntax.mk_lt srk (mk_int 0) gas_var_term) in 
+  let gasweight =
+    let assume_positive = K.assume gasexpr in
+    let decr_by_one = Syntax.mk_sub srk gas_var_term (mk_int 1) |> K.assign (VVal gas_var) in
+      K.mul assume_positive decr_by_one in 
+  let initial_gas = K.havoc [ VVal gas_var ] in  
+  (gasweight, gasexpr, initial_gas) 
+
+let new_vtx () = (Def.mk (Assume Bexpr.ktrue)).did 
+
+let instrument_with_gas (ts: TSG.t) (entry: int) gasexpr : TSG.t = 
+  let modify_pre ts u =
+    Printf.printf " --- %d is call edge\n" u;
+    let g = ref ts in 
+    (* step 1: add new in-edge to (u, v) *) 
+    let x = new_vtx () in 
+      g := WG.add_vertex !g x;
+      (* step 2: add weighted edge x-(gasexpr)->u *)
+      g := WG.add_edge !g x (Weight gasexpr) u;
+      (* step 3: redirect every p->u to be y->x->u *)
+      WG.iter_pred_e (fun (p, weight, _) -> 
+        Printf.printf "changing %d->%d to %d->%d->%d\n" p u p x u;
+        g := WG.add_edge !g p weight x;
+        g := WG.remove_edge !g p u  
+        ) ts u;
+      !g in 
+  let modify_post ts u = 
+    Printf.printf " --- %d is loop header\n" u;
+    let g = ref ts in 
+    let x = new_vtx () in 
+    (* step 1: add new out-edge from u -> x *)
+    g := WG.add_vertex !g x;
+    g := WG.add_edge !g u (Weight gasexpr) x;
+    (* step 2: for each u -> v, make it u -> x -> v *)
+    WG.iter_succ_e (fun (_, weight, v) -> 
+      Printf.printf "changing %d->%d to %d->%d->%d\n" u v u x v;
+      g := WG.add_edge !g x weight v;
+      g := WG.remove_edge !g u v
+      ) ts u; 
+      !g in
+  (* for each call-edge, u->v, add new predecessor edge x->u->v where x->u is an instrumented edge. *)
+  let loop_headers = 
+    let module L = Loop.Make(TSG) in 
+      (List.map (fun loop -> L.header loop) @@ L.all_loops (L.loop_nest ts))
+        |> List.map (fun x -> (x, true)) in 
+  let call_edge_headers, callees = 
+    WG.fold_edges (fun (u, w, _) (headers, callees) -> 
+          match w with 
+          | Call (s, _) -> ISet.add u headers, ISet.add s callees 
+          | Weight _ -> (headers, callees)) ts (ISet.empty, ISet.empty) in     
+    
+    List.fold_left (fun ts (header, is_call_edge) -> 
+            if is_call_edge then 
+              modify_post ts header 
+            else 
+              modify_pre ts header) ts 
+            (loop_headers 
+              @ (List.map (fun x -> (x, false)) @@ ISet.to_list call_edge_headers))
+
+let instrument_main tg entry init_gas_expr = 
+  let post_entry = new_vtx () in 
+  (* step 1: add a vertex called post_entry *)
+  let tg = WG.add_vertex tg post_entry in 
+  (* step 2: remove each edge (entry->v) and make it (post_entry->v) *)
+  let gg = ref tg in
+  WG.iter_succ_e (fun (u, w, v) -> 
+    assert (u = entry);
+    gg := WG.remove_edge !gg entry v;
+    gg := WG.add_edge !gg post_entry w v
+    ) tg entry;
+  (* step 3: add edge from entry->post_entry labeled by init_gas_expr *)
+  WG.add_edge !gg entry (Weight init_gas_expr) post_entry 
+
+let make_transition_system ?(simplify=true) ?(instr_gas=false) (main_entry: int) rg =
+  let gasweight, gasexpr, init_gas_weight = create_gas_variable () in 
   let call_edge block =
     Call ((RG.block_entry rg block).did, (RG.block_exit rg block).did)
   in
@@ -808,8 +893,8 @@ let make_transition_system ?(simplify=true) rg =
       (Syntax.symbols cond)
   in
   let ts =
-    BatEnum.fold (fun ts (block, graph) ->
-        let tg =
+    BatEnum.fold (fun ts (block, graph) -> (* CFG of current function *)
+        let tg = (* TS of current CFG *)
           RG.G.fold_vertex (fun def tg ->
               let tg = WG.add_vertex tg def.did in
               let label =
@@ -867,8 +952,14 @@ let make_transition_system ?(simplify=true) rg =
         let elim_var v =
           V.is_global v || VSet.mem v (!assert_vars)
         in
+      (*  let _ = Printf.printf "Displaying pre-instrumented TG\n"; TSDisplay.display tg in *)
+        let tg = if (instr_gas && entry = main_entry) then instrument_main tg entry init_gas_weight else tg in
+        let tg = if instr_gas then instrument_with_gas tg entry gasweight else tg in 
+       (* let _ = Printf.printf "Displaying post-instrumented TG\n"; TSDisplay.display tg in *)
+        let predicates = if instr_gas then gasexpr :: predicates else predicates in  
         let tg = if simplify then TS.simplify point_of_interest tg else tg in
         let tg = TS.remove_temporaries elim_var tg in
+        (*let _ = Printf.printf "Displaying simplified TG\n"; TSDisplay.display tg in *)
         let tg =
           if !forward_inv_gen then
             Log.phase "Forward invariant generation"
@@ -876,6 +967,7 @@ let make_transition_system ?(simplify=true) rg =
           else
             tg
         in
+       (* let _ = Printf.printf "Displaying invariant-generated TG\n"; TSDisplay.display tg in *)
         WG.fold_edges (fun (src, label, tgt) ts ->
             match label with
             | Weight w -> WG.add_edge ts src (Weight w) tgt
@@ -903,7 +995,7 @@ let analyze file =
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
-      let (ts, assertions) = make_transition_system rg in
+      let (ts, assertions) = make_transition_system entry rg in
       (*TSDisplay.display ts;*)
       let query = mk_query ts entry in
       assertions |> SrkUtil.Int.Map.iter (fun v (phi, loc, msg) ->
@@ -1140,7 +1232,7 @@ let prove_termination_main file =
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
       let entry = (RG.block_entry rg main).did in
-      let (ts, _) = make_transition_system rg in
+      let (ts, _) = make_transition_system entry rg in
       if !CmdLine.display_graphs then
         TSDisplay.display ts;
       let query = mk_query ts entry in
@@ -1199,7 +1291,8 @@ let resource_bound_analysis file =
   match file.entry_points with
   | [main] -> begin
       let rg = Interproc.make_recgraph file in
-      let (ts, _) = make_transition_system rg in
+      let entry  = (RG.block_entry rg main).did in 
+      let (ts, _) = make_transition_system entry rg in
       let entry = (RG.block_entry rg main).did in
       let query = mk_query ts entry in
       let cost =

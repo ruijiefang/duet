@@ -664,6 +664,23 @@ struct
     in interpolate_query trs post sat_model @@ interpolate_unsat_core 
 
 
+  let vocabulary tr = 
+    let tr_guard = guard tr in 
+    let tr_trans = transform tr in 
+    let guard_v = tr_guard |> Syntax.symbols in 
+    let trans_v = BatEnum.fold (fun s (var, term) -> 
+      let s = Symbol.Set.add (Var.symbol_of var) s in 
+      let t = Syntax.symbols term in 
+      Symbol.Set.union s t) Symbol.Set.empty tr_trans in
+    let v = Symbol.Set.union guard_v trans_v in 
+    let globals = Symbol.Set.filter (fun x -> 
+      match Var.of_symbol x with 
+      | Some var -> Var.is_global var
+      | None -> false ) v in 
+    let locals = Symbol.Set.diff v globals in 
+    (Symbol.Set.to_list globals, Symbol.Set.to_list locals)
+
+
   let contextualize t1 t2 t3 : [`Sat of t | `Unsat ] =
     let t1 = rename_skolems t1 
     in let t2 = rename_skolems t2 

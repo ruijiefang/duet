@@ -172,4 +172,7 @@ module Make
      transition formula; return [None] of the exact RTC was not successfully
      found. *)
   val try_rtc : t -> t option
+
+  (** vocabulary of a transition formula, (globals, locals)*)
+  val vocabulary : t -> ((Syntax.symbol list) * (Syntax.symbol list))
 end

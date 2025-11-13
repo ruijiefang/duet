@@ -24,9 +24,15 @@ module ART
        type t
        type vertex
        type weight
+       val one : weight 
+       val zero : weight
        val fold_succ :  (vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
-       val weight : t -> vertex -> vertex -> weight
+       val fold_succ_intra:  (weight -> vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
+       val fold_succ_inter:  ((vertex * vertex) -> vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
+       val weight : t -> vertex -> vertex -> [ `Intra of weight
+                                             | `Inter of (vertex * vertex) ]
        val summary : t -> vertex -> weight
+       val call_summary: t -> (vertex * vertex) -> weight
        val compare_vertex : vertex -> vertex -> int
        val pp_vertex : Format.formatter -> vertex -> unit
      end)
@@ -99,7 +105,9 @@ struct
     (* precedent_nodes[v] stores all tree nodes mapping to CFG vertex v. Used in mc_close. *)
     mutable precedent_nodes : ISet.t VertexMap.t;
     mutable frontier : node DQ.t;
-    
+    (* interprocedural component *)
+    mutable call_stack : (G.vertex * G.vertex) list;
+    (* stats for printing out later *)
     statistics : stats;
   }
 
@@ -119,6 +127,7 @@ struct
     ; reverse_covers = IntMap.empty (* for each v, store the v's that cover it: i.e. cover[v] *)
     ; precedent_nodes = VertexMap.empty
     ; frontier = DQ.cons root DQ.empty 
+    ; call_stack = []
     ; statistics = {
         num_covers_added = 0
       ; num_covers_removed = 0
@@ -127,6 +136,8 @@ struct
   let get_err_loc (art : t) = art.err_loc
   let get_entry (art: t) = (ARR.get art.nodes 0).cfg_vertex
   let get_precondition (art : t) = art.precondition
+
+  let call_stack (art : t) = art.call_stack
 
   (** [print_tree t ident v] prints an ART t with indentation `ident` rooted at node v *)
   let print_tree (art : t) (indent : string) (v : node) =
@@ -153,7 +164,10 @@ struct
     if parent < 0 then
       None
     else
-      Some (parent, G.weight art.graph (maps_to art parent) (maps_to art i))
+      Some (parent, 
+        match G.weight art.graph (maps_to art parent) (maps_to art i) with 
+        | `Intra w -> w
+        | `Inter _ -> G.one)
 
   (* [tree_path t u] returns list of tree nodes that form the corrsp. tree path from root of t to tree node u *)
   let tree_path (art : t) ?(src=root) (u : node) : node list =
@@ -408,7 +422,9 @@ struct
         artpath 
         |> glue 
         |> List.map (fun (x, y) -> 
-               G.weight art.graph (maps_to art x) (maps_to art y))
+               match G.weight art.graph (maps_to art x) (maps_to art y) with 
+               | `Intra w -> w 
+               | `Inter _ -> G.one)
       in
       match T.check w_label path_weights w_label with
       | `Valid itps -> 
@@ -557,9 +573,8 @@ struct
               T.pp_state u_model;
             let u_v = maps_to art u in
             let worklist =
-              G.fold_succ (fun succ worklist ->
+              G.fold_succ_intra (fun weight succ worklist ->
                   let succ_node = add_tree_vertex art succ u in
-                  let weight = G.weight art.graph u_v succ in
                   let weight =
                     if T.is_deterministic weight then weight
                     else

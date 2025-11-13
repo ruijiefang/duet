@@ -195,16 +195,36 @@ module GPS = struct
 
     type weight = K.t
 
+    let one = K.one 
+
+    let zero = K.zero 
+
     let edge_label g u v = WG.edge_weight g.graph u v
+
+    let call_summary t uv = t.call_summary uv
 
     let weight g u v =
       match WG.edge_weight g.graph u v with
       | Call (src, dst) ->
-         g.call_summary (src, dst)
-      | Weight w -> w
+         `Inter (src, dst)
+      | Weight w -> `Intra w
 
     let fold_succ f g u acc =
       WG.U.fold_succ f (WG.forget_weights g.graph) u acc
+
+    let fold_succ_intra f g u acc = 
+      WG.U.fold_succ (fun succ acc' ->
+          match weight g u succ with 
+          | `Intra w -> (f w succ acc')
+          | `Inter _ -> acc'        
+        ) (WG.forget_weights g.graph) u acc
+
+    let fold_succ_inter f g u acc = 
+      WG.U.fold_succ (fun succ acc' ->
+          match weight g u succ with 
+          | `Intra _ -> acc'
+          | `Inter (src, dst) -> (f (src, dst) succ acc')        
+        ) (WG.forget_weights g.graph) u acc
 
     let summary g src = g.target_summary src
 

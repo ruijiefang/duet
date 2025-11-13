@@ -4,16 +4,21 @@ module Interpretation = Srk.Interpretation
 
 type equery = OverApprox | UnderApprox
 
-(** Implementation of an Abstract Reachability Tree (ART) for use in Duet's GPS algorithm implementation and Impact algorithm implementation
- *)
+(** Implementation of an Abstract Reachability Tree (ART) for use in Duet's GPS algorithm implementation and Impact algorithm implementation *)
 module ART
     (G : sig
        type t
        type vertex
        type weight
+       val one : weight 
+       val zero : weight
        val fold_succ :  (vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
-       val weight : t -> vertex -> vertex -> weight
+       val fold_succ_intra:  (weight -> vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
+       val fold_succ_inter:  ((vertex * vertex) -> vertex -> 'a -> 'a) -> t -> vertex -> 'a -> 'a
+       val weight : t -> vertex -> vertex -> [ `Intra of weight 
+                                             | `Inter of (vertex * vertex) ] 
        val summary : t -> vertex -> weight
+       val call_summary : t -> (vertex * vertex) -> weight
        val compare_vertex : vertex -> vertex -> int
        val pp_vertex : Format.formatter -> vertex -> unit
      end)
@@ -105,6 +110,9 @@ module ART
 
   (** performs refinement along a particular path *)
   val refine: t -> node list -> L.t list -> unit
+
+  (** retrieve stack of calling contexts *)
+  val call_stack: t -> (G.vertex * G.vertex) list
 
   (** logs the ART to logging stream *)
   val log_art : t -> unit 

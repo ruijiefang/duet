@@ -105,8 +105,8 @@ struct
     (* precedent_nodes[v] stores all tree nodes mapping to CFG vertex v. Used in mc_close. *)
     mutable precedent_nodes : ISet.t VertexMap.t;
     mutable frontier : node DQ.t;
-    (* interprocedural component *)
-    mutable call_stack : (G.vertex * G.vertex) list;
+    (* interprocedural component,) *)
+    mutable call_stack : (G.vertex * G.vertex * G.vertex * G.vertex) list;
     (* stats for printing out later *)
     statistics : stats;
   }

@@ -226,6 +226,10 @@ struct
     art.precedent_nodes <- VertexMap.add v precedent_nodes art.precedent_nodes;
     id
 
+  let add_tree_vertex_interproc (art: t) ?(label = L.top) (call_edge: (G.vertex * G.vertex)) (proc: (G.vertex * G.vertex)) (parent: node) = 
+    let new_node = add_tree_vertex art label (fst call_edge) parent in 
+    let 
+
   let deque_frontier art =
     match DQ.front art.frontier with
     | None -> None
@@ -572,7 +576,16 @@ struct
               G.pp_vertex (maps_to art u)
               T.pp_state u_model;
             let u_v = maps_to art u in
-            let worklist =
+            let procedure_calls = 
+              G.fold_succ_inter (fun (call_site, ret_site) succ acc ->
+                  if succ = u_v then
+                    (call_site, ret_site) :: acc
+                  else
+                    acc)
+                art.graph
+                u_v
+                []
+            in let worklist =
               G.fold_succ_intra (fun weight succ worklist ->
                   let succ_node = add_tree_vertex art succ u in
                   let weight =
